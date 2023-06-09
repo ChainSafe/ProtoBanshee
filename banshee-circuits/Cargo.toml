@@ -23,6 +23,7 @@ snark-verifier = { git = "https://github.com/privacy-scaling-explorations/snark-
 cli-table = { version = "0.4", optional = true }
 eth-types = { path = "../eth-types" }
 gadgets = { path = "../gadgets" }
+halo2-base = { git = "https://github.com/axiom-crypto/halo2-lib" }
 
 [dev-dependencies]
 hex = "0.4.3"

@@ -1,7 +1,12 @@
+use std::vec;
+
 use eth_types::Field;
+use gadgets::impl_expr;
+use gadgets::util::rlc;
 use halo2_proofs::halo2curves::bn256::G1Affine;
 use halo2_proofs::{circuit::Value, halo2curves::bn256::Fr};
 use itertools::Itertools;
+use halo2_base::utils::decompose_bigint_option;
 
 /// Beacon state entry. State entries are used for connecting CasperCircuit and
 /// AttestationsCircuit.
@@ -46,7 +51,7 @@ impl StateEntry {
                 slashed,
                 pubkey,
             } => {
-                let new_state_row = |field_tag, index, value| StateRow {
+                let new_state_row = |field_tag: FieldTag, index: usize, value| StateRow {
                     id: Value::known(F::from(*id as u64)),
                     order: Value::known(F::from(*order as u64)),
                     tag: Value::known(F::from(StateTag::Validator as u64)),
@@ -79,14 +84,14 @@ impl StateEntry {
                         Value::known(F::from(*slashed as u64)),
                     ),
                     new_state_row(
-                        FieldTag::PubKeyCompressed,
+                        FieldTag::PubKeyRLC,
                         0,
-                        Value::known(F::from_bytes(pubkey)),
+                        randomness.map(|rnd| rlc::value(&pubkey[0..32], rnd)),
                     ),
                     new_state_row(
-                        FieldTag::PubKeyCompressed,
-                        0,
-                        Value::known(F::from_bytes(pubkey)),
+                        FieldTag::PubKeyRLC,
+                        1,
+                        randomness.map(|rnd| rlc::value(&pubkey[33..48], rnd)),
                     ),
                 ]
             }
@@ -94,7 +99,36 @@ impl StateEntry {
                 id,
                 accumulated_balance,
                 aggregated_pubkey,
-            } => todo!(),
+            } => {
+                let new_state_row = |field_tag: FieldTag, index: usize, value| StateRow {
+                    id: Value::known(F::from(*id as u64)),
+                    order: Value::known(F::ZERO),
+                    tag: Value::known(F::from(StateTag::Committee as u64)),
+                    is_active: Value::known(F::ZERO),
+                    is_attested: Value::known(F::ZERO),
+                    field_tag: Value::known(F::from(field_tag as u64)),
+                    index: Value::known(F::from(index as u64)),
+                    value,
+                };
+
+                
+                let t = vec![new_state_row(
+                    FieldTag::EffectiveBalance,
+                    0,
+                    Value::known(F::from(*accumulated_balance as u64)),
+                ),];
+
+                vec![
+                    new_state_row(
+                        FieldTag::EffectiveBalance,
+                        0,
+                        Value::known(F::from(*accumulated_balance as u64)),
+                    ),
+                ].into_iter()
+                // .chain(decompose_bigint_option(Value::known(aggregated_pubkey.x), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
+                // .chain(decompose_bigint_option(Value::known(aggregated_pubkey.y), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
+                .collect()
+            }
         }
     }
 }
@@ -113,7 +147,7 @@ pub enum FieldTag {
     ActivationEpoch,
     ExitEpoch,
     Slashed,
-    PubKeyCompressed,
+    PubKeyRLC,
     PubKeyAffineX,
     PubKeyAffineY,
 }

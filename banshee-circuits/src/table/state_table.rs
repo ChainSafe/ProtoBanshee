@@ -87,32 +87,23 @@ impl StateTable {
         Ok(())
     }
 
-    /// Assign the `RwTable` from a `RwMap`, following the same
-    /// table layout that the State Circuit uses.
+    /// Load the state table into the circuit.
     pub fn load<F: Field>(
         &self,
         layouter: &mut impl Layouter<F>,
-        rws: &[StateEntry],
+        entries: &[StateEntry],
         n_rows: usize,
         challenges: Value<F>,
     ) -> Result<(), Error> {
         layouter.assign_region(
-            || "rw table",
-            |mut region| self.load_with_region(&mut region, rws, n_rows, challenges),
-        )
-    }
+            || "state table",
+            |mut region| {
+                for (offset, row) in entries.iter().flat_map(|e| e.table_assignment(challenges)).enumerate() {
+                    self.assign(&mut region, offset, &row)?;
+                };
 
-    pub(crate) fn load_with_region<F: Field>(
-        &self,
-        region: &mut Region<'_, F>,
-        rws: &[Rw],
-        n_rows: usize,
-        challenges: Value<F>,
-    ) -> Result<(), Error> {
-        let (rows, _) = RwMap::table_assignments_prepad(rws, n_rows);
-        for (offset, row) in rows.iter().enumerate() {
-            self.assign(region, offset, &row.table_assignment(challenges))?;
-        }
-        Ok(())
+                Ok(())
+            },
+        )
     }
 }
