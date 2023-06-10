@@ -1,10 +1,9 @@
-use crate::{util::Expr, witness::StateTag};
 use super::{cell_manager::*, gadget::LtGadget};
+use crate::{util::Expr, witness::StateTag};
 use eth_types::Field;
 use gadgets::binary_number::BinaryNumberConfig;
 use halo2_proofs::plonk::Expression;
 use strum::IntoEnumIterator;
-
 
 type Constraint<F> = (&'static str, Expression<F>);
 type Lookup<F> = (&'static str, Vec<(Expression<F>, Expression<F>)>);
@@ -45,7 +44,6 @@ impl<F: Field> ConstraintBuilder<F> {
         self.condition(q.tag_matches(StateTag::Validator), |cb| {
             cb.build_validator_constraints(q)
         });
-       
     }
 
     fn build_general_constraints(&mut self, q: &Queries<F>) {
@@ -59,18 +57,25 @@ impl<F: Field> ConstraintBuilder<F> {
                 1.expr(),
             );
         });
+        // TODO: consider using multiple selectors instead of tag_bits
         // tag value in StateTable range is enforced in BinaryNumberChip
     }
 
     fn build_validator_constraints(&mut self, q: &Queries<F>) {
-       self.require_boolean("slashed is boolean", q.slashed());
+        self.require_boolean("slashed is boolean", q.slashed());
 
-       self.condition(q.is_active(), |cb| {
-           cb.require_boolean("slashed is false for active validators", q.slashed());
-           let activated_lte_target = LtGadget::construct(cb, q.activation_epoch(), cb.target_epoch.expr() + 1.expr()).expr();
-           let exited_gt_target = LtGadget::construct(cb, cb.target_epoch.expr(), q.exit_epoch()).expr();
-           cb.require_true("active_lte_target", activated_lte_target * exited_gt_target)
-       });
+        self.condition(q.is_active(), |cb| {
+            cb.require_boolean("slashed is false for active validators", q.slashed());
+            let next_epoch = cb.target_epoch.expr() + 1.expr();
+            let activated_lte_target =
+                LtGadget::construct(cb, q.activation_epoch(), next_epoch).expr();
+            let exited_gt_target =
+                LtGadget::construct(cb, cb.target_epoch.expr(), q.exit_epoch()).expr();
+            cb.require_true(
+                "activation_epoch <= target_epoch > exit_epoch for active validators",
+                activated_lte_target * exited_gt_target,
+            )
+        });
     }
 
     pub fn require_zero(&mut self, name: &'static str, e: Expression<F>) {
@@ -123,7 +128,6 @@ impl<F: Field> ConstraintBuilder<F> {
         self.cell_manager.query_cell(CellType::StoragePhase1)
     }
 
-
     pub(crate) fn query_bytes<const N: usize>(&mut self) -> [Cell<F>; N] {
         self.query_bytes_dyn(N).try_into().unwrap()
     }
@@ -132,7 +136,6 @@ impl<F: Field> ConstraintBuilder<F> {
         self.cell_manager.query_cells(CellType::LookupByte, count)
     }
 }
-
 
 #[derive(Clone)]
 pub struct Queries<F: Field> {
@@ -154,8 +157,10 @@ pub struct StateQueries<F: Field> {
     pub slashed: Expression<F>,
     pub pubkey_lo: Expression<F>,
     pub pubkey_hi: Expression<F>,
-    //pub field_tag: Expression<F>,
+    pub field_tag: Expression<F>,
     pub index: Expression<F>,
+    pub g_index: Expression<F>,
+    pub value: Expression<F>,
 }
 
 impl<F: Field> Queries<F> {
@@ -202,7 +207,7 @@ impl<F: Field> Queries<F> {
     fn pubkey_hi(&self) -> Expression<F> {
         self.state_table.pubkey_hi.clone()
     }
-   
+
     fn tag_matches(&self, tag: StateTag) -> Expression<F> {
         BinaryNumberConfig::<StateTag, 3>::value_equals_expr(tag, self.tag_bits.clone())
     }

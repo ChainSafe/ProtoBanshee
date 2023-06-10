@@ -172,11 +172,12 @@ pub struct StateRow<F> {
     pub(crate) is_attested: F,
     pub(crate) field_tag: F,
     pub(crate) index: F,
+    pub(crate) g_index: F,
     pub(crate) value: F,
 }
 
 impl<F: Field> StateRow<F> {
-    pub(crate) fn values(&self) -> [F; 8] {
+    pub(crate) fn values(&self) -> [F; 9] {
         [
             self.id,
             self.order,
@@ -185,6 +186,7 @@ impl<F: Field> StateRow<F> {
             self.is_attested,
             self.field_tag,
             self.index,
+            self.g_index,
             self.value,
         ]
     }
