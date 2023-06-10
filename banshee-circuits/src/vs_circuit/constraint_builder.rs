@@ -1,24 +1,30 @@
 use crate::{util::Expr, witness::StateTag};
+use super::{cell_manager::*, gadget::LtGadget};
 use eth_types::Field;
 use gadgets::binary_number::BinaryNumberConfig;
 use halo2_proofs::plonk::Expression;
 use strum::IntoEnumIterator;
 
+
 type Constraint<F> = (&'static str, Expression<F>);
 type Lookup<F> = (&'static str, Vec<(Expression<F>, Expression<F>)>);
 
 pub struct ConstraintBuilder<F: Field> {
+    pub target_epoch: Cell<F>,
     pub constraints: Vec<Constraint<F>>,
     lookups: Vec<Lookup<F>>,
     condition: Expression<F>,
+    pub(crate) cell_manager: CellManager<F>,
 }
 
 impl<F: Field> ConstraintBuilder<F> {
-    pub fn new() -> Self {
+    pub fn new(target_epoch: Cell<F>, cell_manager: CellManager<F>) -> Self {
         Self {
+            target_epoch,
             constraints: vec![],
             lookups: vec![],
             condition: 1.expr(),
+            cell_manager,
         }
     }
 
@@ -61,20 +67,25 @@ impl<F: Field> ConstraintBuilder<F> {
 
        self.condition(q.is_active(), |cb| {
            cb.require_boolean("slashed is false for active validators", q.slashed());
-
-
+           let activated_lte_target = LtGadget::construct(cb, q.activation_epoch(), cb.target_epoch.expr() + 1.expr()).expr();
+           let exited_gt_target = LtGadget::construct(cb, cb.target_epoch.expr(), q.exit_epoch()).expr();
+           cb.require_true("active_lte_target", activated_lte_target * exited_gt_target)
        });
     }
 
-    fn require_zero(&mut self, name: &'static str, e: Expression<F>) {
+    pub fn require_zero(&mut self, name: &'static str, e: Expression<F>) {
         self.constraints.push((name, self.condition.clone() * e));
     }
 
-    fn require_equal(&mut self, name: &'static str, left: Expression<F>, right: Expression<F>) {
+    pub fn require_true(&mut self, name: &'static str, e: Expression<F>) {
+        self.require_zero(name, 1.expr() - e);
+    }
+
+    pub fn require_equal(&mut self, name: &'static str, left: Expression<F>, right: Expression<F>) {
         self.require_zero(name, left - right)
     }
 
-    fn require_boolean(&mut self, name: &'static str, e: Expression<F>) {
+    pub fn require_boolean(&mut self, name: &'static str, e: Expression<F>) {
         self.require_zero(name, e.clone() * (1.expr() - e))
     }
 
@@ -101,6 +112,25 @@ impl<F: Field> ConstraintBuilder<F> {
         build(self);
         self.condition = original_condition;
     }
+
+    pub(crate) fn query_bool(&mut self) -> Cell<F> {
+        let cell = self.query_cell();
+        self.require_boolean("Constrain cell to be a bool", cell.expr());
+        cell
+    }
+
+    pub(crate) fn query_cell(&mut self) -> Cell<F> {
+        self.cell_manager.query_cell(CellType::StoragePhase1)
+    }
+
+
+    pub(crate) fn query_bytes<const N: usize>(&mut self) -> [Cell<F>; N] {
+        self.query_bytes_dyn(N).try_into().unwrap()
+    }
+
+    pub(crate) fn query_bytes_dyn(&mut self, count: usize) -> Vec<Cell<F>> {
+        self.cell_manager.query_cells(CellType::LookupByte, count)
+    }
 }
 
 
@@ -126,8 +156,6 @@ pub struct StateQueries<F: Field> {
     pub pubkey_hi: Expression<F>,
     //pub field_tag: Expression<F>,
     pub index: Expression<F>,
-    pub value: Expression<F>,
-    pub value_prev: Expression<F>,
 }
 
 impl<F: Field> Queries<F> {
@@ -173,14 +201,6 @@ impl<F: Field> Queries<F> {
 
     fn pubkey_hi(&self) -> Expression<F> {
         self.state_table.pubkey_hi.clone()
-    }
-
-    fn value(&self) -> Expression<F> {
-        self.state_table.value.clone()
-    }
-
-    fn value_prev(&self) -> Expression<F> {
-        self.state_table.value_prev.clone()
     }
    
     fn tag_matches(&self, tag: StateTag) -> Expression<F> {

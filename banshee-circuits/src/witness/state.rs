@@ -8,6 +8,7 @@ use halo2_proofs::{circuit::Value, halo2curves::bn256::Fr};
 use halo2_proofs::plonk::Expression;
 use itertools::Itertools;
 use halo2_base::utils::decompose_bigint_option;
+use strum_macros::EnumIter;
 
 /// Beacon state entry. State entries are used for connecting CasperCircuit and
 /// AttestationsCircuit.
@@ -135,7 +136,7 @@ impl StateEntry {
 }
 
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, EnumIter, Hash)]
 pub enum StateTag {
     Validator = 0,
     Committee,
