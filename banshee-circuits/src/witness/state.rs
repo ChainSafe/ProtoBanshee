@@ -5,6 +5,7 @@ use gadgets::impl_expr;
 use gadgets::util::rlc;
 use halo2_proofs::halo2curves::bn256::G1Affine;
 use halo2_proofs::{circuit::Value, halo2curves::bn256::Fr};
+use halo2_proofs::plonk::Expression;
 use itertools::Itertools;
 use halo2_base::utils::decompose_bigint_option;
 
@@ -140,6 +141,12 @@ pub enum StateTag {
     Committee,
 }
 impl_expr!(StateTag);
+
+impl From<StateTag> for usize {
+    fn from(value: StateTag) -> usize {
+        value as usize
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldTag {
