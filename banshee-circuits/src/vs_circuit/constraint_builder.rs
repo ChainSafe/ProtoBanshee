@@ -1,5 +1,5 @@
 use super::{cell_manager::*, gadget::LtGadget};
-use crate::{util::Expr, witness::StateTag};
+use crate::{util::Expr, vs_circuit::N_BYTES_U64, witness::StateTag};
 use eth_types::Field;
 use gadgets::binary_number::BinaryNumberConfig;
 use halo2_proofs::plonk::Expression;
@@ -9,7 +9,6 @@ type Constraint<F> = (&'static str, Expression<F>);
 type Lookup<F> = (&'static str, Vec<(Expression<F>, Expression<F>)>);
 
 pub struct ConstraintBuilder<F: Field> {
-    pub target_epoch: Cell<F>,
     pub constraints: Vec<Constraint<F>>,
     lookups: Vec<Lookup<F>>,
     condition: Expression<F>,
@@ -17,9 +16,8 @@ pub struct ConstraintBuilder<F: Field> {
 }
 
 impl<F: Field> ConstraintBuilder<F> {
-    pub fn new(target_epoch: Cell<F>, cell_manager: CellManager<F>) -> Self {
+    pub fn new(cell_manager: CellManager<F>) -> Self {
         Self {
-            target_epoch,
             constraints: vec![],
             lookups: vec![],
             condition: 1.expr(),
@@ -40,37 +38,31 @@ impl<F: Field> ConstraintBuilder<F> {
     }
 
     pub fn build(&mut self, q: &Queries<F>) {
-        self.build_general_constraints(q);
         self.condition(q.tag_matches(StateTag::Validator), |cb| {
             cb.build_validator_constraints(q)
         });
-    }
 
-    fn build_general_constraints(&mut self, q: &Queries<F>) {
-        self.require_boolean("is_active is boolean", q.is_active());
-        self.require_boolean("is_attested is boolean", q.is_attested());
-
-        self.condition(q.is_attested(), |cb| {
-            cb.require_equal(
-                "is_active is true when is_attested is true",
-                q.is_active(),
-                1.expr(),
-            );
+        self.condition(q.tag_matches(StateTag::Committee), |cb| {
+            cb.build_committee_constraints(q)
         });
-        // TODO: consider using multiple selectors instead of tag_bits
-        // tag value in StateTable range is enforced in BinaryNumberChip
     }
 
     fn build_validator_constraints(&mut self, q: &Queries<F>) {
+        self.require_boolean("is_active is boolean", q.is_active());
+        self.require_boolean("is_attested is boolean", q.is_attested());
         self.require_boolean("slashed is boolean", q.slashed());
+
+        self.condition(q.is_attested(), |cb| {
+            cb.require_true("is_active is true when is_attested is true", q.is_active());
+        });
 
         self.condition(q.is_active(), |cb| {
             cb.require_boolean("slashed is false for active validators", q.slashed());
-            let next_epoch = cb.target_epoch.expr() + 1.expr();
             let activated_lte_target =
-                LtGadget::construct(cb, q.activation_epoch(), next_epoch).expr();
+                LtGadget::<_, N_BYTES_U64>::construct(cb, q.activation_epoch(), q.next_epoch())
+                    .expr();
             let exited_gt_target =
-                LtGadget::construct(cb, cb.target_epoch.expr(), q.exit_epoch()).expr();
+                LtGadget::<_, N_BYTES_U64>::construct(cb, q.target_epoch(), q.exit_epoch()).expr();
             cb.require_true(
                 "activation_epoch <= target_epoch > exit_epoch for active validators",
                 activated_lte_target * exited_gt_target,
@@ -78,12 +70,18 @@ impl<F: Field> ConstraintBuilder<F> {
         });
     }
 
+    fn build_committee_constraints(&mut self, q: &Queries<F>) {
+        self.require_zero("is_active is 0 for committees", q.is_active());
+        self.require_boolean("is_attested is 0 for committees", q.is_attested());
+        self.require_boolean("slashed is 0 for committees", q.slashed());
+    }
+
     pub fn require_zero(&mut self, name: &'static str, e: Expression<F>) {
         self.constraints.push((name, self.condition.clone() * e));
     }
 
     pub fn require_true(&mut self, name: &'static str, e: Expression<F>) {
-        self.require_zero(name, 1.expr() - e);
+        self.require_equal(name, e, 1.expr());
     }
 
     pub fn require_equal(&mut self, name: &'static str, left: Expression<F>, right: Expression<F>) {
@@ -140,6 +138,7 @@ impl<F: Field> ConstraintBuilder<F> {
 #[derive(Clone)]
 pub struct Queries<F: Field> {
     pub selector: Expression<F>,
+    pub target_epoch: Expression<F>,
     pub state_table: StateQueries<F>,
     pub tag_bits: [Expression<F>; 3],
 }
@@ -166,6 +165,14 @@ pub struct StateQueries<F: Field> {
 impl<F: Field> Queries<F> {
     fn selector(&self) -> Expression<F> {
         self.selector.clone()
+    }
+
+    fn target_epoch(&self) -> Expression<F> {
+        self.target_epoch.clone()
+    }
+
+    fn next_epoch(&self) -> Expression<F> {
+        self.target_epoch.clone() + 1.expr()
     }
 
     fn id(&self) -> Expression<F> {

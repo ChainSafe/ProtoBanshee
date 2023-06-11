@@ -19,7 +19,7 @@ pub use gadgets::util::{and, not, or, select, sum};
 
 
 #[derive(Clone, Debug)]
-pub(crate) struct Cell<F> {
+pub struct Cell<F> {
     // expression for constraint
     expression: Expression<F>,
     column: Column<Advice>,
@@ -96,7 +96,7 @@ impl<F: Field> Expr<F> for CellColumn<F> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CellManager<F> {
+pub struct CellManager<F> {
     width: usize,
     height: usize,
     cells: Vec<Cell<F>>,
@@ -108,7 +108,6 @@ impl<F: Field> CellManager<F> {
         meta: &mut ConstraintSystem<F>,
         height: usize,
         advices: &[Column<Advice>],
-        height_offset: usize,
     ) -> Self {
         // Setup the columns and query the cells
         let width = advices.len();
@@ -117,7 +116,7 @@ impl<F: Field> CellManager<F> {
         query_expression(meta, |meta| {
             for c in 0..width {
                 for r in 0..height {
-                    cells.push(Cell::new(meta, advices[c], height_offset + r, c));
+                    cells.push(Cell::new(meta, advices[c], r, c));
                 }
                 columns.push(CellColumn {
                     index: c,
@@ -159,7 +158,6 @@ impl<F: Field> CellManager<F> {
     pub(crate) fn query_cell(&mut self, cell_type: CellType) -> Cell<F> {
         self.query_cells(cell_type, 1)[0].clone()
     }
-
 
     fn next_column(&self, cell_type: CellType) -> usize {
         let mut best_index: Option<usize> = None;

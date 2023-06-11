@@ -17,7 +17,6 @@ pub enum StateEntry {
     /// Validator
     Validator {
         id: usize,
-        order: usize,
         committee: usize,
         is_active: bool,
         is_attested: bool,
@@ -43,7 +42,6 @@ impl StateEntry {
         match self {
             StateEntry::Validator {
                 id,
-                order,
                 committee,
                 is_active,
                 is_attested,
@@ -55,12 +53,12 @@ impl StateEntry {
             } => {
                 let new_state_row = |field_tag: FieldTag, index: usize, value| StateRow {
                     id: Value::known(F::from(*id as u64)),
-                    order: Value::known(F::from(*order as u64)),
                     tag: Value::known(F::from(StateTag::Validator as u64)),
                     is_active: Value::known(F::from(*is_active as u64)),
                     is_attested: Value::known(F::from(*is_attested as u64)),
                     field_tag: Value::known(F::from(field_tag as u64)),
                     index: Value::known(F::from(index as u64)),
+                    g_index: Value::known(F::ZERO), // TODO: fill generalized indexes deterministically
                     value,
                 };
 
@@ -104,12 +102,12 @@ impl StateEntry {
             } => {
                 let new_state_row = |field_tag: FieldTag, index: usize, value| StateRow {
                     id: Value::known(F::from(*id as u64)),
-                    order: Value::known(F::ZERO),
                     tag: Value::known(F::from(StateTag::Committee as u64)),
                     is_active: Value::known(F::ZERO),
                     is_attested: Value::known(F::ZERO),
                     field_tag: Value::known(F::from(field_tag as u64)),
                     index: Value::known(F::from(index as u64)),
+                    g_index: Value::known(F::ZERO),
                     value,
                 };
 
@@ -166,7 +164,6 @@ impl_expr!(FieldTag);
 #[derive(Default, Clone, Copy, Debug)]
 pub struct StateRow<F> {
     pub(crate) id: F,
-    pub(crate) order: F,
     pub(crate) tag: F,
     pub(crate) is_active: F,
     pub(crate) is_attested: F,
@@ -177,10 +174,9 @@ pub struct StateRow<F> {
 }
 
 impl<F: Field> StateRow<F> {
-    pub(crate) fn values(&self) -> [F; 9] {
+    pub(crate) fn values(&self) -> [F; 8] {
         [
             self.id,
-            self.order,
             self.tag,
             self.is_active,
             self.is_attested,

@@ -1,16 +1,15 @@
-pub(crate) mod util;
-pub(crate) mod gadget;
-pub(crate) mod constraint_builder;
 pub(crate) mod cell_manager;
+pub(crate) mod constraint_builder;
+pub(crate) mod gadget;
+pub(crate) mod util;
 
-
-use constraint_builder::*;
 use crate::{
     table::{LookupTable, StateTable},
     util::{Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, StateEntry, StateTag},
 };
-// use constraint_builder::{ConstraintBuilder, Queries};
+use cell_manager::{Cell, CellManager};
+use constraint_builder::*;
 use eth_types::*;
 use gadgets::{
     batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
@@ -19,22 +18,30 @@ use gadgets::{
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{
-        Advice, Column, ConstraintSystem, Error, Expression, Fixed, SecondPhase, VirtualCells,
+        Advice, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed, Instance,
+        SecondPhase, Selector, VirtualCells,
     },
     poly::Rotation,
 };
-// use lookups::{Chip as LookupsChip, Config as LookupsConfig, Queries as LookupsQueries};
+use itertools::Itertools;
+use std::iter;
 
 pub(crate) const MAX_N_BYTES_INTEGER: usize = 31;
 
-pub const N_BYTE_LOOKUPS: usize = 24;
+pub const N_BYTE_LOOKUPS: usize = 8;
 
+pub(crate) const N_BYTES_U64: usize = 8;
+
+pub(crate) const MAX_VALIDATORS: usize = 2usize.pow(20);
 
 #[derive(Clone)]
 pub struct ValidatorsCircuitConfig {
-    selector: Column<Fixed>,
+    selector: Column<Fixed>, // TODO: use selector instead
+    target_epoch: Column<Instance>,
     state_table: StateTable,
     tag: BinaryNumberConfig<StateTag, 3>,
+    storage_phase1: Column<Advice>,
+    byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
 }
 
 impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig {
@@ -42,22 +49,49 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig {
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let selector = meta.fixed_column();
+        let target_epoch = meta.instance_column();
         let state_table = args;
 
-        let tag: BinaryNumberConfig<StateTag, 3> = BinaryNumberChip::configure(meta, selector, Some(state_table.tag));
+        let storage_phase1 = meta.advice_column_in(FirstPhase);
+        let byte_lookup: [_; N_BYTE_LOOKUPS] = (0..N_BYTE_LOOKUPS)
+            .map(|_| meta.advice_column_in(FirstPhase))
+            .collect_vec()
+            .try_into()
+            .unwrap();
 
-        // meta.create_gate("verify activated validators", |meta:| {
-            
-        // })
+        let cm_advices = iter::once(storage_phase1)
+            .chain(byte_lookup.iter().copied())
+            .collect_vec();
 
-        Self { selector, state_table, tag }
+        let tag: BinaryNumberConfig<StateTag, 3> =
+            BinaryNumberChip::configure(meta, selector, Some(state_table.tag));
+
+        let cell_manager = CellManager::new(meta, MAX_VALIDATORS, &cm_advices);
+        let mut constraint_builder = ConstraintBuilder::new(cell_manager);
+
+        let config = Self {
+            selector,
+            target_epoch,
+            state_table,
+            tag,
+            storage_phase1,
+            byte_lookup,
+        };
+
+        meta.create_gate("validators constraints", |meta| {
+            let queries = queries(meta, &config);
+            constraint_builder.build(&queries);
+            constraint_builder.gate(queries.selector)
+        });
+
+        config
     }
 }
-
 
 fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig) -> Queries<F> {
     Queries {
         selector: meta.query_fixed(c.selector, Rotation::cur()),
+        target_epoch: meta.query_instance(c.target_epoch, Rotation::cur()),
         state_table: StateQueries {
             id: meta.query_advice(c.state_table.id, Rotation::cur()),
             order: meta.query_advice(c.state_table.id, Rotation::cur()),
@@ -81,5 +115,6 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
             .bits
             .map(|bit| meta.query_advice(bit, Rotation::cur())),
     }
-
 }
+
+
