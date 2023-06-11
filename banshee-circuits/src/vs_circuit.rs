@@ -36,7 +36,7 @@ pub(crate) const MAX_VALIDATORS: usize = 2usize.pow(20);
 
 #[derive(Clone)]
 pub struct ValidatorsCircuitConfig {
-    selector: Column<Fixed>, // TODO: use selector instead
+    s_row: Column<Fixed>, // TODO: use selector instead
     target_epoch: Column<Instance>,
     state_table: StateTable,
     tag: BinaryNumberConfig<StateTag, 3>,
@@ -48,7 +48,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig {
     type ConfigArgs = StateTable;
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
-        let selector = meta.fixed_column();
+        let s_row = meta.fixed_column();
         let target_epoch = meta.instance_column();
         let state_table = args;
 
@@ -64,13 +64,13 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig {
             .collect_vec();
 
         let tag: BinaryNumberConfig<StateTag, 3> =
-            BinaryNumberChip::configure(meta, selector, Some(state_table.tag));
+            BinaryNumberChip::configure(meta, s_row, Some(state_table.tag));
 
         let cell_manager = CellManager::new(meta, MAX_VALIDATORS, &cm_advices);
         let mut constraint_builder = ConstraintBuilder::new(cell_manager);
 
         let config = Self {
-            selector,
+            s_row,
             target_epoch,
             state_table,
             tag,
@@ -90,7 +90,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig {
 
 fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig) -> Queries<F> {
     Queries {
-        selector: meta.query_fixed(c.selector, Rotation::cur()),
+        selector: meta.query_fixed(c.s_row, Rotation::cur()),
         target_epoch: meta.query_instance(c.target_epoch, Rotation::cur()),
         state_table: StateQueries {
             id: meta.query_advice(c.state_table.id, Rotation::cur()),

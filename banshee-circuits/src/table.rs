@@ -7,7 +7,10 @@ use eth_types::{Field};
 use gadgets::impl_expr;
 
 pub(crate) mod state_table;
+pub(crate) mod sha256_table;
+
 pub(crate) use state_table::StateTable;
+pub(crate) use sha256_table::SHA256Table;
 
 /// Trait used to define lookup tables
 pub trait LookupTable<F: Field> {
