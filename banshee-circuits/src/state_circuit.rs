@@ -74,14 +74,10 @@ impl<'a, F: Field> PathChip<'a, F> {
             )
         });
 
-        meta.lookup_any("tree leaf hash", |meta| {
-            let s_leaf = meta.query_advice(config.s_path, Rotation::cur());
+        // meta.lookup_any("tree leaf hash", |meta| {
+        //     let s_leaf = meta.query_advice(config.s_path, Rotation::cur());
 
-            let key_immediate = meta.query_advice(key_immediate, Rotation::cur());
-            let leaf_val = meta.query_advice(val, Rotation::cur());
-            let leaf_hash = meta.query_advice(val, Rotation::prev());
-            hash_table.build_lookup(meta, s_leaf, key_immediate, leaf_val, leaf_hash)
-        });
+        // });
 
         config
     }
