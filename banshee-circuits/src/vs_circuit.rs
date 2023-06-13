@@ -1,14 +1,12 @@
 pub(crate) mod cell_manager;
 pub(crate) mod constraint_builder;
-pub(crate) mod gadget;
-pub(crate) mod util;
 
 use crate::{
     table::{LookupTable, StateTable},
-    util::{Challenges, SubCircuit, SubCircuitConfig},
-    witness::{self, StateEntry, StateTag},
+    util::{Cell, Challenges, SubCircuit, SubCircuitConfig},
+    witness::{self, StateEntry, StateTag}, MAX_VALIDATORS,
 };
-use cell_manager::{Cell, CellManager};
+use cell_manager::{CellManager};
 use constraint_builder::*;
 use eth_types::*;
 use gadgets::{
@@ -26,13 +24,7 @@ use halo2_proofs::{
 use itertools::Itertools;
 use std::iter;
 
-pub(crate) const MAX_N_BYTES_INTEGER: usize = 31;
-
-pub const N_BYTE_LOOKUPS: usize = 8;
-
-pub(crate) const N_BYTES_U64: usize = 8;
-
-pub(crate) const MAX_VALIDATORS: usize = 2usize.pow(20);
+pub(crate) const N_BYTE_LOOKUPS: usize = 8;
 
 #[derive(Clone)]
 pub struct ValidatorsCircuitConfig {

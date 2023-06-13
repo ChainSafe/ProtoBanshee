@@ -1,6 +1,5 @@
 use crate::{
     util::{query_expression, Cell, CellType, Challenges, Expr},
-    vs_circuit::N_BYTE_LOOKUPS,
     witness::*,
 };
 use eth_types::*;
@@ -42,6 +41,7 @@ impl<F: Field> CellManager<F> {
         meta: &mut ConstraintSystem<F>,
         height: usize,
         advices: &[Column<Advice>],
+        offset: usize,
     ) -> Self {
         // Setup the columns and query the cells
         let width = advices.len();
@@ -50,7 +50,7 @@ impl<F: Field> CellManager<F> {
         query_expression(meta, |meta| {
             for c in 0..width {
                 for r in 0..height {
-                    cells.push(Cell::new(meta, advices[c], r, c));
+                    cells.push(Cell::new(meta, advices[c], offset + r, c));
                 }
                 columns.push(CellColumn {
                     index: c,
@@ -64,11 +64,11 @@ impl<F: Field> CellManager<F> {
         let mut column_idx = 0;
 
         // Mark columns used for byte lookup
-        for _ in 0..N_BYTE_LOOKUPS {
-            columns[column_idx].cell_type = CellType::LookupByte;
-            assert_eq!(advices[column_idx].column_type().phase(), 0);
-            column_idx += 1;
-        }
+        // for _ in 0..N_BYTE_LOOKUPS {
+        //     columns[column_idx].cell_type = CellType::LookupByte;
+        //     assert_eq!(advices[column_idx].column_type().phase(), 0);
+        //     column_idx += 1;
+        // }
 
         Self {
             width,
