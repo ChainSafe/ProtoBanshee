@@ -31,10 +31,10 @@ type Validator = ValueOf<typeof ValidatorStruct>;
 
 export const ValidatorsSsz = new ListCompositeType(ValidatorNodeStruct, 8);
 
-const fromHexString = (hexString: string) =>
-  Uint8Array.from(hexString.match(/.{1,2}/g).map((byte) => parseInt(byte, 16)));
+// const fromHexString = (hexString: string) =>
+//   Uint8Array.from(hexString.match(/.{1,2}/g).map((byte) => parseInt(byte, 16)));
 
-const N = 3;
+const N = 6;
 let validators: Validator[] = [];
 let gindeces: bigint[] = [];
 
@@ -45,7 +45,7 @@ for (let i = 0; i < N; i++) {
         effectiveBalance: 32000000,
     });
     gindeces.push(ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex);
-    gindeces.push(ValidatorsSsz.getPathInfo([i, 'effectiveBalance']).gindex)
+    gindeces.push(ValidatorsSsz.getPathInfo([i, 'activationEpoch']).gindex)
 }
 
 console.log(validators);
@@ -77,23 +77,30 @@ const areEqual = (first: Uint8Array, second: Uint8Array) =>
 
 let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proof.witnesses, proof.gindices);
 
+let current_level = trace[0].depth;
+
+function draw_separator() {
+    console.log('|-------|---------|--------|--------|---------|-------|--------|---------|--------|')
+}
+
 console.log();
-console.log('|-------|---------|--------|--------|---------|-------|--------|---------|--------|')
+draw_separator();
 console.log('| Depth | Sibling | IsLeft | sIndex |  Node   | Index | isLeaf | Parent  | pIndex |')
-console.log('|-------|---------|--------|--------|---------|-------|--------|---------|--------|')
+draw_separator();
 for (let t of trace) {
+    if (t.depth != current_level) {
+        draw_separator()
+        current_level = t.depth;
+    }
     let node = Buffer.from(t.node).toString("hex").substring(0, 7);
     let sibling = Buffer.from(t.sibling).toString("hex").substring(0, 7);
     let parent = Buffer.from(t.parent).toString("hex").substring(0, 7);
     console.log(`|   ${t.depth}   | ${sibling} |   ${t.isLeft ? 1 : 0}    |   ${t.siblingGindex.toString().padEnd(3, ' ')}  | ${node} |  ${t.nodeGindex.toString().padEnd(3, ' ')}  |   ${t.isLeaf ? 1 : 0}    | ${parent} |   ${t.parentGindex.toString().padEnd(3, ' ')}  |`)
-    // console.log("fst:", (t.isLeft ? t.nodeGindex : t.siblingGindex), Buffer.from(t.isLeft ? t.node : t.sibling).toString("hex"),  "snd:", (t.isLeft ? t.siblingGindex : t.nodeGindex), Buffer.from(t.isLeft ? t.sibling : t.node).toString("hex"), "hash:", t.parentGindex, Buffer.from(t.parent).toString("hex"));
-
 }
 
 let root = Buffer.from(partial_tree.root).toString("hex").substring(0, 7);
-
+draw_separator();
 console.log(`|   1   |         |   0    |        | ${root} |  1    |   0    |         |        |`)
-console.log('|-------|---------|--------|--------|---------|-------|--------|---------|--------|')
-
+draw_separator();
 
 console.log("\nisValid?", areEqual(partial_tree.root, view.node.root));

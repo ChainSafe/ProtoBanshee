@@ -74,11 +74,6 @@ impl<'a, F: Field> PathChip<'a, F> {
             )
         });
 
-        // meta.lookup_any("tree leaf hash", |meta| {
-        //     let s_leaf = meta.query_advice(config.s_path, Rotation::cur());
-
-        // });
-
         config
     }
 }
