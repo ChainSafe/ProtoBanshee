@@ -44,7 +44,7 @@ export const ValidatorsSsz = new ListCompositeType(ValidatorContainer, 10);
 // const fromHexString = (hexString: string) =>
 //   Uint8Array.from(hexString.match(/.{1,2}/g).map((byte) => parseInt(byte, 16)));
 
-const N = 5;
+const N = 8;
 let validators: Validator[] = [];
 let gindeces: bigint[] = [];
 

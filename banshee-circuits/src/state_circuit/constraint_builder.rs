@@ -3,15 +3,15 @@ use crate::{util::{Expr, Cell, CellType, Constraint, Lookup, ConstrainBuilderCom
 use eth_types::Field;
 use halo2_proofs::plonk::Expression;
 
-pub struct ConstraintBuilder<F: Field> {
+pub struct ConstraintBuilder<'a, F: Field> {
     pub constraints: Vec<Constraint<F>>,
     lookups: Vec<Lookup<F>>,
     condition: Expression<F>,
-    pub(crate) cell_manager: CellManager<F>,
+    pub(crate) cell_manager: &'a mut CellManager<F>,
 }
 
-impl<F: Field> ConstraintBuilder<F> {
-    pub fn new(cell_manager: CellManager<F>) -> Self {
+impl<'a, F: Field> ConstraintBuilder<'a, F> {
+    pub fn new(cell_manager: &'a mut CellManager<F>) -> Self {
         Self {
             constraints: vec![],
             lookups: vec![],
@@ -21,7 +21,7 @@ impl<F: Field> ConstraintBuilder<F> {
     }
 }
 
-impl<F: Field> ConstrainBuilderCommon<F> for ConstraintBuilder<F> {
+impl<'a, F: Field> ConstrainBuilderCommon<F> for ConstraintBuilder<'a, F> {
     fn add_constraint(&mut self, name: &'static str, constraint: Expression<F>) {
         self.constraints.push((name, self.condition.clone() * constraint));
     }

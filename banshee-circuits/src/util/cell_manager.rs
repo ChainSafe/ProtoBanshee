@@ -105,4 +105,9 @@ impl CellType {
     pub(crate) fn storage_for_expr<F: Field>(expr: &Expression<F>) -> CellType {
         Self::storage_for_phase(Self::expr_phase::<F>(expr))
     }
+
+        /// Return the storage cell of the advice column
+        pub(crate) fn storage_for_column<F: Field>(col: &Column<Advice>) -> CellType {
+            Self::storage_for_phase(col.column_type().phase())
+        }
 }

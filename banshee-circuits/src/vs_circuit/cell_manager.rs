@@ -16,17 +16,10 @@ use std::{
 };
 
 #[derive(Clone, Debug)]
-pub(crate) struct CellColumn<F> {
+pub(crate) struct CellColumn {
     pub(crate) index: usize,
     pub(crate) cell_type: CellType,
     pub(crate) height: usize,
-    pub(crate) expr: Expression<F>,
-}
-
-impl<F: Field> Expr<F> for CellColumn<F> {
-    fn expr(&self) -> Expression<F> {
-        self.expr.clone()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -34,7 +27,7 @@ pub struct CellManager<F> {
     width: usize,
     height: usize,
     cells: Vec<Cell<F>>,
-    columns: Vec<CellColumn<F>>,
+    columns: Vec<CellColumn>,
 }
 
 impl<F: Field> CellManager<F> {
@@ -56,7 +49,6 @@ impl<F: Field> CellManager<F> {
                     index: c,
                     cell_type: CellType::StoragePhase1,
                     height: 0,
-                    expr: cells[c * height].expr(),
                 });
             }
         });

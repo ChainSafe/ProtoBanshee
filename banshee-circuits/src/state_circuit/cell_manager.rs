@@ -1,4 +1,5 @@
 use crate::{
+    state_circuit::TREE_LEVEL_AUX_COLUMNS,
     util::{query_expression, Cell, CellType, Challenges, Expr},
     witness::*,
 };
@@ -15,17 +16,10 @@ use std::{
 };
 
 #[derive(Clone, Debug)]
-pub(crate) struct CellColumn<F> {
+pub(crate) struct CellColumn {
     pub(crate) index: usize,
     pub(crate) cell_type: CellType,
     pub(crate) height: usize,
-    pub(crate) expr: Expression<F>,
-}
-
-impl<F: Field> Expr<F> for CellColumn<F> {
-    fn expr(&self) -> Expression<F> {
-        self.expr.clone()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -33,48 +27,49 @@ pub struct CellManager<F> {
     width: usize,
     height: usize,
     cells: Vec<Cell<F>>,
-    columns: Vec<CellColumn<F>>,
+    columns: [CellColumn; 9 + TREE_LEVEL_AUX_COLUMNS],
 }
 
 impl<F: Field> CellManager<F> {
     pub(crate) fn new(
         meta: &mut ConstraintSystem<F>,
         height: usize,
-        advices: &[Column<Advice>],
+        layout: &[Column<Advice>; 9],
+        aux: &[Column<Advice>; TREE_LEVEL_AUX_COLUMNS],
         offset: usize,
     ) -> Self {
         // Setup the columns and query the cells
-        let width = advices.len();
-        let mut cells = Vec::with_capacity(height * width);
+        let width = layout.len() + aux.len();
+        let mut cells: Vec<Cell<F>> = Vec::with_capacity(height * width);
         let mut columns = Vec::with_capacity(width);
         query_expression(meta, |meta| {
-            for c in 0..width {
+            for c in 0..layout.len() {
                 for r in 0..height {
-                    cells.push(Cell::new(meta, advices[c], offset + r, c));
+                    cells.push(Cell::new(meta, layout[c], offset + r, c));
+                }
+                columns.push(CellColumn {
+                    index: c,
+                    cell_type: CellType::storage_for_column::<F>(&layout[c]),
+                    height: height,
+                });
+            }
+            for c in 0..aux.len() {
+                for r in 0..height {
+                    cells.push(Cell::new(meta, aux[c], offset + r, c));
                 }
                 columns.push(CellColumn {
                     index: c,
                     cell_type: CellType::StoragePhase1,
                     height: 0,
-                    expr: cells[c * height].expr(),
                 });
             }
         });
-
-        let mut column_idx = 0;
-
-        // Mark columns used for byte lookup
-        // for _ in 0..N_BYTE_LOOKUPS {
-        //     columns[column_idx].cell_type = CellType::LookupByte;
-        //     assert_eq!(advices[column_idx].column_type().phase(), 0);
-        //     column_idx += 1;
-        // }
 
         Self {
             width,
             height,
             cells,
-            columns,
+            columns: columns.try_into().unwrap(),
         }
     }
 
@@ -108,6 +103,10 @@ impl<F: Field> CellManager<F> {
             // taking self.height rows, so there's no more space.
             None => panic!("not enough cells for query: {:?}", cell_type),
         }
+    }
+
+    pub(crate) fn query_exact(&self, column: usize, row: usize) -> Cell<F> {
+        self.cells[column * self.height + row].clone()
     }
 
     pub(crate) fn get_height(&self) -> usize {
