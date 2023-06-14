@@ -2,9 +2,10 @@ use super::cell_manager::CellManager;
 use crate::{
     state_circuit::{PathChipConfig, TREE_LEVEL_AUX_COLUMNS},
     util::{Cell, CellType},
+    witness::LevelTag,
 };
 use eth_types::*;
-use gadgets::util::Expr;
+use gadgets::{binary_number::BinaryNumberConfig, util::Expr};
 use halo2_proofs::{
     circuit::Value,
     plonk::{Advice, Column, ConstraintSystem, Error, Expression, VirtualCells},
@@ -32,7 +33,8 @@ impl<F: Field> TreeLevel<F> {
             config.sibling_index,
             config.node,
             config.index,
-            config.is_leaf,
+            config.is_left,
+            config.is_right,
             config.parent,
             config.parent_index,
             config.aux_column,
@@ -45,6 +47,20 @@ impl<F: Field> TreeLevel<F> {
             config: config.clone(),
             cell_manager,
         }
+    }
+
+    pub fn tag_matches(&self, tag: LevelTag, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        let tag_bits = self
+            .config
+            .tag
+            .bits
+            .map(|bit| meta.query_advice(bit, Rotation::cur()));
+
+        BinaryNumberConfig::<LevelTag, 2>::value_equals_expr(tag, tag_bits)
+    }
+
+    pub fn selector(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_fixed(self.config.selector, Rotation::cur())
     }
 
     pub fn depth(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
@@ -67,8 +83,12 @@ impl<F: Field> TreeLevel<F> {
         meta.query_advice(self.config.index, Rotation::cur())
     }
 
-    pub fn is_leaf(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.is_leaf, Rotation::cur())
+    pub fn is_left(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_advice(self.config.is_left, Rotation::cur())
+    }
+
+    pub fn is_right(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_advice(self.config.is_right, Rotation::cur())
     }
 
     pub fn parent(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {

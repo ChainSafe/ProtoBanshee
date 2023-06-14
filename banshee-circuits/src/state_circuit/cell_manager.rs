@@ -34,7 +34,7 @@ impl<F: Field> CellManager<F> {
     pub(crate) fn new(
         meta: &mut ConstraintSystem<F>,
         height: usize,
-        layout: &[Column<Advice>; 9],
+        layout: &[Column<Advice>; 10],
         aux: &[Column<Advice>; TREE_LEVEL_AUX_COLUMNS],
         offset: usize,
     ) -> Self {

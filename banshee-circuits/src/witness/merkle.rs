@@ -1,3 +1,5 @@
+use gadgets::impl_expr;
+use strum_macros::EnumIter;
 
 pub type MerkleTrace<F> = Vec<MerkleTraceStep<F>>;
 
@@ -11,4 +13,18 @@ pub struct MerkleTraceStep<F> {
     parent: F,
     parent_index: F,
     depth: F,
+    level_tag: F,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, EnumIter, Hash)]
+pub enum LevelTag {
+    PubKeys = 0,
+    Validators
+}
+impl_expr!(LevelTag);
+
+impl From<LevelTag> for usize {
+    fn from(value: LevelTag) -> usize {
+        value as usize
+    }
 }

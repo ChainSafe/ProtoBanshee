@@ -7,7 +7,7 @@ type TraceRow = {
     sibling: Uint8Array;
     siblingGindex: Gindex;
     isLeft: boolean;
-    isLeaf: boolean;
+    isRight: boolean;
     parent: Uint8Array;
     parentGindex: Gindex;
     depth: number;
@@ -55,7 +55,7 @@ export function createNodeFromMultiProofWithTrace(leaves: Uint8Array[], witnesse
       const level = levels[i];
       const parentLevel = levels[i - 1];
       for (const bitstring of Object.keys(level)) {
-        const nodeGindex = parseInt(bitstring, 2);
+        const nodeGindex = BigInt(parseInt(bitstring, 2));
         const node = level[bitstring];
         // if the node doesn't exist, we've already processed its sibling
         if (!node) {
@@ -64,10 +64,10 @@ export function createNodeFromMultiProofWithTrace(leaves: Uint8Array[], witnesse
   
         const isLeft = bitstring[bitstring.length - 1] === "0";
         const parentBitstring = bitstring.substring(0, bitstring.length - 1);
-        const parentGindex = parseInt(parentBitstring, 2);
+        const parentGindex = BigInt(parseInt(parentBitstring, 2));
 
         const siblingBitstring = parentBitstring + (isLeft ? "1" : "0");
-        const siblingGindex = parseInt(siblingBitstring, 2);
+        const siblingGindex = BigInt(parseInt(siblingBitstring, 2));
   
         const siblingNode = level[siblingBitstring];
         if (!siblingNode) {
@@ -79,13 +79,13 @@ export function createNodeFromMultiProofWithTrace(leaves: Uint8Array[], witnesse
         // console.log("fst:", (isLeft ? nodeGindex : siblingGindex), Buffer.from((isLeft ? node : siblingNode).root).toString("hex"),  "snd:", (isLeft ? siblingGindex : nodeGindex), Buffer.from((isLeft ? siblingNode : node).root).toString("hex"), "hash:", parentGindex, Buffer.from(parentNode.root).toString("hex"));
         trace.push({
             node: node.root,
-            nodeGindex: BigInt(nodeGindex),
+            nodeGindex,
             sibling: siblingNode.root,
-            siblingGindex: BigInt(siblingGindex),
-            isLeft: isLeft,
-            isLeaf: i == maxLevel,
+            siblingGindex,
+            isLeft: gindices.includes(isLeft ? nodeGindex : siblingGindex),
+            isRight: gindices.includes(isLeft ? siblingGindex : nodeGindex),
             parent: parentNode.root,
-            parentGindex: BigInt(parentGindex),
+            parentGindex,
             depth: i,
         });
         

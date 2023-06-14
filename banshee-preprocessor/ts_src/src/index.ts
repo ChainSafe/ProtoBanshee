@@ -14,14 +14,6 @@ import {Node, createProof, ProofType, createNodeFromProof, Tree, BranchNode, Lea
 import { createNodeFromMultiProofWithTrace } from "./merkleTrace";
 import crypto from "crypto";
 
-const ToyValidatorContainer = new ContainerType(
-    {
-      pubkey: ssz.Bytes32,
-      activationEpoch: ssz.Uint32,
-      effectiveBalance: ssz.Uint32,
-    },
-    {typeName: "Validator", jsonCase: "eth2"}
-  );
 
   const ValidatorContainer = new ContainerType(
     {
@@ -44,7 +36,7 @@ export const ValidatorsSsz = new ListCompositeType(ValidatorContainer, 10);
 // const fromHexString = (hexString: string) =>
 //   Uint8Array.from(hexString.match(/.{1,2}/g).map((byte) => parseInt(byte, 16)));
 
-const N = 8;
+const N = 5;
 let validators: Validator[] = [];
 let gindeces: bigint[] = [];
 
@@ -102,12 +94,12 @@ let current_level = trace[0].depth;
 let row_index = 0;
 
 function draw_separator() {
-    console.log('|-----||-------|---------|--------|---------|-------|--------|--------|---------|--------|')
+    console.log('|-----||-------|---------|--------|---------|-------|--------|---------|---------|--------|')
 }
 
 console.log();
 draw_separator();
-console.log('| Row || Depth | Sibling | sIndex |  Node   | Index | IsLeaf | IsLeft | Parent  | pIndex |')
+console.log('| Row || Depth | Sibling | sIndex |  Node   | Index | IsLeft | IsRight | Parent  | pIndex |')
 draw_separator();
 for (let t of trace) {
     if (t.depth != current_level) {
@@ -117,12 +109,12 @@ for (let t of trace) {
     let node = Buffer.from(t.node).toString("hex").substring(0, 7);
     let sibling = Buffer.from(t.sibling).toString("hex").substring(0, 7);
     let parent = Buffer.from(t.parent).toString("hex").substring(0, 7);
-    console.log(`| ${(row_index++).toString().padEnd(3, ' ')} ||  ${t.depth.toString().padEnd(2, ' ')}   | ${sibling} |   ${t.siblingGindex.toString().padEnd(3, ' ')}  | ${node} |  ${t.nodeGindex.toString().padEnd(3, ' ')}  |   ${t.isLeaf ? 1 : 0}    |   ${t.isLeft ? 1 : 0}    | ${parent} |   ${t.parentGindex.toString().padEnd(3, ' ')}  |`)
+    console.log(`| ${(row_index++).toString().padEnd(3, ' ')} ||  ${t.depth.toString().padEnd(3, ' ')}  | ${sibling} |  ${t.siblingGindex.toString().padEnd(4, ' ')}  | ${node} | ${t.nodeGindex.toString().padEnd(4, ' ')}  |   ${t.isLeft ? 1 : 0}    |    ${t.isRight ? 1 : 0}    | ${parent} |  ${t.parentGindex.toString().padEnd(4, ' ')}  |`)
 }
 
 let root = Buffer.from(partial_tree.root).toString("hex").substring(0, 7);
 draw_separator();
-console.log(`| ${(++row_index).toString().padEnd(3, ' ')} ||   1   |         |        | ${root} |  1    |   0    |        |         |        |`)
+console.log(`| ${(++row_index).toString().padEnd(3, ' ')} ||   1   |         |        | ${root} | 1     |        |         |         |        |`)
 draw_separator();
 
 console.log("\nisValid?", areEqual(partial_tree.root, view.node.root));
