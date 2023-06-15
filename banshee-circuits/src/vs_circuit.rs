@@ -4,9 +4,10 @@ pub(crate) mod constraint_builder;
 use crate::{
     table::{LookupTable, StateTable},
     util::{Cell, Challenges, SubCircuit, SubCircuitConfig},
-    witness::{self, StateEntry, StateTag}, MAX_VALIDATORS,
+    witness::{self, StateEntry, StateTag},
+    MAX_VALIDATORS,
 };
-use cell_manager::{CellManager};
+use cell_manager::CellManager;
 use constraint_builder::*;
 use eth_types::*;
 use gadgets::{
@@ -108,5 +109,3 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
             .map(|bit| meta.query_advice(bit, Rotation::cur())),
     }
 }
-
-

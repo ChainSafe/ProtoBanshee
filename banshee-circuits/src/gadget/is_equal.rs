@@ -2,7 +2,7 @@ use super::IsZeroGadget;
 use crate::util::*;
 use eth_types::Field;
 use halo2_proofs::{
-    circuit::{Value, Region},
+    circuit::{Region, Value},
     plonk::{Error, Expression},
 };
 

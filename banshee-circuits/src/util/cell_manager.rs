@@ -1,6 +1,4 @@
-use crate::{
-    util::{query_expression, Challenges, Expr},
-};
+use crate::util::{query_expression, Challenges, Expr};
 use eth_types::*;
 use halo2_proofs::{
     circuit::{AssignedCell, Region, Value},
@@ -106,8 +104,8 @@ impl CellType {
         Self::storage_for_phase(Self::expr_phase::<F>(expr))
     }
 
-        /// Return the storage cell of the advice column
-        pub(crate) fn storage_for_column<F: Field>(col: &Column<Advice>) -> CellType {
-            Self::storage_for_phase(col.column_type().phase())
-        }
+    /// Return the storage cell of the advice column
+    pub(crate) fn storage_for_column<F: Field>(col: &Column<Advice>) -> CellType {
+        Self::storage_for_phase(col.column_type().phase())
+    }
 }

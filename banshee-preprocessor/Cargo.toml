@@ -9,6 +9,6 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0.81", optional = true }
 ethereum-consensus = { git = "https://github.com/ralexstokes/ethereum-consensus" }
-ssz_rs = { path = "../../examples/ssz-rs/ssz_rs", default-features = false}
+ssz_rs = { git = "https://github.com/ralexstokes/ssz-rs", default-features = false}
 merkle_proof = {git = "https://github.com/sigp/lighthouse", package = "merkle_proof", branch = "stable"}
 ethereum-types = "0.14.1"

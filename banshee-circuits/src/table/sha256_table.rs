@@ -95,7 +95,7 @@ impl SHA256Table {
             (
                 enable * hash,
                 meta.query_advice(self.hash_rlc, Rotation::cur()),
-            )
+            ),
         ]
     }
 }

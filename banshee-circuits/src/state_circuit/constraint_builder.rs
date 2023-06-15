@@ -1,5 +1,8 @@
-use super::{cell_manager::*};
-use crate::{util::{Expr, Cell, CellType, Constraint, Lookup, ConstrainBuilderCommon}, state_circuit::*};
+use super::cell_manager::*;
+use crate::{
+    state_circuit::*,
+    util::{Cell, CellType, ConstrainBuilderCommon, Constraint, Expr, Lookup},
+};
 use eth_types::Field;
 use halo2_proofs::plonk::Expression;
 
@@ -29,9 +32,10 @@ impl<F: Field> ConstraintBuilder<F> {
 
 impl<F: Field> ConstrainBuilderCommon<F> for ConstraintBuilder<F> {
     fn add_constraint(&mut self, name: &'static str, constraint: Expression<F>) {
-        self.constraints.push((name, self.condition.clone() * constraint));
+        self.constraints
+            .push((name, self.condition.clone() * constraint));
     }
-    
+
     fn query_cells(&mut self, cell_type: CellType, count: usize) -> Vec<Cell<F>> {
         // self.cell_manager.query_cells(cell_type, count)
         unimplemented!()

@@ -6,6 +6,9 @@ pub use cell_manager::*;
 mod constraint_builder;
 pub use constraint_builder::*;
 
+use crate::witness;
+use eth_types::*;
+pub use gadgets::util::{rlc, Expr};
 use halo2_proofs::{
     circuit::{Layouter, Value},
     plonk::{
@@ -13,9 +16,6 @@ use halo2_proofs::{
         VirtualCells,
     },
 };
-use crate::{witness};
-use eth_types::*;
-pub use gadgets::util::{Expr, rlc};
 
 pub(crate) fn query_expression<F: Field, T>(
     meta: &mut ConstraintSystem<F>,
@@ -50,12 +50,9 @@ impl Challenges {
     /// Returns `Expression` of challenges from `ConstraintSystem`.
     pub fn exprs<F: Field>(&self, meta: &mut ConstraintSystem<F>) -> Challenges<Expression<F>> {
         let [lookup_input] = query_expression(meta, |meta| {
-            [self.lookup_input]
-                .map(|challenge| meta.query_challenge(challenge))
+            [self.lookup_input].map(|challenge| meta.query_challenge(challenge))
         });
-        Challenges {
-            lookup_input,
-        }
+        Challenges { lookup_input }
     }
 
     /// Returns `Value` of challenges from `Layouter`.
@@ -159,7 +156,6 @@ pub(crate) fn transpose_val_ret<F, E>(value: Value<Result<F, E>>) -> Result<Valu
     });
     ret
 }
-
 
 /// Ceiling of log_2(n)
 pub fn log2_ceil(n: usize) -> u32 {

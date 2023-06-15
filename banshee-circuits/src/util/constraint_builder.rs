@@ -71,12 +71,9 @@ pub(crate) trait ConstrainBuilderCommon<F: Field> {
         self.query_cell_with_type(CellType::StoragePermutation)
     }
 
-
     fn query_cell_with_type(&mut self, cell_type: CellType) -> Cell<F> {
         self.query_cells(cell_type, 1).first().unwrap().clone()
     }
 
     fn query_cells(&mut self, cell_type: CellType, count: usize) -> Vec<Cell<F>>;
-
 }
-
