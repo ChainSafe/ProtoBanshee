@@ -1,4 +1,4 @@
-use crate::{util::ConstrainBuilderCommon, witness::LevelTag, MAX_VALIDATORS};
+use crate::{util::ConstrainBuilderCommon, MAX_VALIDATORS};
 
 pub mod cell_manager;
 use cell_manager::CellManager;
@@ -8,7 +8,6 @@ use constraint_builder::ConstraintBuilder;
 
 pub mod merkle_tree;
 use merkle_tree::TreeLevel;
-use rand_chacha::rand_core::le;
 
 use crate::{
     gadget::IsEqualGadget,
@@ -49,9 +48,8 @@ pub const VALIDATORS_LEVEL: usize = PUBKEYS_LEVEL - 1;
 
 #[derive(Clone, Debug)]
 pub(crate) struct PathChipConfig<F: Field> {
-    selector: Column<Fixed>,
+    selector: Selector,
     tree: [TreeLevel<F>; TREE_DEPTH],
-    aux_column: Column<Advice>,
     sha256_table: SHA256Table,
 }
 
@@ -59,7 +57,7 @@ pub(crate) struct PathChipConfig<F: Field> {
 pub(crate) struct PathChip<'a, F: Field> {
     offset: usize,
     config: PathChipConfig<F>,
-    data: &'a MerkleTrace<F>,
+    trace: &'a MerkleTrace<F>,
 }
 
 impl<F: Field> Chip<F> for PathChip<'_, F> {
@@ -71,7 +69,7 @@ impl<F: Field> Chip<F> for PathChip<'_, F> {
     }
 
     fn loaded(&self) -> &Self::Loaded {
-        self.data
+        self.trace
     }
 }
 
@@ -81,9 +79,7 @@ impl<'a, F: Field> PathChip<'a, F> {
         sha256_table: SHA256Table,
         validators_num: usize,
     ) -> <Self as Chip<F>>::Config {
-        let selector = meta.fixed_column();
-        let aux_column = meta.advice_column();
-
+        let selector = meta.selector();
         let mut height: usize = validators_num;
         let mut tree = vec![TreeLevel::configure(
             meta,
@@ -94,7 +90,7 @@ impl<'a, F: Field> PathChip<'a, F> {
             true,
         )];
 
-        let padding = 0;
+        let mut padding = 0;
         for i in (1..TREE_DEPTH).rev() {
             let prev_height = height;
             height = validators_num * 2f64.powf((3 - TREE_DEPTH - i) as f64).ceil() as usize;
@@ -109,12 +105,12 @@ impl<'a, F: Field> PathChip<'a, F> {
         let mut tree: [_; TREE_DEPTH] = tree.into_iter().rev().collect_vec().try_into().unwrap();
 
         for i in (0..TREE_DEPTH).rev() {
-            let level = tree[i];
-            let next_level = tree[i - 1];
+            let level = &tree[i];
+            let next_level = &tree[i - 1];
 
             meta.create_gate(format!("tree[{i}] boolean checks"), |meta| {
-                let selector = meta.query_fixed(selector, Rotation::cur());
-                let cb = ConstraintBuilder::new();
+                let selector = meta.query_selector(selector);
+                let mut cb = ConstraintBuilder::new();
                 cb.require_boolean("into_left is boolean", level.into_left(meta));
                 if let Some(is_left_col) = level.is_left {
                     cb.require_boolean(
@@ -135,7 +131,7 @@ impl<'a, F: Field> PathChip<'a, F> {
                 meta.lookup_any(
                     format!("state_table.lookup(tree[{i}][node], tree[{i}][index])"),
                     |meta| {
-                        let selector = meta.query_fixed(selector, Rotation::cur());
+                        let selector = meta.query_selector(selector);
                         let is_left = meta.query_advice(is_left_col, Rotation::cur());
 
                         // TODO: constraint (node, index) with StateTable
@@ -155,7 +151,7 @@ impl<'a, F: Field> PathChip<'a, F> {
                 meta.lookup_any(
                     format!("state_table.lookup(tree[{i}][sibling], tree[{i}][sibling_index])"),
                     |meta| {
-                        let selector = meta.query_fixed(selector, Rotation::cur());
+                        let selector = meta.query_selector(selector);
                         let is_right = meta.query_advice(is_right_col, Rotation::cur());
 
                         // TODO: constraint (sibling, sibling_index) with StateTable
@@ -176,27 +172,27 @@ impl<'a, F: Field> PathChip<'a, F> {
                     i - 1
                 ),
                 |meta| {
-                    let selector = meta.query_fixed(selector, Rotation::cur());
+                    let selector = meta.query_selector(selector);
                     let into_node = level.into_left(meta);
-                    sha256_table.build_lookup(
-                        meta,
-                        selector * into_node,
-                        level.node(meta),
-                        level.sibling(meta),
-                        next_level.node(meta),
-                    )
+                    let node = level.node(meta);
+                    let sibling = level.sibling(meta);
+                    let parent = next_level.node(meta);
+                    sha256_table.build_lookup(meta, selector * into_node, node, sibling, parent)
                 },
             );
 
             meta.lookup_any(format!("hash(tree[{i}][node] | tree[{i}][sibling]) == tree[{}][sibling]@rotation(-(padding + 1))", i-1), |meta| {
-                let selector = meta.query_fixed(selector, Rotation::cur());
+                let selector = meta.query_selector(selector);
                 let into_sibling: Expression<F> = not::expr(level.into_left(meta));
+                let node = level.node(meta);
+                let sibling = level.sibling(meta);
+                let parent = next_level.sibling_at(level.padding().add(1).mul(-1), meta);
                 sha256_table.build_lookup(
                     meta,
                     selector * into_sibling,
-                    level.node(meta),
-                    level.sibling(meta),
-                    next_level.sibling_at(level.padding().add(1).mul(-1), meta),
+                    node,
+                    sibling,
+                    parent,
                 )
             });
         }
@@ -204,8 +200,47 @@ impl<'a, F: Field> PathChip<'a, F> {
         PathChipConfig {
             selector,
             tree,
-            aux_column,
             sha256_table,
         }
+    }
+
+    fn construct(
+        config: <Self as Chip<F>>::Config,
+        offset: usize,
+        trace: &'a <Self as Chip<F>>::Loaded,
+    ) -> Self {
+        Self {
+            config,
+            offset,
+            trace,
+        }
+    }
+
+    fn assign(&self, region: &mut Region<'_, F>) -> Result<usize, Error> {
+        let trace_by_depth = self
+            .trace
+            .into_iter()
+            .group_by(|step| step.depth)
+            .into_iter()
+            .sorted_by_key(|(depth, steps)| depth.clone())
+            .rev()
+            .map(|(depth, steps)| steps.collect_vec())
+            .collect_vec();
+
+        let max_rows = trace_by_depth
+            .iter()
+            .map(|steps| steps.len())
+            .max()
+            .unwrap();
+
+        for offset in 0..max_rows {
+            self.config.selector.enable(region, offset)?;
+        }
+
+        for (level, steps) in self.config.tree.iter().zip(trace_by_depth) {
+            level.assign_with_region(region, steps)?;
+        }
+
+        Ok(max_rows)
     }
 }
