@@ -1,4 +1,4 @@
-use crate::{MAX_VALIDATORS, witness::LevelTag};
+use crate::{util::ConstrainBuilderCommon, witness::LevelTag, MAX_VALIDATORS};
 
 pub mod cell_manager;
 use cell_manager::CellManager;
@@ -8,7 +8,7 @@ use constraint_builder::ConstraintBuilder;
 
 pub mod merkle_tree;
 use merkle_tree::TreeLevel;
-use serde::__private::de;
+use rand_chacha::rand_core::le;
 
 use crate::{
     gadget::IsEqualGadget,
@@ -20,7 +20,7 @@ use eth_types::*;
 use gadgets::{
     batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
     binary_number::{BinaryNumberChip, BinaryNumberConfig},
-    util::Expr,
+    util::{not, Expr},
 };
 use halo2_proofs::{
     circuit::{Chip, Layouter, Region, Value},
@@ -31,7 +31,12 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use itertools::Itertools;
-use std::{iter, vec};
+use std::{
+    fmt::format,
+    iter,
+    ops::{Add, Mul},
+    vec,
+};
 
 pub const CHUNKS_PER_VALIDATOR: usize = 8;
 pub const USED_CHUNKS_PER_VALIDATOR: usize = 5;
@@ -40,34 +45,25 @@ pub const TREE_DEPTH: usize = 10; // ceil(log2(TREE_MAX_LEAVES))
 pub const TREE_LEVEL_AUX_COLUMNS: usize = 1;
 
 pub const PUBKEYS_LEVEL: usize = 10;
-pub const VALIDATOR_FIELDS_LEVEL: usize = PUBKEYS_LEVEL - 1;
+pub const VALIDATORS_LEVEL: usize = PUBKEYS_LEVEL - 1;
 
 #[derive(Clone, Debug)]
-pub (crate) struct PathChipConfig {
+pub(crate) struct PathChipConfig<F: Field> {
     selector: Column<Fixed>,
-    depth: Column<Advice>,
-    sibling: Column<Advice>,
-    sibling_index: Column<Advice>,
-    node: Column<Advice>,
-    index: Column<Advice>,
-    is_left: Column<Advice>,
-    is_right: Column<Advice>,
-    parent: Column<Advice>,
-    parent_index: Column<Advice>,
-    tag: BinaryNumberConfig<LevelTag, 2>,
+    tree: [TreeLevel<F>; TREE_DEPTH],
     aux_column: Column<Advice>,
     sha256_table: SHA256Table,
 }
 
 /// chip for verify Merkle-multi proof
-pub (crate) struct PathChip<'a, F: Field> {
+pub(crate) struct PathChip<'a, F: Field> {
     offset: usize,
-    config: PathChipConfig,
+    config: PathChipConfig<F>,
     data: &'a MerkleTrace<F>,
 }
 
 impl<F: Field> Chip<F> for PathChip<'_, F> {
-    type Config = PathChipConfig;
+    type Config = PathChipConfig<F>;
     type Loaded = MerkleTrace<F>;
 
     fn config(&self) -> &Self::Config {
@@ -86,108 +82,130 @@ impl<'a, F: Field> PathChip<'a, F> {
         validators_num: usize,
     ) -> <Self as Chip<F>>::Config {
         let selector = meta.fixed_column();
-        let depth = meta.advice_column();
-        let sibling = meta.advice_column();
-        let sibling_index = meta.advice_column();
-        let node = meta.advice_column();
-        let index = meta.advice_column();
-        let is_left = meta.advice_column();
-        let is_right = meta.advice_column();
-        let parent = meta.advice_column();
-        let parent_index = meta.advice_column();
         let aux_column = meta.advice_column();
-        let tag = BinaryNumberChip::configure(meta, selector, None);
-
-        let config = PathChipConfig {
-            selector,
-            depth,
-            sibling,
-            sibling_index,
-            node,
-            index,
-            is_left,
-            is_right,
-            parent,
-            parent_index,
-            tag,
-            aux_column,
-            sha256_table,
-        };
 
         let mut height: usize = validators_num;
-        let mut tree = vec![TreeLevel::new(meta, &config, height, PUBKEYS_LEVEL, 0)];
+        let mut tree = vec![TreeLevel::configure(
+            meta,
+            height,
+            PUBKEYS_LEVEL,
+            0,
+            3,
+            true,
+        )];
 
+        let padding = 0;
         for i in (1..TREE_DEPTH).rev() {
             let prev_height = height;
             height = validators_num * 2f64.powf((3 - TREE_DEPTH - i) as f64).ceil() as usize;
-            let level = TreeLevel::new(meta, &config, height, i, prev_height);
+            if i != VALIDATORS_LEVEL {
+                padding = padding * 2 + 1;
+            }
+            let level =
+                TreeLevel::configure(meta, height, i, prev_height, padding, i == VALIDATORS_LEVEL);
             tree.push(level);
         }
 
         let mut tree: [_; TREE_DEPTH] = tree.into_iter().rev().collect_vec().try_into().unwrap();
 
-        meta.lookup_any("validator fields in state table", |meta| {
-            let node = meta.query_advice(config.node, Rotation::cur());
-            let index = meta.query_advice(config.index, Rotation::cur());
-            let sibling = meta.query_advice(config.sibling, Rotation::cur());
-            let sibling_index = meta.query_advice(config.sibling_index, Rotation::cur());
+        for i in (0..TREE_DEPTH).rev() {
+            let level = tree[i];
+            let next_level = tree[i - 1];
 
-            // TODO: constraint (node, index) and (sibling, s_index) with StateTable
-            // https://github.com/privacy-scaling-explorations/zkevm-circuits/blob/main/zkevm-circuits/src/evm_circuit/execution.rs#L815-L816
-            vec![]
-        });
+            meta.create_gate(format!("tree[{i}] boolean checks"), |meta| {
+                let selector = meta.query_fixed(selector, Rotation::cur());
+                let cb = ConstraintBuilder::new();
+                cb.require_boolean("into_left is boolean", level.into_left(meta));
+                if let Some(is_left_col) = level.is_left {
+                    cb.require_boolean(
+                        "is_left is boolean",
+                        meta.query_advice(is_left_col, Rotation::cur()),
+                    );
+                }
+                if let Some(is_right_col) = level.is_right {
+                    cb.require_boolean(
+                        "is_right is boolean",
+                        meta.query_advice(is_right_col, Rotation::cur()),
+                    );
+                }
+                cb.gate(selector)
+            });
 
-        meta.lookup_any("hash(node + sibling) == parent", |meta| {
-            let mut tree_level = &mut tree[PUBKEYS_LEVEL];
+            if let Some(is_left_col) = level.is_left {
+                meta.lookup_any(
+                    format!("state_table.lookup(tree[{i}][node], tree[{i}][index])"),
+                    |meta| {
+                        let selector = meta.query_fixed(selector, Rotation::cur());
+                        let is_left = meta.query_advice(is_left_col, Rotation::cur());
 
+                        // TODO: constraint (node, index) with StateTable
+                        // https://github.com/privacy-scaling-explorations/zkevm-circuits/blob/main/zkevm-circuits/src/evm_circuit/execution.rs#L815-L816
+                        // state_table.build_lookup(
+                        //     meta,
+                        //     selector * is_left,
+                        //     level.node(meta),
+                        //     level.node_index(meta),
+                        // )
+                        vec![]
+                    },
+                );
+            }
 
-            let depth = tree_level.depth(meta);
-            let node = tree_level.node(meta);
-            let sibling = tree_level.sibling(meta);
-            
-            config.sha256_table.build_lookup(
-                meta,
-                tree_level.selector(meta),
-                tree_level.node(meta),
-                tree_level.sibling(meta),
-                tree_level.parent(meta), // tree[PUBKEYS_LEVEL - 1].parent_at(pubkey_offset * 3),
-            )
-        });
+            if let Some(is_right_col) = level.is_right {
+                meta.lookup_any(
+                    format!("state_table.lookup(tree[{i}][sibling], tree[{i}][sibling_index])"),
+                    |meta| {
+                        let selector = meta.query_fixed(selector, Rotation::cur());
+                        let is_right = meta.query_advice(is_right_col, Rotation::cur());
 
-        // let s_level: Expression<F> = tree_level.tag_matches(LevelTag::PubKeys, meta);
+                        // TODO: constraint (sibling, sibling_index) with StateTable
+                        // state_table.build_lookup(
+                        //     meta,
+                        //     selector * is_right,
+                        //     level.sibling(meta),
+                        //     level.sibling_index(meta),
+                        // )
+                        vec![]
+                    },
+                );
+            }
 
-
-        meta.lookup_any("middle levels", |meta| {
-            let mut tree_level = &mut tree[PUBKEYS_LEVEL];
-
-            let depth = tree_level.depth(meta);
-            let node = tree_level.node(meta);
-            let sibling = tree_level.sibling(meta);
-            let s_level = tree_level.tag_matches(LevelTag::Validators, meta);
-            let s_left = tree_level.is_left(meta);
-            let s_right = tree_level.is_right(meta);
-
-            let lookup_args = config.sha256_table.build_lookup(
-                meta,
-                s_level * s_left,
-                node,
-                sibling,
-                tree[PUBKEYS_LEVEL - 1].parent_at(pubkey_offset * 3),
+            meta.lookup_any(
+                format!(
+                    "hash(tree[{i}][node] | tree[{i}][sibling]) == tree[{}][node]",
+                    i - 1
+                ),
+                |meta| {
+                    let selector = meta.query_fixed(selector, Rotation::cur());
+                    let into_node = level.into_left(meta);
+                    sha256_table.build_lookup(
+                        meta,
+                        selector * into_node,
+                        level.node(meta),
+                        level.sibling(meta),
+                        next_level.node(meta),
+                    )
+                },
             );
 
-            let lookup_args = config.sha256_table.build_lookup(
-                meta,
-                s_level,
-                node,
-                sibling,
-                tree[PUBKEYS_LEVEL - 1].parent_at(pubkey_offset * 3),
-            );
+            meta.lookup_any(format!("hash(tree[{i}][node] | tree[{i}][sibling]) == tree[{}][sibling]@rotation(-(padding + 1))", i-1), |meta| {
+                let selector = meta.query_fixed(selector, Rotation::cur());
+                let into_sibling: Expression<F> = not::expr(level.into_left(meta));
+                sha256_table.build_lookup(
+                    meta,
+                    selector * into_sibling,
+                    level.node(meta),
+                    level.sibling(meta),
+                    next_level.sibling_at(level.padding().add(1).mul(-1), meta),
+                )
+            });
+        }
 
-            pubkey_offset += 1;
-
-            lookup_args
-        });
-
-        config
+        PathChipConfig {
+            selector,
+            tree,
+            aux_column,
+            sha256_table,
+        }
     }
 }

@@ -11,95 +11,101 @@ use halo2_proofs::{
     plonk::{Advice, Column, ConstraintSystem, Error, Expression, VirtualCells},
     poly::Rotation,
 };
+use rand_chacha::rand_core::le;
 
 #[derive(Clone, Debug)]
 pub struct TreeLevel<F> {
     depth: usize,
-    config: PathChipConfig,
-    pub(super) cell_manager: CellManager<F>,
+    padding: usize,
+    sibling: Column<Advice>,
+    sibling_index: Column<Advice>,
+    node: Column<Advice>,
+    index: Column<Advice>,
+    into_left: Column<Advice>,
+    pub(crate) is_left:  Option<Column<Advice>>,
+    pub(crate) is_right: Option<Column<Advice>>,
+    _f: std::marker::PhantomData<F>,
+   // pub(super) cell_manager: CellManager<F>,
 }
 
 impl<F: Field> TreeLevel<F> {
-    pub(crate) fn new(
+    pub(crate) fn configure(
         meta: &mut ConstraintSystem<F>,
-        config: &PathChipConfig,
         height: usize,
         depth: usize,
         offset: usize,
+        padding: usize,
+        has_leaves: bool,
     ) -> Self {
-        let layout_column = &[
-            config.depth,
-            config.sibling,
-            config.sibling_index,
-            config.node,
-            config.index,
-            config.is_left,
-            config.is_right,
-            config.parent,
-            config.parent_index,
-            config.aux_column,
-        ];
-        let cell_manager =
-            CellManager::new(meta, height, layout_column, &[config.aux_column], offset);
+        let sibling = meta.advice_column();
+        let sibling_index = meta.advice_column();
+        let node = meta.advice_column();
+        let index = meta.advice_column();
+        let into_left = meta.advice_column();
+        let is_left = if has_leaves {
+            Some(meta.advice_column())
+        } else {
+            None
+        };
+        let is_right = if has_leaves {
+            Some(meta.advice_column())
+        } else {
+            None
+        };
+        // let cell_manager =
+        //     CellManager::new(meta, height, layout_column, &[config.aux_column], offset);
 
         Self {
             depth,
-            config: config.clone(),
-            cell_manager,
+            padding,
+            sibling,
+            sibling_index,
+            node,
+            index,
+            into_left,
+            is_left,
+            is_right,
+            _f: std::marker::PhantomData,
         }
     }
 
-    pub fn tag_matches(&self, tag: LevelTag, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        let tag_bits = self
-            .config
-            .tag
-            .bits
-            .map(|bit| meta.query_advice(bit, Rotation::cur()));
-
-        BinaryNumberConfig::<LevelTag, 2>::value_equals_expr(tag, tag_bits)
-    }
-
-    pub fn selector(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_fixed(self.config.selector, Rotation::cur())
-    }
-
-    pub fn depth(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.depth, Rotation::cur())
+    pub fn padding(&self) -> i32 {
+        self.padding as i32
     }
 
     pub fn sibling(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.sibling, Rotation::cur())
+        meta.query_advice(self.sibling, Rotation::cur())
+    }
+
+    pub fn sibling_next(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_advice(self.sibling, Rotation(self.padding() + 1))
+    }
+
+    pub fn sibling_at(&self, offset: i32, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_advice(self.sibling, Rotation(offset))
     }
 
     pub fn sibling_index(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.sibling_index, Rotation::cur())
+        meta.query_advice(self.sibling_index, Rotation::cur())
     }
 
     pub fn node(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.node, Rotation::cur())
+        meta.query_advice(self.node, Rotation::cur())
+    }
+
+    pub fn node_next(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_advice(self.node, Rotation(self.padding() + 1))
+    }
+
+    pub fn node_at(&self, offset: i32, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_advice(self.node, Rotation(offset))
     }
 
     pub fn index(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.index, Rotation::cur())
+        meta.query_advice(self.index, Rotation::cur())
     }
 
-    pub fn is_left(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.is_left, Rotation::cur())
-    }
-
-    pub fn is_right(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.is_right, Rotation::cur())
-    }
-
-    pub fn parent(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.parent, Rotation::cur())
-    }
-
-    pub fn parent_at(&self, row: usize) -> Expression<F> {
-        self.cell_manager.query_exact(6, row).expr()
-    }
-
-    pub fn parent_index(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
-        meta.query_advice(self.config.parent_index, Rotation::cur())
+    pub fn into_left(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
+        meta.query_advice(self.into_left, Rotation::cur())
     }
 }
