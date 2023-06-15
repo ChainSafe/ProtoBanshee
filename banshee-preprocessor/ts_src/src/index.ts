@@ -1,6 +1,5 @@
 import {
     ContainerType,
-    ContainerNodeStructType,
     ListCompositeType,
     ValueOf
   } from "@chainsafe/ssz";
@@ -10,8 +9,8 @@ import {
 import {
     Validator as BeaconValidator,
 } from "@lodestar/types/phase0"
-import {Node, createProof, ProofType, createNodeFromProof, Tree, BranchNode, LeafNode, Gindex, MultiProof} from "@chainsafe/persistent-merkle-tree";
-import { createNodeFromMultiProofWithTrace } from "./merkleTrace";
+import {createProof, ProofType, MultiProof, Node} from "@chainsafe/persistent-merkle-tree";
+import { createNodeFromMultiProofWithTrace, printTrace } from "./merkleTrace";
 import crypto from "crypto";
 
 
@@ -33,19 +32,11 @@ type Validator = ValueOf<typeof ValidatorContainer>;
 
 export const ValidatorsSsz = new ListCompositeType(ValidatorContainer, 10);
 
-// const fromHexString = (hexString: string) =>
-//   Uint8Array.from(hexString.match(/.{1,2}/g).map((byte) => parseInt(byte, 16)));
-
-const N = 9;
+const N = 5;
 let validators: Validator[] = [];
 let gindeces: bigint[] = [];
 
 for (let i = 0; i < N; i++) {
-    // validators.push({
-    //     pubkey: crypto.randomBytes(32),
-    //     activationEpoch: i + 1,
-    //     effectiveBalance: 32000000,
-    // });
     validators.push({
         pubkey: crypto.randomBytes(48),
         activationEpoch: i + 1,
@@ -65,24 +56,23 @@ for (let i = 0; i < N; i++) {
 }
 let view = ValidatorsSsz.toView(validators);
 
-// function printTree(tree: Node, depth: number = 0) {
-//     console.log(" ".repeat(depth), depth, "0x" + Buffer.from(tree.root).toString("hex"), tree.isLeaf() ? "leaf" : "");
-//     if (tree.isLeaf())
-//         return;
-//     if (tree.left) {
-//         printTree(tree.left, depth + 1,);
-//     }
-//     if (tree.right) {
-//         printTree(tree.right, depth + 1);
-//     }
-// }
+function printTree(tree: Node, depth: number = 0) {
+    console.log(" ".repeat(depth), depth, "0x" + Buffer.from(tree.root).toString("hex"), tree.isLeaf() ? "leaf" : "");
+    if (tree.isLeaf())
+        return;
+    if (tree.left) {
+        printTree(tree.left, depth + 1,);
+    }
+    if (tree.right) {
+        printTree(tree.right, depth + 1);
+    }
+}
 // printTree(view.node);
 
 
 console.log('gindeces:', gindeces);
 
 let proof = createProof(view.node, {type: ProofType.multi, gindices: gindeces}) as MultiProof; 
-// console.log(proof);
 
 const areEqual = (first: Uint8Array, second: Uint8Array) =>
     first.length === second.length && first.every((value, index) => value === second[index]);
@@ -90,31 +80,6 @@ const areEqual = (first: Uint8Array, second: Uint8Array) =>
 
 let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proof.witnesses, proof.gindices);
 
-let current_level = trace[0].depth;
-let row_index = 0;
-
-function draw_separator() {
-    console.log('|-----||-------|---------|--------|---------|-------|--------|---------|---------|--------|')
-}
-
-console.log();
-draw_separator();
-console.log('| Row || Depth | Sibling | sIndex |  Node   | Index | IsLeft | IsRight | Parent  | pIndex |')
-draw_separator();
-for (let t of trace) {
-    if (t.depth != current_level) {
-        draw_separator()
-        current_level = t.depth;
-    }
-    let node = Buffer.from(t.node).toString("hex").substring(0, 7);
-    let sibling = Buffer.from(t.sibling).toString("hex").substring(0, 7);
-    let parent = Buffer.from(t.parent).toString("hex").substring(0, 7);
-    console.log(`| ${(row_index++).toString().padEnd(3, ' ')} ||  ${t.depth.toString().padEnd(3, ' ')}  | ${sibling} |  ${t.siblingGindex.toString().padEnd(4, ' ')}  | ${node} | ${t.nodeGindex.toString().padEnd(4, ' ')}  |   ${t.isLeft ? 1 : 0}    |    ${t.isRight ? 1 : 0}    | ${parent} |  ${t.parentGindex.toString().padEnd(4, ' ')}  |`)
-}
-
-let root = Buffer.from(partial_tree.root).toString("hex").substring(0, 7);
-draw_separator();
-console.log(`| ${(++row_index).toString().padEnd(3, ' ')} ||   1   |         |        | ${root} | 1     |        |         |         |        |`)
-draw_separator();
+printTrace(partial_tree, trace);
 
 console.log("\nisValid?", areEqual(partial_tree.root, view.node.root));

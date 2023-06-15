@@ -104,3 +104,32 @@ export function createNodeFromMultiProofWithTrace(leaves: Uint8Array[], witnesse
     }
     return [root, trace];
   }
+
+export function printTrace(node: Node, trace: TraceRow[]) {
+  let current_level = trace[0].depth;
+  let row_index = 0;
+
+  function draw_separator() {
+      console.log('|-----||-------|---------|--------|---------|-------|--------|---------|---------|--------|')
+  }
+
+  console.log();
+  draw_separator();
+  console.log('| Row || Depth | Sibling | sIndex |  Node   | Index | IsLeft | IsRight | Parent  | pIndex |')
+  draw_separator();
+  for (let t of trace) {
+      if (t.depth != current_level) {
+          draw_separator()
+          current_level = t.depth;
+      }
+      let node = Buffer.from(t.node).toString("hex").substring(0, 7);
+      let sibling = Buffer.from(t.sibling).toString("hex").substring(0, 7);
+      let parent = Buffer.from(t.parent).toString("hex").substring(0, 7);
+      console.log(`| ${(row_index++).toString().padEnd(3, ' ')} ||  ${t.depth.toString().padEnd(3, ' ')}  | ${sibling} |  ${t.siblingGindex.toString().padEnd(4, ' ')}  | ${node} | ${t.nodeGindex.toString().padEnd(4, ' ')}  |   ${t.isLeft ? 1 : 0}    |    ${t.isRight ? 1 : 0}    | ${parent} |  ${t.parentGindex.toString().padEnd(4, ' ')}  |`)
+  }
+
+  let root = Buffer.from(node.root).toString("hex").substring(0, 7);
+  draw_separator();
+  console.log(`| ${(++row_index).toString().padEnd(3, ' ')} ||  1    |         |        | ${root} | 1     |        |         |         |        |`)
+  draw_separator();
+}
