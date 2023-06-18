@@ -1,383 +1,860 @@
-// mod sha256_compression;
-// mod util;
-mod table16;
-mod sha256;
 mod sha256_bit;
+mod util;
 
-use std::vec;
+use std::marker::PhantomData;
 
+use util::*;
 use crate::{
-    table::{LookupTable, StateTable, SHA256Table},
-    util::{Cell, Challenges, SubCircuit, SubCircuitConfig},
-    witness::{self},
+    table::SHA256Table,
+    // keccak_circuit::util::compose_rlc,
+    util::{Expr, SubCircuitConfig, not, rlc, BaseConstraintBuilder, SubCircuit, Challenges}, witness,
 };
-use eth_types::*;
+use eth_types::Field;
+use gadgets::util::{and, select, sum, xor};
 use halo2_proofs::{
-    circuit::{Layouter, Region, Value, Chip},
-    plonk::{
-        Advice, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed, Instance,
-        SecondPhase, Selector, VirtualCells,
-    },
+    circuit::{AssignedCell, Chip, Layouter, Region, SimpleFloorPlanner, Value},
+    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Fixed, VirtualCells},
     poly::Rotation,
 };
-use halo2_base::{
-    QuantumCell,
-    gates::{range::RangeConfig, RangeInstructions, RangeChip},
-    gates::{flex_gate::FlexGateConfig, GateInstructions},
-    // utils::{bigint_to_fe, biguint_to_fe, fe_to_bigint, fe_to_biguint, modulus},
-    AssignedValue, Context, utils::{ScalarField, value_to_option}, ContextCell
-};
-use itertools::Itertools;
-use num::Integer;
-use table16::BlockWord;
+use log::{debug, info};
 
-use self::{sha256::{Sha256Instructions, Table16Config, Table16Chip}, table16::{AssignedBits, State, RoundWordDense}};
+use self::sha256_bit::{ShaRow, multi_sha256};
 
-const BLOCK_BYTE: usize = 64;
-const DIGEST_BYTE: usize = 32;
 
-/// The size of a SHA-256 block, in 32-bit words.
-pub const BLOCK_SIZE: usize = 16;
-/// The size of a SHA-256 digest, in 32-bit words.
-pub const DIGEST_SIZE: usize = 8;
-
+/// Configuration for [`Sha256Chip`].
 #[derive(Clone, Debug)]
-pub struct SHA256ChipConfig<F: Field> {
-    table16: Table16Config<F>,
-    pub max_byte_size: usize,
-    range: RangeConfig<F>,
+pub struct Sha256CircuitConfig<F> {
+    q_enable: Column<Fixed>,
+    q_first: Column<Fixed>,
+    q_extend: Column<Fixed>,
+    q_start: Column<Fixed>,
+    q_compression: Column<Fixed>,
+    q_end: Column<Fixed>,
+    q_padding: Column<Fixed>,
+    q_padding_last: Column<Fixed>,
+    q_squeeze: Column<Fixed>,
+    q_final_word: Column<Fixed>,
+    word_w: [Column<Advice>; NUM_BITS_PER_WORD_W],
+    word_a: [Column<Advice>; NUM_BITS_PER_WORD_EXT],
+    word_e: [Column<Advice>; NUM_BITS_PER_WORD_EXT],
+    is_final: Column<Advice>,
+    is_paddings: [Column<Advice>; ABSORB_WIDTH_PER_ROW_BYTES],
+    data_rlcs: [Column<Advice>; ABSORB_WIDTH_PER_ROW_BYTES],
+    round_cst: Column<Fixed>,
+    h_a: Column<Fixed>,
+    h_e: Column<Fixed>,
+    /// The columns for bytes of hash results
+    pub hash_table: SHA256Table,
+    pub final_hash_bytes: [Column<Advice>; NUM_BYTES_FINAL_HASH],
+    _marker: PhantomData<F>,
 }
 
-#[derive(Clone, Debug)]
-pub struct SHA256Chip<F: Field> {
-    config: SHA256ChipConfig<F>,
-    table16: Table16Chip<F>,
-    range: RangeChip<F>,
-    state: State<F>,
-}
+impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
+    type ConfigArgs = SHA256Table;
 
-impl<F: Field> Chip<F> for SHA256Chip<F> {
-    type Config = SHA256ChipConfig<F>;
-    type Loaded = ();
+    fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
+        let r: F = Sha256CircuitConfig::rnd();
+        let q_enable = meta.fixed_column();
+        let q_first = meta.fixed_column();
+        let q_extend = meta.fixed_column();
+        let q_start = meta.fixed_column();
+        let q_compression = meta.fixed_column();
+        let q_end = meta.fixed_column();
+        let q_padding = meta.fixed_column();
+        let q_padding_last = meta.fixed_column();
+        let q_squeeze = meta.fixed_column();
+        let q_final_word = meta.fixed_column();
+        let word_w = array_init::array_init(|_| meta.advice_column());
+        let word_a = array_init::array_init(|_| meta.advice_column());
+        let word_e = array_init::array_init(|_| meta.advice_column());
+        let is_final = meta.advice_column();
+        let is_paddings = array_init::array_init(|_| meta.advice_column());
+        let data_rlcs = array_init::array_init(|_| meta.advice_column());
+        let round_cst = meta.fixed_column();
+        let h_a = meta.fixed_column();
+        let h_e = meta.fixed_column();
 
-    fn config(&self) -> &Self::Config {
-        &self.config
-    }
+        let hash_table = args;
+        // let is_enabled = hash_table.is_enabled;
+        // let length = hash_table.input_len;
+        // let data_rlc = hash_table.input_rlc;
+        // let hash_rlc = hash_table.output_rlc;
+        let final_hash_bytes = array_init::array_init(|_| meta.advice_column());
+        for col in final_hash_bytes.into_iter() {
+            meta.enable_equality(col);
+        }
+        // State bits
+        let mut w_ext = vec![0u64.expr(); NUM_BITS_PER_WORD_W];
+        let mut w_2 = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut w_7 = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut w_15 = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut w_16 = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut a = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut b = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut c = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut d = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut e = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut f = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut g = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut h = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut d_64 = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut h_64 = vec![0u64.expr(); NUM_BITS_PER_WORD];
+        let mut new_a_ext = vec![0u64.expr(); NUM_BITS_PER_WORD_EXT];
+        let mut new_e_ext = vec![0u64.expr(); NUM_BITS_PER_WORD_EXT];
+        meta.create_gate("Query state bits", |meta| {
+            for k in 0..NUM_BITS_PER_WORD_W {
+                w_ext[k] = meta.query_advice(word_w[k], Rotation(-0));
+            }
+            for i in 0..NUM_BITS_PER_WORD {
+                let k = i + NUM_BITS_PER_WORD_W - NUM_BITS_PER_WORD;
+                w_2[i] = meta.query_advice(word_w[k], Rotation(-2));
+                w_7[i] = meta.query_advice(word_w[k], Rotation(-7));
+                w_15[i] = meta.query_advice(word_w[k], Rotation(-15));
+                w_16[i] = meta.query_advice(word_w[k], Rotation(-16));
+                let k = i + NUM_BITS_PER_WORD_EXT - NUM_BITS_PER_WORD;
+                a[i] = meta.query_advice(word_a[k], Rotation(-1));
+                b[i] = meta.query_advice(word_a[k], Rotation(-2));
+                c[i] = meta.query_advice(word_a[k], Rotation(-3));
+                d[i] = meta.query_advice(word_a[k], Rotation(-4));
+                e[i] = meta.query_advice(word_e[k], Rotation(-1));
+                f[i] = meta.query_advice(word_e[k], Rotation(-2));
+                g[i] = meta.query_advice(word_e[k], Rotation(-3));
+                h[i] = meta.query_advice(word_e[k], Rotation(-4));
+                d_64[i] = meta.query_advice(word_a[k], Rotation(-((NUM_ROUNDS + 4) as i32)));
+                h_64[i] = meta.query_advice(word_e[k], Rotation(-((NUM_ROUNDS + 4) as i32)));
+            }
+            for k in 0..NUM_BITS_PER_WORD_EXT {
+                new_a_ext[k] = meta.query_advice(word_a[k], Rotation(0));
+                new_e_ext[k] = meta.query_advice(word_e[k], Rotation(0));
+            }
+            vec![0u64.expr()]
+        });
+        let w = &w_ext[NUM_BITS_PER_WORD_W - NUM_BITS_PER_WORD..NUM_BITS_PER_WORD_W];
+        let new_a = &new_a_ext[NUM_BITS_PER_WORD_EXT - NUM_BITS_PER_WORD..NUM_BITS_PER_WORD_EXT];
+        let new_e = &new_e_ext[NUM_BITS_PER_WORD_EXT - NUM_BITS_PER_WORD..NUM_BITS_PER_WORD_EXT];
 
-    fn loaded(&self) -> &Self::Loaded {
-        &()
-    }
-}
+        let xor = |a: &[Expression<F>], b: &[Expression<F>]| {
+            debug_assert_eq!(a.len(), b.len(), "invalid length");
+            let mut c = vec![0.expr(); a.len()];
+            for (idx, (a, b)) in a.iter().zip(b.iter()).enumerate() {
+                c[idx] = xor::expr(a, b);
+            }
+            c
+        };
 
-impl<F: Field> SHA256Chip<F> {
-    const ONE_ROUND_INPUT_BYTES: usize = 64;
-    pub fn configure(
-        table16config: Table16Config<F>,
-        max_byte_size: usize,
-        range: RangeConfig<F>,
-    ) -> <Self as Chip<F>>::Config {
-        debug_assert_eq!(max_byte_size % Self::ONE_ROUND_INPUT_BYTES, 0);
-        SHA256ChipConfig {
-            table16: table16config,
-            max_byte_size,
-            range,
+        let select =
+            |c: &[Expression<F>], when_true: &[Expression<F>], when_false: &[Expression<F>]| {
+                debug_assert_eq!(c.len(), when_true.len(), "invalid length");
+                debug_assert_eq!(c.len(), when_false.len(), "invalid length");
+                let mut r = vec![0.expr(); c.len()];
+                for (idx, (c, (when_true, when_false))) in c
+                    .iter()
+                    .zip(when_true.iter().zip(when_false.iter()))
+                    .enumerate()
+                {
+                    r[idx] = select::expr(c.clone(), when_true.clone(), when_false.clone());
+                }
+                r
+            };
+
+        meta.create_gate("input checks", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            for w in w_ext.iter() {
+                cb.require_boolean("w bit boolean", w.clone());
+            }
+            for a in new_a_ext.iter() {
+                cb.require_boolean("a bit boolean", a.clone());
+            }
+            for e in new_e_ext.iter() {
+                cb.require_boolean("e bit boolean", e.clone());
+            }
+            cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
+        });
+
+        meta.create_gate("w extend", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let s0 = xor(
+                &rotate::expr(&w_15, 7),
+                &xor(&rotate::expr(&w_15, 18), &shift::expr(&w_15, 3)),
+            );
+            let s1 = xor(
+                &rotate::expr(&w_2, 17),
+                &xor(&rotate::expr(&w_2, 19), &shift::expr(&w_2, 10)),
+            );
+            let new_w =
+                decode::expr(&w_16) + decode::expr(&s0) + decode::expr(&w_7) + decode::expr(&s1);
+            cb.require_equal("w", new_w, decode::expr(&w_ext));
+            cb.gate(meta.query_fixed(q_extend, Rotation::cur()))
+        });
+
+        meta.create_gate("compression", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let s1 = xor(
+                &rotate::expr(&e, 6),
+                &xor(&rotate::expr(&e, 11), &rotate::expr(&e, 25)),
+            );
+            let ch = select(&e, &f, &g);
+            let temp1 = decode::expr(&h)
+                + decode::expr(&s1)
+                + decode::expr(&ch)
+                + meta.query_fixed(round_cst, Rotation::cur())
+                + decode::expr(w);
+
+            let s0 = xor(
+                &rotate::expr(&a, 2),
+                &xor(&rotate::expr(&a, 13), &rotate::expr(&a, 22)),
+            );
+            let maj = select(&xor(&b, &c), &a, &b);
+            let temp2 = decode::expr(&s0) + decode::expr(&maj);
+            cb.require_equal(
+                "compress a",
+                decode::expr(&new_a_ext),
+                temp1.clone() + temp2,
+            );
+            cb.require_equal(
+                "compress e",
+                decode::expr(&new_e_ext),
+                decode::expr(&d) + temp1,
+            );
+            cb.gate(meta.query_fixed(q_compression, Rotation::cur()))
+        });
+
+        meta.create_gate("start", |meta| {
+            let is_final = meta.query_advice(is_final, Rotation::cur());
+            let h_a = meta.query_fixed(h_a, Rotation::cur());
+            let h_e = meta.query_fixed(h_e, Rotation::cur());
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            cb.require_equal(
+                "start a",
+                decode::expr(&new_a_ext),
+                select::expr(is_final.expr(), h_a, decode::expr(&d)),
+            );
+            cb.require_equal(
+                "start e",
+                decode::expr(&new_e_ext),
+                select::expr(is_final.expr(), h_e, decode::expr(&h)),
+            );
+            cb.gate(meta.query_fixed(q_start, Rotation::cur()))
+        });
+
+        meta.create_gate("end", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            cb.require_equal(
+                "end a",
+                decode::expr(&new_a_ext),
+                decode::expr(&d) + decode::expr(&d_64),
+            );
+            cb.require_equal(
+                "end e",
+                decode::expr(&new_e_ext),
+                decode::expr(&h) + decode::expr(&h_64),
+            );
+            cb.gate(meta.query_fixed(q_end, Rotation::cur()))
+        });
+
+        // Enforce logic for when this block is the last block for a hash
+        meta.create_gate("is final", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let is_padding = meta.query_advice(
+                *is_paddings.last().unwrap(),
+                Rotation(-((NUM_END_ROWS + NUM_ROUNDS - NUM_WORDS_TO_ABSORB) as i32) - 2),
+            );
+            let is_final_prev = meta.query_advice(is_final, Rotation::prev());
+            let is_final = meta.query_advice(is_final, Rotation::cur());
+            // On the first row is_final needs to be enabled
+            cb.condition(meta.query_fixed(q_first, Rotation::cur()), |cb| {
+                cb.require_equal(
+                    "is_final needs to remain the same",
+                    is_final.expr(),
+                    1.expr(),
+                );
+            });
+            // Get the correct is_final state from the padding selector
+            cb.condition(meta.query_fixed(q_squeeze, Rotation::cur()), |cb| {
+                cb.require_equal(
+                    "is_final needs to match the padding selector",
+                    is_final.expr(),
+                    is_padding,
+                );
+            });
+            // Copy the is_final state to the q_start rows
+            cb.condition(
+                meta.query_fixed(q_start, Rotation::cur())
+                    - meta.query_fixed(q_first, Rotation::cur()),
+                |cb| {
+                    cb.require_equal(
+                        "is_final needs to remain the same",
+                        is_final.expr(),
+                        is_final_prev,
+                    );
+                },
+            );
+            cb.gate(1.expr())
+        });
+
+        // meta.create_gate("is enabled", |meta| {
+        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+        //     let q_squeeze = meta.query_fixed(q_squeeze, Rotation::cur());
+        //     let is_final = meta.query_advice(is_final, Rotation::cur());
+        //     let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
+        //     // Only set is_enabled to true when is_final is true and it's a squeeze row
+        //     cb.require_equal(
+        //         "is_enabled := q_squeeze && is_final",
+        //         is_enabled.expr(),
+        //         and::expr(&[q_squeeze.expr(), is_final.expr()]),
+        //     );
+        //     cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
+        // });
+
+        let start_new_hash = |meta: &mut VirtualCells<F>| {
+            // A new hash is started when the previous hash is done or on the first row
+            meta.query_advice(is_final, Rotation::cur())
+        };
+
+        // Create bytes from input bits
+        let input_bytes = to_le_bytes::expr(w);
+
+        // Padding
+        // meta.create_gate("padding", |meta| {
+        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+        //     let prev_is_padding = meta.query_advice(*is_paddings.last().unwrap(), Rotation::prev());
+        //     let q_padding = meta.query_fixed(q_padding, Rotation::cur());
+        //     let q_padding_last = meta.query_fixed(q_padding_last, Rotation::cur());
+        //     let length = meta.query_advice(length, Rotation::cur());
+        //     let is_final_padding_row =
+        //         meta.query_advice(*is_paddings.last().unwrap(), Rotation(-2));
+        //     // All padding selectors need to be boolean
+        //     for is_padding in is_paddings.iter() {
+        //         let is_padding = meta.query_advice(*is_padding, Rotation::cur());
+        //         cb.condition(meta.query_fixed(q_enable, Rotation::cur()), |cb| {
+        //             cb.require_boolean("is_padding boolean", is_padding);
+        //         });
+        //     }
+        //     // Now for each padding selector
+        //     for idx in 0..is_paddings.len() {
+        //         // Previous padding selector can be on the previous row
+        //         let is_padding_prev = if idx == 0 {
+        //             prev_is_padding.expr()
+        //         } else {
+        //             meta.query_advice(is_paddings[idx - 1], Rotation::cur())
+        //         };
+        //         let is_padding = meta.query_advice(is_paddings[idx], Rotation::cur());
+        //         let is_first_padding = is_padding.clone() - is_padding_prev.clone();
+        //         // Check padding transition 0 -> 1 done only once
+        //         cb.condition(q_padding.expr(), |cb| {
+        //             cb.require_boolean("padding step boolean", is_first_padding.clone());
+        //         });
+        //         // Padding start/intermediate byte, all padding rows except the last one
+        //         cb.condition(
+        //             and::expr([
+        //                 (q_padding.expr() - q_padding_last.expr()),
+        //                 is_padding.expr(),
+        //             ]),
+        //             |cb| {
+        //                 // Input bytes need to be zero, or 128 if this is the first padding byte
+        //                 cb.require_equal(
+        //                     "padding start/intermediate byte",
+        //                     input_bytes[idx].clone(),
+        //                     is_first_padding.expr() * 128.expr(),
+        //                 );
+        //             },
+        //         );
+        //         // Padding start/intermediate byte, last padding row but not in the final block
+        //         cb.condition(
+        //             and::expr([
+        //                 q_padding_last.expr(),
+        //                 is_padding.expr(),
+        //                 not::expr(is_final_padding_row.expr()),
+        //             ]),
+        //             |cb| {
+        //                 // Input bytes need to be zero, or 128 if this is the first padding byte
+        //                 cb.require_equal(
+        //                     "padding start/intermediate byte",
+        //                     input_bytes[idx].clone(),
+        //                     is_first_padding.expr() * 128.expr(),
+        //                 );
+        //             },
+        //         );
+        //     }
+        //     // The last row containing input/padding data in the final block needs to
+        //     // contain the length in bits (Only input lengths up to 2**32 - 1
+        //     // bits are supported, which is lower than the spec of 2**64 - 1 bits)
+        //     cb.condition(
+        //         and::expr([q_padding_last.expr(), is_final_padding_row.expr()]),
+        //         |cb| {
+        //             cb.require_equal("padding length", decode::expr(w), length.expr() * 8.expr());
+        //         },
+        //     );
+        //     cb.gate(1.expr())
+        // });
+
+        // Length and input data rlc
+        // meta.create_gate("length and data rlc", |meta| {
+        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+        //     let q_padding = meta.query_fixed(q_padding, Rotation::cur());
+        //     let start_new_hash = start_new_hash(meta);
+        //     let length_prev = meta.query_advice(length, Rotation::prev());
+        //     let length = meta.query_advice(length, Rotation::cur());
+        //     let data_rlc_prev = meta.query_advice(data_rlc, Rotation::prev());
+        //     let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
+        //     // Update the length/data_rlc on rows where we absorb data
+        //     cb.condition(q_padding.expr(), |cb| {
+        //         // Length increases by the number of bytes that aren't padding
+        //         // In a new block we have to start from 0 if the previous block was the final
+        //         // one
+        //         cb.require_equal(
+        //             "update length",
+        //             length.clone(),
+        //             length_prev.clone() * not::expr(start_new_hash.expr())
+        //                 + sum::expr(is_paddings.iter().map(|is_padding| {
+        //                     not::expr(meta.query_advice(*is_padding, Rotation::cur()))
+        //                 })),
+        //         );
+
+        //         // Use intermediate cells to keep the degree low
+        //         let mut new_data_rlc = data_rlc_prev.clone() * not::expr(start_new_hash.expr());
+        //         cb.require_equal(
+        //             "initial data rlc",
+        //             meta.query_advice(data_rlcs[0], Rotation::cur()),
+        //             new_data_rlc,
+        //         );
+        //         new_data_rlc = meta.query_advice(data_rlcs[0], Rotation::cur());
+        //         for (idx, (byte, is_padding)) in
+        //             input_bytes.iter().zip(is_paddings.iter()).enumerate()
+        //         {
+        //             new_data_rlc = select::expr(
+        //                 meta.query_advice(*is_padding, Rotation::cur()),
+        //                 new_data_rlc.clone(),
+        //                 new_data_rlc.clone() * r + byte.clone(),
+        //             );
+        //             if idx < data_rlcs.len() - 1 {
+        //                 let next_data_rlc = meta.query_advice(data_rlcs[idx + 1], Rotation::cur());
+        //                 cb.require_equal(
+        //                     "intermediate data rlc",
+        //                     next_data_rlc.clone(),
+        //                     new_data_rlc,
+        //                 );
+        //                 new_data_rlc = next_data_rlc;
+        //             }
+        //         }
+        //         cb.require_equal("update data rlc", data_rlc.clone(), new_data_rlc);
+        //     });
+        //     cb.gate(1.expr())
+        // });
+
+        // Make sure data is consistent between blocks
+        // meta.create_gate("cross block data consistency", |meta| {
+        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+        //     let start_new_hash = start_new_hash(meta);
+        //     let to_const =
+        //         |value: &String| -> &'static str { Box::leak(value.clone().into_boxed_str()) };
+        //     let mut add = |name: &'static str, column: Column<Advice>| {
+        //         let last_rot =
+        //             Rotation(-((NUM_END_ROWS + NUM_ROUNDS - NUM_WORDS_TO_ABSORB) as i32));
+        //         let value_to_copy = meta.query_advice(column, last_rot);
+        //         let prev_value = meta.query_advice(column, Rotation::prev());
+        //         let cur_value = meta.query_advice(column, Rotation::cur());
+        //         // On squeeze rows fetch the last used value
+        //         cb.condition(meta.query_fixed(q_squeeze, Rotation::cur()), |cb| {
+        //             cb.require_equal(
+        //                 to_const(&format!("{} copy check", name)),
+        //                 cur_value.expr(),
+        //                 value_to_copy.expr(),
+        //             );
+        //         });
+        //         // On first rows keep the length the same, or reset the length when starting a
+        //         // new hash
+        //         cb.condition(
+        //             meta.query_fixed(q_start, Rotation::cur())
+        //                 - meta.query_fixed(q_first, Rotation::cur()),
+        //             |cb| {
+        //                 cb.require_equal(
+        //                     to_const(&format!("{} equality check", name)),
+        //                     cur_value.expr(),
+        //                     prev_value.expr() * not::expr(start_new_hash.expr()),
+        //                 );
+        //             },
+        //         );
+        //         // Set the value to zero on the first row
+        //         cb.condition(meta.query_fixed(q_first, Rotation::cur()), |cb| {
+        //             cb.require_equal(
+        //                 to_const(&format!("{} initialized to 0", name)),
+        //                 cur_value.clone(),
+        //                 0.expr(),
+        //             );
+        //         });
+        //     };
+        //     add("length", length);
+        //     add("data_rlc", data_rlc);
+        //     add("last padding", *is_paddings.last().unwrap());
+
+        //     cb.gate(1.expr())
+        // });
+
+        // Squeeze
+        // meta.create_gate("squeeze", |meta| {
+        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+        //     // Squeeze out the hash
+        //     let hash_parts = [new_a, &a, &b, &c, new_e, &e, &f, &g];
+        //     let hash_bytes = hash_parts
+        //         .iter()
+        //         .flat_map(|part| to_le_bytes::expr(part))
+        //         .collect::<Vec<_>>();
+        //     let rlc = compose_rlc::expr(&hash_bytes, r);
+        //     cb.condition(start_new_hash(meta), |cb| {
+        //         cb.require_equal(
+        //             "hash rlc check",
+        //             rlc,
+        //             meta.query_advice(hash_rlc, Rotation::cur()),
+        //         );
+        //     });
+        //     cb.gate(meta.query_fixed(q_squeeze, Rotation::cur()))
+        // });
+
+        // meta.create_gate("final_hash_words", |meta| {
+        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+        //     let q_condition = meta.query_fixed(q_final_word, Rotation::cur());
+
+        //     let final_word_exprs = (0..NUM_BYTES_FINAL_HASH)
+        //         .map(|i| {
+        //             meta.query_advice(final_hash_bytes[i], Rotation::cur())
+        //                 .expr()
+        //             /*if i < NUM_BYTES_FINAL_HASH / 2 {
+        //                 meta.query_advice(final_hash_bytes[i], Rotation::cur())
+        //                     .expr()
+        //             } else {
+        //                 meta.query_advice(
+        //                     final_hash_bytes[i - (NUM_BYTES_FINAL_HASH / 2)],
+        //                     Rotation::next(),
+        //                 )
+        //                 .expr()
+        //             }*/
+        //         })
+        //         .collect::<Vec<Expression<F>>>();
+        //     let rlc = compose_rlc::expr(&final_word_exprs, r);
+        //     cb.condition(q_condition.clone(), |cb| {
+        //         cb.require_equal(
+        //             "final hash rlc check",
+        //             rlc,
+        //             meta.query_advice(hash_rlc, Rotation::cur()),
+        //         );
+        //     });
+        //     //cb.gate(1.expr())
+        //     cb.gate(q_condition)
+        // });
+
+        info!("degree: {}", meta.degree());
+
+        Sha256CircuitConfig {
+            q_enable,
+            q_first,
+            q_extend,
+            q_start,
+            q_compression,
+            q_end,
+            q_padding,
+            q_padding_last,
+            q_squeeze,
+            q_final_word,
+            hash_table,
+            word_w,
+            word_a,
+            word_e,
+            is_final,
+            is_paddings,
+            data_rlcs,
+            round_cst,
+            h_a,
+            h_e,
+            final_hash_bytes,
+            _marker: PhantomData,
         }
     }
+}
 
+
+impl<F: Field> Sha256CircuitConfig<F> {
+    /// Given the input, returns a vector of the assigned cells for the hash
+    /// results.
     pub fn digest(
-        &mut self,
-        ctx: &mut Context<F>,
-        assinged_inputs: Vec<AssignedValue<F>>,
-        mut layouter: &mut impl Layouter<F>,
-    ) -> Result<Vec<AssignedValue<F>>, Error> {
-        let input_byte_size = assinged_inputs.len();
-        let input_byte_size_with_9 = input_byte_size + 9;
-        let one_round_size = Self::ONE_ROUND_INPUT_BYTES;
-        let num_round = if input_byte_size_with_9 % one_round_size == 0 {
-            input_byte_size_with_9 / one_round_size
-        } else {
-            input_byte_size_with_9 / one_round_size + 1
-        };
-        let padded_size = one_round_size * num_round;
-        let max_byte_size = self.config.max_byte_size;
-        let max_round = max_byte_size / one_round_size;
-        debug_assert!(padded_size <= max_byte_size);
-        let zero_padding_byte_size = padded_size - input_byte_size_with_9;
-        let remaining_byte_size = max_byte_size - padded_size;
-        debug_assert_eq!(
-            remaining_byte_size,
-            one_round_size * (max_round - num_round)
-        );
-        let mut padding = vec![];
-        padding.push(0x80);
-        for _ in 0..zero_padding_byte_size {
-            padding.push(0);
+        &self,
+        layouter: &mut impl Layouter<F>,
+        inputs: &[Vec<u8>],
+    ) -> Result<Vec<Vec<AssignedCell<F, F>>>, Error> {
+        let witness = multi_sha256(inputs, Sha256CircuitConfig::rnd());
+        self.assign(layouter, &witness)
+    }
+
+    fn assign(
+        &self,
+        layouter: &mut impl Layouter<F>,
+        witness: &[ShaRow<F>],
+    ) -> Result<Vec<Vec<AssignedCell<F, F>>>, Error> {
+        layouter.assign_region(
+            || "assign sha256 data",
+            |mut region| {
+                let vec_vecs = witness
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, sha256_row)| self.set_row(&mut region, offset, sha256_row))
+                    .collect::<Result<Vec<Vec<AssignedCell<F, F>>>, Error>>()?;
+                let filtered = vec_vecs
+                    .into_iter()
+                    .filter(|vec| vec.len() > 0)
+                    .collect::<Vec<Vec<AssignedCell<F, F>>>>();
+                Ok(filtered)
+            },
+        )
+    }
+
+    fn set_row(
+        &self,
+        region: &mut Region<'_, F>,
+        offset: usize,
+        row: &ShaRow<F>,
+    ) -> Result<Vec<AssignedCell<F, F>>, Error> {
+        let round = offset % (NUM_ROUNDS + 8);
+        // Fixed values
+        for (name, column, value) in &[
+            ("q_enable", self.q_enable, F::from(true)),
+            ("q_first", self.q_first, F::from(offset == 0)),
+            (
+                "q_extend",
+                self.q_extend,
+                F::from((4 + 16..4 + NUM_ROUNDS).contains(&round)),
+            ),
+            ("q_start", self.q_start, F::from(round < 4)),
+            (
+                "q_compression",
+                self.q_compression,
+                F::from((4..NUM_ROUNDS + 4).contains(&round)),
+            ),
+            ("q_end", self.q_end, F::from(round >= NUM_ROUNDS + 4)),
+            (
+                "q_padding",
+                self.q_padding,
+                F::from((4..20).contains(&round)),
+            ),
+            (
+                "q_padding_last",
+                self.q_padding_last,
+                F::from(round == 19),
+            ),
+            (
+                "q_squeeze",
+                self.q_squeeze,
+                F::from(round == NUM_ROUNDS + 7),
+            ),
+            (
+                "q_final_word",
+                self.q_final_word,
+                F::from(row.is_final && round == NUM_ROUNDS + 7),
+            ),
+            (
+                "round_cst",
+                self.round_cst,
+                F::from(if (4..NUM_ROUNDS + 4).contains(&round) {
+                    ROUND_CST[round - 4] as u64
+                } else {
+                    0
+                }),
+            ),
+            (
+                "Ha",
+                self.h_a,
+                F::from(if round < 4 { H[3 - round] as u64 } else { 0 }),
+            ),
+            (
+                "He",
+                self.h_e,
+                F::from(if round < 4 { H[7 - round] as u64 } else { 0 }),
+            ),
+        ] {
+            region.assign_fixed(
+                || format!("assign {} {}", name, offset),
+                *column,
+                offset,
+                || Value::known(*value),
+            )?;
         }
-        let mut input_len_bytes = [0; 8];
-        let le_size_bytes = (8 * input_byte_size).to_le_bytes();
-        input_len_bytes[0..le_size_bytes.len()].copy_from_slice(&le_size_bytes);
-        for byte in input_len_bytes.iter().rev() {
-            padding.push(*byte);
+
+        // Advice values
+        for (name, columns, values) in [
+            ("w bits", self.word_w.as_slice(), row.w.as_slice()),
+            ("a bits", self.word_a.as_slice(), row.a.as_slice()),
+            ("e bits", self.word_e.as_slice(), row.e.as_slice()),
+            (
+                "padding selectors",
+                self.is_paddings.as_slice(),
+                row.is_paddings.as_slice(),
+            ),
+            (
+                "is_final",
+                [self.is_final].as_slice(),
+                [row.is_final].as_slice(),
+            ),
+        ] {
+            for (idx, (value, column)) in values.iter().zip(columns.iter()).enumerate() {
+                region.assign_advice(
+                    || format!("assign {} {} {}", name, idx, offset),
+                    *column,
+                    offset,
+                    || Value::known(F::from(*value)),
+                )?;
+            }
         }
 
-        assert_eq!(assinged_inputs.len() + padding.len(), num_round * one_round_size);
-        // for _ in 0..remaining_byte_size {
-        //     padding.push(0);
-        // }
-        // assert_eq!(padding.len(), max_byte_size);
-
-
-        let assigned_padded_inputs = {
-            let assigned_padding = padding
-                .iter()
-                .map(|byte| ctx.load_witness(F::from(*byte as u64)))
-                .collect::<Vec<AssignedValue<F>>>();
-
-            assinged_inputs
-                .clone()
-                .into_iter()
-                .chain(assigned_padding)
-                .collect_vec()
-        };
-
-
-        let range = self.range.clone();
-
-        for assigned_byte in assigned_padded_inputs.iter().copied() {
-            self.range.range_check(ctx, assigned_byte, 8);
-        }
-
-
-        for (i, assigned_input_block) in assigned_padded_inputs
-            .chunks((32 / 8) * BLOCK_SIZE)
+        // Data rlcs
+        for (idx, (data_rlc, column)) in row
+            .data_rlcs
+            .iter()
+            .zip(self.data_rlcs.iter())
             .enumerate()
         {
-            let input_block = assigned_input_block
-                .iter()
-                .map(|cell| cell.value().get_lower_32().try_into().unwrap())
-                .collect::<Vec<u8>>();
-
-            let blockword_inputs: [_; 16] = input_block
-                .chunks(32 / 8)
-                .map(|chunk| BlockWord(Value::known(u32::from_be_bytes(chunk.try_into().unwrap()))))
-                .collect_vec()
-                .try_into()
-                .unwrap();
-
-            self.state = self.compute_round(ctx, layouter, blockword_inputs)?;
+            region.assign_advice(
+                || format!("assign data rlcs {} {}", idx, offset),
+                *column,
+                offset,
+                || Value::known(*data_rlc),
+            )?;
         }
 
-        Ok(vec![])
-    }
+        // Hash data
+        // self.hash_table.assign_row(
+        //     region,
+        //     offset,
+        //     [
+        //         F::from(row.is_final && round == NUM_ROUNDS + 7),
+        //         row.data_rlc,
+        //         F::from(row.length as u64),
+        //         row.hash_rlc,
+        //     ],
+        // )?;
 
-    fn compute_round(
-        &self,
-        ctx: &mut Context<F>,
-        layouter: &mut impl Layouter<F>,
-        input: [BlockWord; BLOCK_SIZE],
-    ) -> Result<State<F>, Error> {
-        let mut base_gate = self.range().gate();
-
-        let last_state = &self.state;
-        let last_digest = self.state_to_assigned_halves(ctx, last_state);
-        let (compressed_state, assigned_inputs) = self.table16.compress(layouter, last_state, input)?;
-
-        let compressed_state_values = self.state_to_assigned_halves(ctx, &compressed_state);
-
-        let word_sums = last_digest
-            .iter()
-            .copied()
-            .zip(compressed_state_values)
-            .map(|(digest_word, comp_word)| {
-                base_gate.add(ctx, digest_word, comp_word)
-            })
-            .collect_vec();
-
-        let u32_mod = 1u128 << 32;
-        let lo_his = word_sums
-            .iter()
-            .map(|sum| {
-                (
-                    F::from_u128(sum.value().get_lower_128() % u32_mod),
-                    F::from_u128(sum.value().get_lower_128() >> 32),
-                )
-            })
-            .collect_vec();
-        let assigned_los = lo_his
-            .iter()
-            .map(|(lo, hi)| ctx.load_witness(*lo))
-            .collect_vec();
-        let assigned_his = lo_his
-            .iter()
-            .map(|(lo, hi)| ctx.load_witness(*hi))
-            .collect_vec();
-        let u32 = ctx.load_constant(F::from(1 << 32));
-
-        let combines = assigned_los
-            .iter()
-            .copied()
-            .zip(assigned_his)
-            .map(|(lo, hi)| {
-                base_gate
-                    .mul_add(ctx, hi, u32, lo)
-            })
-            .collect_vec();
-
-        for (combine, word_sum) in combines.iter().zip(&word_sums) {
-            ctx.constrain_equal(combine, word_sum);
+        let mut hash_cells = Vec::with_capacity(NUM_BYTES_FINAL_HASH);
+        if !row.is_final || round != NUM_ROUNDS + 7 {
+            for idx in 0..(NUM_BYTES_FINAL_HASH) {
+                region.assign_advice(
+                    || format!("final hash word at {}", idx),
+                    self.final_hash_bytes[idx],
+                    offset,
+                    || Value::known(F::from(0u64)),
+                )?;
+                //hash_cells.push(cell);
+            }
+        } else {
+            for (idx, byte) in row.final_hash_bytes.iter().enumerate() {
+                let cell = region.assign_advice(
+                    || format!("final hash word at {}", idx),
+                    self.final_hash_bytes[idx],
+                    offset,
+                    || Value::known(*byte),
+                )?;
+                hash_cells.push(cell);
+            }
         }
-
-        let mut new_state_word_vals = [0u32; 8];
-        for i in 0..8 {
-            new_state_word_vals[i] = assigned_los[i].value().get_lower_128().try_into().unwrap()
-        }
-
-        let new_state = self
-            .table16
-            .compression_config()
-            .initialize_with_iv(layouter, new_state_word_vals)?;
-
-        Ok(new_state)
+        Ok(hash_cells)
     }
 
-
-    // pub fn decompose_digest_to_bytes(
-    //     &self,
-    //     layouter: &mut impl Layouter<F>,
-    //     digest: &[AssignedValue<F>],
-    // ) -> Result<[AssignedValue<F>; 4 * DIGEST_SIZE], Error> {
-    //     let range = self.range();
-    //     let base_gate = range.gate();
-    //     let mut assigned_bytes = Vec::new();
-
-    //     for word in digest.into_iter() {
-            
-    //         let mut bytes = halo2_base::utils::decompose(word.value(), 8, 32);
-    //         bytes.reverse();
-    //         assigned_bytes.append(&mut bytes);
-    //     }
-    //     Ok(assigned_bytes.try_into().unwrap())
-    // }
-
-    // fn decompose(
-    //     &self,
-    //     unassigned: &F,
-    //     limb_bit_len: usize,
-    //     bit_len: usize,
-    // ) -> Result<(AssignedValue<F>, Vec<AssignedValue<F>>), Error> {
-    //     let (number_of_limbs, overflow_bit_len) = bit_len.div_rem(&limb_bit_len);
-    //     let number_of_limbs = number_of_limbs + if overflow_bit_len > 0 { 1 } else { 0 };
-    //     let mut decomposed_bytes = halo2_base::utils::decompose(unassigned, number_of_limbs, number_of_limbs);
-
-
-    //     let mut bases = vec![F::one()];
-    //     let mut bases_assigned = vec![];
-    //     for i in 1..31 {
-    //         bases.push(bases[i - 1].mul(&F::from(
-    //             0x0000000000000000000000000000000000000000000000000000000000000100,
-    //         )));
-    //         bases_assigned.push(
-    //             self.main_gate
-    //                 .as_ref()
-    //                 .borrow_mut()
-    //                 .assign_constant(bases[i]),
-    //         );
-    //     }
-
-    //     let terms: Vec<_> = decomposed_bytes
-    //         .into_iter()
-    //         .map(|e| self.main_gate.as_ref().borrow_mut().assign(e))
-    //         .zip(&bases_assigned)
-    //         .map(|(limb, base)| (limb, *base))
-    //         .collect();
-
-    //     let zero = self
-    //         .main_gate
-    //         .as_ref()
-    //         .borrow_mut()
-    //         .assign_constant(Fr::zero());
-    //     self.decompose_terms(&terms[..], zero)
-    // }
-
-    fn state_to_assigned_halves(
-        &self,
-        ctx: &mut Context<F>,
-        state: &State<F>,
-    ) -> [AssignedValue<F>; DIGEST_SIZE] {
-        let (a, b, c, d, e, f, g, h) = state.clone().split_state();
-
-        [
-            self.concat_word_halves(ctx, a.dense_halves()),
-            self.concat_word_halves(ctx, b.dense_halves()),
-            self.concat_word_halves(ctx, c.dense_halves()),
-            self.concat_word_halves(ctx, d),
-            self.concat_word_halves(ctx, e.dense_halves()),
-            self.concat_word_halves(ctx, f.dense_halves()),
-            self.concat_word_halves(ctx, g.dense_halves()),
-            self.concat_word_halves(ctx, h),
-        ]
-    }
-
-    fn concat_word_halves(
-        &self,
-        ctx: &mut Context<F>,
-        word: RoundWordDense<F>,
-    ) -> AssignedValue<F> {
-        let (lo, hi) = word.halves();
-        let u16 = ctx.load_constant(F::from(1 << 16));
-
-        let val_u32 = value_to_option(word.value()).unwrap();
-        let val_lo = F::from_u128((val_u32 % (1 << 16)) as u128);
-        let val_hi = F::from_u128((val_u32 >> 16) as u128);
-        let assigned_lo = ctx.load_witness(val_lo);
-        let assigned_hi = ctx.load_witness(val_hi);
-
-        // ctx.constrain_equal(&lo, &assigned_lo);
-        // ctx.constrain_equal(&hi, &assigned_hi);
-
-        self.range.gate().mul_add(ctx, assigned_hi, u16, assigned_lo)
-    }
-
-    pub fn range(&self) -> &RangeChip<F> {
-        &self.range
+    fn rnd() -> F {
+        F::from(123456)
     }
 }
 
+/// KeccakCircuit
+#[derive(Default, Clone, Debug)]
+pub struct Sha256Circuit<F: Field> {
+    inputs: Vec<Vec<u8>>,
+    num_rows: usize,
+    _marker: PhantomData<F>,
+}
+
+impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
+    type Config = Sha256CircuitConfig<F>;
+
+    fn unusable_rows() -> usize {
+        todo!()
+    }
+
+    /// The `block.circuits_params.keccak_padding` parmeter, when enabled, sets
+    /// up the circuit to support a fixed number of permutations/keccak_f's,
+    /// independently of the permutations required by `inputs`.
+    fn new_from_block(block: &witness::Block<F>) -> Self {
+        // Self::new(
+        //     block.circuits_params.max_keccak_rows,
+        //     block.keccak_inputs.clone(),
+        // )
+        todo!()
+    }
+
+    /// Return the minimum number of rows required to prove the block
+    fn min_num_rows_block(block: &witness::Block<F>) -> (usize, usize) {
+        // let rows_per_chunk = (NUM_ROUNDS + 1) * get_num_rows_per_round();
+        // (
+        //     block
+        //         .keccak_inputs
+        //         .iter()
+        //         .map(|bytes| (bytes.len() as f64 / 136.0).ceil() as usize * rows_per_chunk)
+        //         .sum(),
+        //     block.circuits_params.max_keccak_rows,
+        // )
+        todo!()
+    }
+
+    /// Make the assignments to the KeccakCircuit
+    fn synthesize_sub(
+        &self,
+        config: &Self::Config,
+        challenges: &Challenges<Value<F>>,
+        layouter: &mut impl Layouter<F>,
+    ) -> Result<(), Error> {
+        let witness = self.generate_witness(*challenges);
+        let _ = config.assign(layouter, witness.as_slice());
+        Ok(())
+    }
+}
+
+impl<F: Field> Sha256Circuit<F> {
+    /// Creates a new circuit instance
+    pub fn new(num_rows: usize, inputs: Vec<Vec<u8>>) -> Self {
+        Sha256Circuit {
+            inputs,
+            num_rows,
+            _marker: PhantomData,
+        }
+    }
+
+    /// The number of keccak_f's that can be done in this circuit
+    pub fn capacity(&self) -> Option<usize> {
+        // if self.num_rows > 0 {
+        //     // Subtract two for unusable rows
+        //     Some(self.num_rows / ((NUM_ROUNDS + 1) * get_num_rows_per_round()) - 2)
+        // } else {
+        //     None
+        // }
+        todo!()
+    }
+
+    /// Sets the witness using the data to be hashed
+    pub(crate) fn generate_witness(&self, challenges: Challenges<Value<F>>) -> Vec<ShaRow<F>> {
+        multi_sha256(self.inputs.as_slice(), Sha256CircuitConfig::rnd())
+    }
+}
 
 
 #[cfg(test)]
-mod test {
-    use std::marker::PhantomData;
-
+mod tests {
     use super::*;
-    use eth_types::Field;
-    use halo2_base::halo2_proofs::{
-        circuit::{Cell, Layouter, Region, SimpleFloorPlanner},
-        dev::MockProver,
-        halo2curves::bn256::Fr,
-        plonk::{Circuit, ConstraintSystem, Instance},
-    };
-    use halo2_base::{gates::range::RangeStrategy::Vertical, SKIP_FIRST_PASS};
+    use halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr};
 
-    use num_bigint::RandomBits;
-    use rand::rngs::OsRng;
-    use rand::{thread_rng, Rng};
-    use table16::Table16Chip;
-
-    #[derive(Debug, Clone)]
-    struct TestConfig<F: Field> {
-        sha256: SHA256ChipConfig<F>,
-        hash_column: Column<Instance>,
-    }
-
-    #[derive(Debug, Clone)]
-    struct TestCircuit<F: Field> {
-        test_input: Vec<u8>,
+    #[derive(Default, Debug, Clone)]
+    struct TestSha256<F: Field> {
+        inputs: Vec<Vec<u8>>,
         _f: PhantomData<F>,
     }
 
-    impl<F: Field> Circuit<F> for TestCircuit<F> {
-        type Config = TestConfig<F>;
+    impl<F: Field> Circuit<F> for TestSha256<F> {
+        type Config = Sha256CircuitConfig<F>;
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -385,27 +862,8 @@ mod test {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let table16config = Table16Chip::<F>::configure(meta);
-            let range_config = RangeConfig::configure(
-                meta,
-                Vertical,
-                &[Self::NUM_ADVICE],
-                &[Self::NUM_LOOKUP_ADVICE],
-                Self::NUM_FIXED,
-                Self::LOOKUP_BITS,
-                0,
-            );
-            let hash_column = meta.instance_column();
-            meta.enable_equality(hash_column);
-            let sha256 = SHA256Chip::configure(
-                table16config,
-                Self::MAX_BYTE_SIZE,
-                range_config,
-            );
-            Self::Config {
-                sha256,
-                hash_column,
-            }
+            let hash_table = SHA256Table::construct(meta);
+            Sha256CircuitConfig::new(meta, hash_table)
         }
 
         fn synthesize(
@@ -413,41 +871,33 @@ mod test {
             config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            let sha256 = config.sha256.clone();
-            let range = sha256.range.clone();
-            sha256.range.load_lookup_table(&mut layouter)?;
-            let mut first_pass = SKIP_FIRST_PASS;
-            
+            let cells_vec = config.digest(&mut layouter, &self.inputs)?;
             Ok(())
         }
     }
 
-    impl<F: Field> TestCircuit<F> {
-        const NUM_HASHES: usize = 50;
-        const MAX_BYTE_SIZE: usize = 10240;
-        const NUM_ADVICE: usize = 150 / 5 * Self::NUM_HASHES;
-        const NUM_FIXED: usize = 1;
-        const NUM_LOOKUP_ADVICE: usize = 30 / 5 * Self::NUM_HASHES;
-        const LOOKUP_BITS: usize = 12;
-        const NUM_COMP: usize = 10;
-    }
-
-    const K: u32 = 14;
-
-    #[test]
-    fn test_sha256_correct1() {
-        
-
-        // Test vector: "abc"
-        let test_input = vec!['a' as u8, 'b' as u8, 'c' as u8];
-
-        let circuit = TestCircuit::<Fr> {
-            test_input: [0; 64].to_vec(),
+    fn verify<F: Field>(k: u32, inputs: Vec<Vec<u8>>, success: bool) {
+        let circuit = TestSha256 {
+            inputs,
             _f: PhantomData,
         };
 
-        let prover = MockProver::run(K, &circuit, vec![vec![]]).unwrap();
-        assert_eq!(prover.verify(), Ok(()));
+        let prover = MockProver::<F>::run(k, &circuit, vec![]).unwrap();
+        let verify_result = prover.verify();
+        if verify_result.is_ok() != success {
+            if let Some(errors) = verify_result.err() {
+                for error in errors.iter() {
+                    println!("{}", error);
+                }
+            }
+            panic!();
+        }
     }
 
+    #[test]
+    fn test_bit_sha256_simple() {
+        let k = 17;
+        let inputs: Vec<Vec<u8>> = vec![vec![0u8; 64]; 800];
+        verify::<Fr>(k, inputs, true);
+    }
 }

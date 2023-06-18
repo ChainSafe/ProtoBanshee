@@ -1,17 +1,3 @@
-use crate::{
-    util::{BaseConstraintBuilder, not, rlc},
-    util::Expr,
-};
-use eth_types::Field;
-use gadgets::util::{and, select, sum, xor};
-use halo2_proofs::{
-    circuit::{AssignedCell, Layouter, Region, SimpleFloorPlanner, Value},
-    plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Fixed, VirtualCells},
-    poly::Rotation,
-};
-use log::{debug, info};
-use std::{env::var, marker::PhantomData, vec};
-
 pub(crate) const NUM_BITS_PER_BYTE: usize = 8;
 pub(crate) const NUM_BYTES_PER_WORD: usize = 4;
 pub(crate) const NUM_BITS_PER_WORD: usize = NUM_BYTES_PER_WORD * NUM_BITS_PER_BYTE;
@@ -52,7 +38,7 @@ pub mod decode {
 
     pub(crate) fn expr<F: Field>(bits: &[Expression<F>]) -> Expression<F> {
         let mut value = 0.expr();
-        let mut multiplier = F::one()();
+        let mut multiplier = F::one();
         for bit in bits.iter().rev() {
             value = value + bit.expr() * multiplier;
             multiplier *= F::from(2);
@@ -134,32 +120,3 @@ pub(crate) fn into_bits(bytes: &[u8]) -> Vec<u8> {
     }
     bits
 }
-
-pub(crate) fn get_degree() -> usize {
-    var("DEGREE")
-        .unwrap_or_else(|_| "8".to_string())
-        .parse()
-        .expect("Cannot parse DEGREE env var as usize")
-}
-
-// pub mod compose_rlc {
-//     use eth_types::Field;
-//     use gadgets::util::Expr;
-//     use halo2_proofs::plonk::Expression;
-
-//     // pub(crate) fn expr<F: Field>(
-//     //     expressions: &[Expression<F>],
-//     //     rs: &[Expression<F>],
-//     // ) -> Expression<F> {
-//     //     let mut rlc = 0.expr();
-//     //     //let mut multiplier = r.clone();
-//     //     for (expression, r) in expressions.iter().zip(rs) {
-//     //         rlc = rlc + expression * r;
-//     //     }
-//     //     // for expression in expressions[1..].iter() {
-//     //     //     rlc = rlc + expression.clone() * multiplier.clone();
-//     //     //     multiplier = multiplier * r.clone();
-//     //     // }
-//     //     rlc
-//     // }
-// }
