@@ -1,5 +1,7 @@
+use super::util::*;
 use crate::{
-    util::{Expr, not, rlc, BaseConstraintBuilder},
+    util::{not, rlc, BaseConstraintBuilder, Expr},
+    witness::HashInput,
 };
 use eth_types::Field;
 use gadgets::util::{and, select, sum, xor};
@@ -8,9 +10,10 @@ use halo2_proofs::{
     plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, Fixed, VirtualCells},
     poly::Rotation,
 };
+use itertools::Itertools;
 use log::{debug, info};
-use std::{env::var, marker::PhantomData, vec};
-use super::util::*;
+use snark_verifier::loader::LoadedScalar;
+use std::{env::var, io::Read, marker::PhantomData, vec};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaRow<F> {
@@ -20,18 +23,43 @@ pub struct ShaRow<F> {
     pub(crate) is_final: bool,
     pub(crate) length: usize,
     pub(crate) data_rlc: F,
+    pub(crate) limbs_rlc: [F; 2],
     pub(crate) hash_rlc: F,
     pub(crate) is_paddings: [bool; ABSORB_WIDTH_PER_ROW_BYTES],
     pub(crate) data_rlcs: [F; ABSORB_WIDTH_PER_ROW_BYTES],
     pub(crate) final_hash_bytes: [F; NUM_BYTES_FINAL_HASH],
 }
 
-pub fn sha256<F: Field>(
-    rows: &mut Vec<ShaRow<F>>,
-    bytes: &[u8],
-    rnd: F
-) {
-    let mut bits = into_bits(bytes);
+pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) {
+    let left_bits = into_bits(inputs[0]);
+    let right_bits = into_bits(inputs[1]);
+    let input_len = inputs[0].len() + inputs[1].len();
+
+    let mut bits = left_bits
+        .iter()
+        .copied()
+        .chain(right_bits.clone())
+        .collect_vec();
+
+    // Prepare inputs RLCs in advance
+    let mut inputs_rlc = [F::zero(), F::zero()];
+    for (idx, bytes) in inputs.iter().enumerate() {
+        for byte in inputs[idx].iter() {
+            inputs_rlc[idx] = inputs_rlc[idx] * rnd + F::from(*byte as u64);
+        }
+    }
+
+    // let mut bytes_rlc = F::zero();
+    // for byte in inputs[0].iter().copied().chain(inputs[1].iter().copied()).collect_vec()
+    // {
+    //     bytes_rlc = bytes_rlc * rnd + F::from(byte as u64);
+    // }
+
+    // let mut r_pow_m = rnd.clone();
+
+    // r_pow_m = rnd.pow_const(inputs[1].len() as u64);
+
+    // assert_eq!(bytes_rlc, inputs_rlc[0] * r_pow_m + inputs_rlc[1]);
 
     // Padding
     let length = bits.len();
@@ -53,6 +81,7 @@ pub fn sha256<F: Field>(
         .unwrap();
     let mut length = 0usize;
     let mut data_rlc = F::zero();
+
     let mut in_padding = false;
 
     // Process each block
@@ -84,6 +113,11 @@ pub fn sha256<F: Field>(
                 is_final,
                 length,
                 data_rlc,
+                limbs_rlc: if is_final {
+                    inputs_rlc
+                } else {
+                    [data_rlc, F::zero()]
+                },
                 hash_rlc,
                 is_paddings,
                 data_rlcs,
@@ -126,7 +160,7 @@ pub fn sha256<F: Field>(
             if round < NUM_WORDS_TO_ABSORB {
                 // padding/length
                 for is_padding in is_paddings.iter_mut() {
-                    *is_padding = if length == bytes.len() {
+                    *is_padding = if length == input_len {
                         true
                     } else {
                         length += 1;
@@ -136,8 +170,7 @@ pub fn sha256<F: Field>(
                 // data rlc
                 let input_bytes = to_le_bytes::value(&chunk[round * 32..(round + 1) * 32]);
                 data_rlcs[0] = data_rlc;
-                for (idx, (byte, padding)) in
-                    input_bytes.iter().zip(is_paddings.iter()).enumerate()
+                for (idx, (byte, padding)) in input_bytes.iter().zip(is_paddings.iter()).enumerate()
                 {
                     if !*padding {
                         data_rlc = data_rlc * rnd + F::from(*byte as u64);
@@ -261,6 +294,7 @@ pub fn sha256<F: Field>(
         add_row_end(hs[3], hs[7]);
         add_row_end(hs[2], hs[6]);
         add_row_end(hs[1], hs[5]);
+
         add_row(
             0,
             hs[0],
@@ -289,13 +323,17 @@ pub fn sha256<F: Field>(
     debug!("data rlc: {:x?}", data_rlc);
 }
 
-pub fn multi_sha256<F: Field>(
-    inputs: &[Vec<u8>],
-    rnd: F
-) -> Vec<ShaRow<F>> {
+pub fn multi_sha256<F: Field>(inputs: &[HashInput], rnd: F) -> Vec<ShaRow<F>> {
+    let inputs = inputs
+        .iter()
+        .map(|input| match input {
+            HashInput::Single(bytes) => [bytes.as_slice(), &[]],
+            HashInput::MerklePair(left, right) => [left.as_slice(), right.as_slice()],
+        })
+        .collect_vec();
     let mut rows: Vec<ShaRow<F>> = Vec::new();
     for bytes in inputs {
-        sha256(&mut rows, bytes, rnd);
+        sha256(&mut rows, &bytes, rnd);
     }
     rows
 }

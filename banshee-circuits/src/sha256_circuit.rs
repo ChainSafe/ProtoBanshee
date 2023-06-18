@@ -3,11 +3,13 @@ mod util;
 
 use std::marker::PhantomData;
 
+use itertools::Itertools;
+use snark_verifier::loader::LoadedScalar;
 use util::*;
 use crate::{
     table::SHA256Table,
     // keccak_circuit::util::compose_rlc,
-    util::{Expr, SubCircuitConfig, not, rlc, BaseConstraintBuilder, SubCircuit, Challenges}, witness,
+    util::{Expr, SubCircuitConfig, not, rlc, BaseConstraintBuilder, SubCircuit, Challenges}, witness::{self, HashInput},
 };
 use eth_types::Field;
 use gadgets::util::{and, select, sum, xor};
@@ -75,10 +77,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let h_e = meta.fixed_column();
 
         let hash_table = args;
-        // let is_enabled = hash_table.is_enabled;
-        // let length = hash_table.input_len;
-        // let data_rlc = hash_table.input_rlc;
-        // let hash_rlc = hash_table.output_rlc;
+        let is_enabled = hash_table.is_enabled;
+        let length = hash_table.input_len;
+        let data_rlc = hash_table.input_rlc;
+        let hash_rlc = hash_table.hash_rlc;
         let final_hash_bytes = array_init::array_init(|_| meta.advice_column());
         for col in final_hash_bytes.into_iter() {
             meta.enable_equality(col);
@@ -292,19 +294,40 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             cb.gate(1.expr())
         });
 
-        // meta.create_gate("is enabled", |meta| {
-        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
-        //     let q_squeeze = meta.query_fixed(q_squeeze, Rotation::cur());
-        //     let is_final = meta.query_advice(is_final, Rotation::cur());
-        //     let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
-        //     // Only set is_enabled to true when is_final is true and it's a squeeze row
-        //     cb.require_equal(
-        //         "is_enabled := q_squeeze && is_final",
-        //         is_enabled.expr(),
-        //         and::expr(&[q_squeeze.expr(), is_final.expr()]),
-        //     );
-        //     cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
-        // });
+        meta.create_gate("is enabled", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let q_squeeze = meta.query_fixed(q_squeeze, Rotation::cur());
+            let is_final = meta.query_advice(is_final, Rotation::cur());
+            let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
+            // Only set is_enabled to true when is_final is true and it's a squeeze row
+            cb.require_equal(
+                "is_enabled := q_squeeze && is_final",
+                is_enabled.expr(),
+                and::expr(&[q_squeeze.expr(), is_final.expr()]),
+            );
+            cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
+        });
+
+        meta.create_gate("limb rlcs", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
+            let left_rlc = meta.query_advice(hash_table.limbs_rlc[0], Rotation::cur());
+            let right_rlc = meta.query_advice(hash_table.limbs_rlc[1], Rotation::cur());
+            let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
+
+            cb.condition(
+                is_enabled,
+                |cb| {
+                    cb.require_equal(
+                        "data_rlc = left_rlc * r^32 + right_rlc",
+                        left_rlc * r.pow_const(32) + right_rlc,
+                        data_rlc,
+                    );
+                },
+            );
+
+            cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
+        });
 
         let start_new_hash = |meta: &mut VirtualCells<F>| {
             // A new hash is started when the previous hash is done or on the first row
@@ -315,235 +338,237 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let input_bytes = to_le_bytes::expr(w);
 
         // Padding
-        // meta.create_gate("padding", |meta| {
-        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
-        //     let prev_is_padding = meta.query_advice(*is_paddings.last().unwrap(), Rotation::prev());
-        //     let q_padding = meta.query_fixed(q_padding, Rotation::cur());
-        //     let q_padding_last = meta.query_fixed(q_padding_last, Rotation::cur());
-        //     let length = meta.query_advice(length, Rotation::cur());
-        //     let is_final_padding_row =
-        //         meta.query_advice(*is_paddings.last().unwrap(), Rotation(-2));
-        //     // All padding selectors need to be boolean
-        //     for is_padding in is_paddings.iter() {
-        //         let is_padding = meta.query_advice(*is_padding, Rotation::cur());
-        //         cb.condition(meta.query_fixed(q_enable, Rotation::cur()), |cb| {
-        //             cb.require_boolean("is_padding boolean", is_padding);
-        //         });
-        //     }
-        //     // Now for each padding selector
-        //     for idx in 0..is_paddings.len() {
-        //         // Previous padding selector can be on the previous row
-        //         let is_padding_prev = if idx == 0 {
-        //             prev_is_padding.expr()
-        //         } else {
-        //             meta.query_advice(is_paddings[idx - 1], Rotation::cur())
-        //         };
-        //         let is_padding = meta.query_advice(is_paddings[idx], Rotation::cur());
-        //         let is_first_padding = is_padding.clone() - is_padding_prev.clone();
-        //         // Check padding transition 0 -> 1 done only once
-        //         cb.condition(q_padding.expr(), |cb| {
-        //             cb.require_boolean("padding step boolean", is_first_padding.clone());
-        //         });
-        //         // Padding start/intermediate byte, all padding rows except the last one
-        //         cb.condition(
-        //             and::expr([
-        //                 (q_padding.expr() - q_padding_last.expr()),
-        //                 is_padding.expr(),
-        //             ]),
-        //             |cb| {
-        //                 // Input bytes need to be zero, or 128 if this is the first padding byte
-        //                 cb.require_equal(
-        //                     "padding start/intermediate byte",
-        //                     input_bytes[idx].clone(),
-        //                     is_first_padding.expr() * 128.expr(),
-        //                 );
-        //             },
-        //         );
-        //         // Padding start/intermediate byte, last padding row but not in the final block
-        //         cb.condition(
-        //             and::expr([
-        //                 q_padding_last.expr(),
-        //                 is_padding.expr(),
-        //                 not::expr(is_final_padding_row.expr()),
-        //             ]),
-        //             |cb| {
-        //                 // Input bytes need to be zero, or 128 if this is the first padding byte
-        //                 cb.require_equal(
-        //                     "padding start/intermediate byte",
-        //                     input_bytes[idx].clone(),
-        //                     is_first_padding.expr() * 128.expr(),
-        //                 );
-        //             },
-        //         );
-        //     }
-        //     // The last row containing input/padding data in the final block needs to
-        //     // contain the length in bits (Only input lengths up to 2**32 - 1
-        //     // bits are supported, which is lower than the spec of 2**64 - 1 bits)
-        //     cb.condition(
-        //         and::expr([q_padding_last.expr(), is_final_padding_row.expr()]),
-        //         |cb| {
-        //             cb.require_equal("padding length", decode::expr(w), length.expr() * 8.expr());
-        //         },
-        //     );
-        //     cb.gate(1.expr())
-        // });
+        meta.create_gate("padding", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let prev_is_padding = meta.query_advice(*is_paddings.last().unwrap(), Rotation::prev());
+            let q_padding = meta.query_fixed(q_padding, Rotation::cur());
+            let q_padding_last = meta.query_fixed(q_padding_last, Rotation::cur());
+            let length = meta.query_advice(length, Rotation::cur());
+            let is_final_padding_row =
+                meta.query_advice(*is_paddings.last().unwrap(), Rotation(-2));
+            // All padding selectors need to be boolean
+            for is_padding in is_paddings.iter() {
+                let is_padding = meta.query_advice(*is_padding, Rotation::cur());
+                cb.condition(meta.query_fixed(q_enable, Rotation::cur()), |cb| {
+                    cb.require_boolean("is_padding boolean", is_padding);
+                });
+            }
+            // Now for each padding selector
+            for idx in 0..is_paddings.len() {
+                // Previous padding selector can be on the previous row
+                let is_padding_prev = if idx == 0 {
+                    prev_is_padding.expr()
+                } else {
+                    meta.query_advice(is_paddings[idx - 1], Rotation::cur())
+                };
+                let is_padding = meta.query_advice(is_paddings[idx], Rotation::cur());
+                let is_first_padding = is_padding.clone() - is_padding_prev.clone();
+                // Check padding transition 0 -> 1 done only once
+                cb.condition(q_padding.expr(), |cb| {
+                    cb.require_boolean("padding step boolean", is_first_padding.clone());
+                });
+                // Padding start/intermediate byte, all padding rows except the last one
+                cb.condition(
+                    and::expr([
+                        (q_padding.expr() - q_padding_last.expr()),
+                        is_padding.expr(),
+                    ]),
+                    |cb| {
+                        // Input bytes need to be zero, or 128 if this is the first padding byte
+                        cb.require_equal(
+                            "padding start/intermediate byte",
+                            input_bytes[idx].clone(),
+                            is_first_padding.expr() * 128.expr(),
+                        );
+                    },
+                );
+                // Padding start/intermediate byte, last padding row but not in the final block
+                cb.condition(
+                    and::expr([
+                        q_padding_last.expr(),
+                        is_padding.expr(),
+                        not::expr(is_final_padding_row.expr()),
+                    ]),
+                    |cb| {
+                        // Input bytes need to be zero, or 128 if this is the first padding byte
+                        cb.require_equal(
+                            "padding start/intermediate byte",
+                            input_bytes[idx].clone(),
+                            is_first_padding.expr() * 128.expr(),
+                        );
+                    },
+                );
+            }
+            // The last row containing input/padding data in the final block needs to
+            // contain the length in bits (Only input lengths up to 2**32 - 1
+            // bits are supported, which is lower than the spec of 2**64 - 1 bits)
+            cb.condition(
+                and::expr([q_padding_last.expr(), is_final_padding_row.expr()]),
+                |cb| {
+                    cb.require_equal("padding length", decode::expr(w), length.expr() * 8.expr());
+                },
+            );
+            cb.gate(1.expr())
+        });
 
         // Length and input data rlc
-        // meta.create_gate("length and data rlc", |meta| {
-        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
-        //     let q_padding = meta.query_fixed(q_padding, Rotation::cur());
-        //     let start_new_hash = start_new_hash(meta);
-        //     let length_prev = meta.query_advice(length, Rotation::prev());
-        //     let length = meta.query_advice(length, Rotation::cur());
-        //     let data_rlc_prev = meta.query_advice(data_rlc, Rotation::prev());
-        //     let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
-        //     // Update the length/data_rlc on rows where we absorb data
-        //     cb.condition(q_padding.expr(), |cb| {
-        //         // Length increases by the number of bytes that aren't padding
-        //         // In a new block we have to start from 0 if the previous block was the final
-        //         // one
-        //         cb.require_equal(
-        //             "update length",
-        //             length.clone(),
-        //             length_prev.clone() * not::expr(start_new_hash.expr())
-        //                 + sum::expr(is_paddings.iter().map(|is_padding| {
-        //                     not::expr(meta.query_advice(*is_padding, Rotation::cur()))
-        //                 })),
-        //         );
+        meta.create_gate("length and data rlc", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let q_padding = meta.query_fixed(q_padding, Rotation::cur());
+            let start_new_hash = start_new_hash(meta);
+            let length_prev = meta.query_advice(length, Rotation::prev());
+            let length = meta.query_advice(length, Rotation::cur());
+            let data_rlc_prev = meta.query_advice(data_rlc, Rotation::prev());
+            let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
+            // Update the length/data_rlc on rows where we absorb data
+            cb.condition(q_padding.expr(), |cb| {
+                // Length increases by the number of bytes that aren't padding
+                // In a new block we have to start from 0 if the previous block was the final
+                // one
+                cb.require_equal(
+                    "update length",
+                    length.clone(),
+                    length_prev.clone() * not::expr(start_new_hash.expr())
+                        + sum::expr(is_paddings.iter().map(|is_padding| {
+                            not::expr(meta.query_advice(*is_padding, Rotation::cur()))
+                        })),
+                );
 
-        //         // Use intermediate cells to keep the degree low
-        //         let mut new_data_rlc = data_rlc_prev.clone() * not::expr(start_new_hash.expr());
-        //         cb.require_equal(
-        //             "initial data rlc",
-        //             meta.query_advice(data_rlcs[0], Rotation::cur()),
-        //             new_data_rlc,
-        //         );
-        //         new_data_rlc = meta.query_advice(data_rlcs[0], Rotation::cur());
-        //         for (idx, (byte, is_padding)) in
-        //             input_bytes.iter().zip(is_paddings.iter()).enumerate()
-        //         {
-        //             new_data_rlc = select::expr(
-        //                 meta.query_advice(*is_padding, Rotation::cur()),
-        //                 new_data_rlc.clone(),
-        //                 new_data_rlc.clone() * r + byte.clone(),
-        //             );
-        //             if idx < data_rlcs.len() - 1 {
-        //                 let next_data_rlc = meta.query_advice(data_rlcs[idx + 1], Rotation::cur());
-        //                 cb.require_equal(
-        //                     "intermediate data rlc",
-        //                     next_data_rlc.clone(),
-        //                     new_data_rlc,
-        //                 );
-        //                 new_data_rlc = next_data_rlc;
-        //             }
-        //         }
-        //         cb.require_equal("update data rlc", data_rlc.clone(), new_data_rlc);
-        //     });
-        //     cb.gate(1.expr())
-        // });
+                // Use intermediate cells to keep the degree low
+                let mut new_data_rlc = data_rlc_prev.clone() * not::expr(start_new_hash.expr());
+                cb.require_equal(
+                    "initial data rlc",
+                    meta.query_advice(data_rlcs[0], Rotation::cur()),
+                    new_data_rlc,
+                );
+                new_data_rlc = meta.query_advice(data_rlcs[0], Rotation::cur());
+                for (idx, (byte, is_padding)) in
+                    input_bytes.iter().zip(is_paddings.iter()).enumerate()
+                {
+                    new_data_rlc = select::expr(
+                        meta.query_advice(*is_padding, Rotation::cur()),
+                        new_data_rlc.clone(),
+                        new_data_rlc.clone() * r + byte.clone(),
+                    );
+                    if idx < data_rlcs.len() - 1 {
+                        let next_data_rlc = meta.query_advice(data_rlcs[idx + 1], Rotation::cur());
+                        cb.require_equal(
+                            "intermediate data rlc",
+                            next_data_rlc.clone(),
+                            new_data_rlc,
+                        );
+                        new_data_rlc = next_data_rlc;
+                    }
+                }
+                cb.require_equal("update data rlc", data_rlc.clone(), new_data_rlc);
+            });
+            cb.gate(1.expr())
+        });
 
         // Make sure data is consistent between blocks
-        // meta.create_gate("cross block data consistency", |meta| {
-        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
-        //     let start_new_hash = start_new_hash(meta);
-        //     let to_const =
-        //         |value: &String| -> &'static str { Box::leak(value.clone().into_boxed_str()) };
-        //     let mut add = |name: &'static str, column: Column<Advice>| {
-        //         let last_rot =
-        //             Rotation(-((NUM_END_ROWS + NUM_ROUNDS - NUM_WORDS_TO_ABSORB) as i32));
-        //         let value_to_copy = meta.query_advice(column, last_rot);
-        //         let prev_value = meta.query_advice(column, Rotation::prev());
-        //         let cur_value = meta.query_advice(column, Rotation::cur());
-        //         // On squeeze rows fetch the last used value
-        //         cb.condition(meta.query_fixed(q_squeeze, Rotation::cur()), |cb| {
-        //             cb.require_equal(
-        //                 to_const(&format!("{} copy check", name)),
-        //                 cur_value.expr(),
-        //                 value_to_copy.expr(),
-        //             );
-        //         });
-        //         // On first rows keep the length the same, or reset the length when starting a
-        //         // new hash
-        //         cb.condition(
-        //             meta.query_fixed(q_start, Rotation::cur())
-        //                 - meta.query_fixed(q_first, Rotation::cur()),
-        //             |cb| {
-        //                 cb.require_equal(
-        //                     to_const(&format!("{} equality check", name)),
-        //                     cur_value.expr(),
-        //                     prev_value.expr() * not::expr(start_new_hash.expr()),
-        //                 );
-        //             },
-        //         );
-        //         // Set the value to zero on the first row
-        //         cb.condition(meta.query_fixed(q_first, Rotation::cur()), |cb| {
-        //             cb.require_equal(
-        //                 to_const(&format!("{} initialized to 0", name)),
-        //                 cur_value.clone(),
-        //                 0.expr(),
-        //             );
-        //         });
-        //     };
-        //     add("length", length);
-        //     add("data_rlc", data_rlc);
-        //     add("last padding", *is_paddings.last().unwrap());
+        meta.create_gate("cross block data consistency", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let start_new_hash = start_new_hash(meta);
+            let to_const =
+                |value: &String| -> &'static str { Box::leak(value.clone().into_boxed_str()) };
+            let mut add = |name: &'static str, column: Column<Advice>| {
+                let last_rot =
+                    Rotation(-((NUM_END_ROWS + NUM_ROUNDS - NUM_WORDS_TO_ABSORB) as i32));
+                let value_to_copy = meta.query_advice(column, last_rot);
+                let prev_value = meta.query_advice(column, Rotation::prev());
+                let cur_value = meta.query_advice(column, Rotation::cur());
+                // On squeeze rows fetch the last used value
+                cb.condition(meta.query_fixed(q_squeeze, Rotation::cur()), |cb| {
+                    cb.require_equal(
+                        to_const(&format!("{} copy check", name)),
+                        cur_value.expr(),
+                        value_to_copy.expr(),
+                    );
+                });
+                // On first rows keep the length the same, or reset the length when starting a
+                // new hash
+                cb.condition(
+                    meta.query_fixed(q_start, Rotation::cur())
+                        - meta.query_fixed(q_first, Rotation::cur()),
+                    |cb| {
+                        cb.require_equal(
+                            to_const(&format!("{} equality check", name)),
+                            cur_value.expr(),
+                            prev_value.expr() * not::expr(start_new_hash.expr()),
+                        );
+                    },
+                );
+                // Set the value to zero on the first row
+                cb.condition(meta.query_fixed(q_first, Rotation::cur()), |cb| {
+                    cb.require_equal(
+                        to_const(&format!("{} initialized to 0", name)),
+                        cur_value.clone(),
+                        0.expr(),
+                    );
+                });
+            };
+            add("length", length);
+            add("data_rlc", data_rlc);
+            add("last padding", *is_paddings.last().unwrap());
 
-        //     cb.gate(1.expr())
-        // });
+            cb.gate(1.expr())
+        });
 
         // Squeeze
-        // meta.create_gate("squeeze", |meta| {
-        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
-        //     // Squeeze out the hash
-        //     let hash_parts = [new_a, &a, &b, &c, new_e, &e, &f, &g];
-        //     let hash_bytes = hash_parts
-        //         .iter()
-        //         .flat_map(|part| to_le_bytes::expr(part))
-        //         .collect::<Vec<_>>();
-        //     let rlc = compose_rlc::expr(&hash_bytes, r);
-        //     cb.condition(start_new_hash(meta), |cb| {
-        //         cb.require_equal(
-        //             "hash rlc check",
-        //             rlc,
-        //             meta.query_advice(hash_rlc, Rotation::cur()),
-        //         );
-        //     });
-        //     cb.gate(meta.query_fixed(q_squeeze, Rotation::cur()))
-        // });
+        meta.create_gate("squeeze", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            // Squeeze out the hash
+            let hash_parts = [new_a, &a, &b, &c, new_e, &e, &f, &g];
+            let hash_bytes = hash_parts
+                .iter()
+                .flat_map(|part| to_le_bytes::expr(part))
+                .collect::<Vec<_>>();
+            let rlc = compose_rlc::expr(&hash_bytes, r);
+            cb.condition(start_new_hash(meta), |cb| {
+                cb.require_equal(
+                    "hash rlc check",
+                    rlc,
+                    meta.query_advice(hash_rlc, Rotation::cur()),
+                );
+            });
+            cb.gate(meta.query_fixed(q_squeeze, Rotation::cur()))
+        });
 
-        // meta.create_gate("final_hash_words", |meta| {
-        //     let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
-        //     let q_condition = meta.query_fixed(q_final_word, Rotation::cur());
+        meta.create_gate("final_hash_words", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let q_condition = meta.query_fixed(q_final_word, Rotation::cur());
 
-        //     let final_word_exprs = (0..NUM_BYTES_FINAL_HASH)
-        //         .map(|i| {
-        //             meta.query_advice(final_hash_bytes[i], Rotation::cur())
-        //                 .expr()
-        //             /*if i < NUM_BYTES_FINAL_HASH / 2 {
-        //                 meta.query_advice(final_hash_bytes[i], Rotation::cur())
-        //                     .expr()
-        //             } else {
-        //                 meta.query_advice(
-        //                     final_hash_bytes[i - (NUM_BYTES_FINAL_HASH / 2)],
-        //                     Rotation::next(),
-        //                 )
-        //                 .expr()
-        //             }*/
-        //         })
-        //         .collect::<Vec<Expression<F>>>();
-        //     let rlc = compose_rlc::expr(&final_word_exprs, r);
-        //     cb.condition(q_condition.clone(), |cb| {
-        //         cb.require_equal(
-        //             "final hash rlc check",
-        //             rlc,
-        //             meta.query_advice(hash_rlc, Rotation::cur()),
-        //         );
-        //     });
-        //     //cb.gate(1.expr())
-        //     cb.gate(q_condition)
-        // });
+            let final_word_exprs = (0..NUM_BYTES_FINAL_HASH)
+                .map(|i| {
+                    meta.query_advice(final_hash_bytes[i], Rotation::cur())
+                        .expr()
+                    /*if i < NUM_BYTES_FINAL_HASH / 2 {
+                        meta.query_advice(final_hash_bytes[i], Rotation::cur())
+                            .expr()
+                    } else {
+                        meta.query_advice(
+                            final_hash_bytes[i - (NUM_BYTES_FINAL_HASH / 2)],
+                            Rotation::next(),
+                        )
+                        .expr()
+                    }*/
+                })
+                .collect::<Vec<Expression<F>>>();
+            let rlc = compose_rlc::expr(&final_word_exprs, r);
+            cb.condition(q_condition.clone(), |cb| {
+                cb.require_equal(
+                    "final hash rlc check",
+                    rlc,
+                    meta.query_advice(hash_rlc, Rotation::cur()),
+                );
+            });
+            //cb.gate(1.expr())
+            cb.gate(q_condition)
+        });
 
-        info!("degree: {}", meta.degree());
+        
+        debug!("Degree: {}", meta.degree());
+        debug!("Minimum rows: {}", meta.minimum_rows());
 
         Sha256CircuitConfig {
             q_enable,
@@ -579,7 +604,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
     pub fn digest(
         &self,
         layouter: &mut impl Layouter<F>,
-        inputs: &[Vec<u8>],
+        inputs: &[HashInput],
     ) -> Result<Vec<Vec<AssignedCell<F, F>>>, Error> {
         let witness = multi_sha256(inputs, Sha256CircuitConfig::rnd());
         self.assign(layouter, &witness)
@@ -720,16 +745,18 @@ impl<F: Field> Sha256CircuitConfig<F> {
         }
 
         // Hash data
-        // self.hash_table.assign_row(
-        //     region,
-        //     offset,
-        //     [
-        //         F::from(row.is_final && round == NUM_ROUNDS + 7),
-        //         row.data_rlc,
-        //         F::from(row.length as u64),
-        //         row.hash_rlc,
-        //     ],
-        // )?;
+        self.hash_table.assign_row(
+            region,
+            offset,
+            [
+                Value::known(F::from(row.is_final && round == NUM_ROUNDS + 7)),
+                Value::known(row.limbs_rlc[0]),
+                Value::known(row.limbs_rlc[1]),
+                Value::known(row.data_rlc),
+                Value::known(F::from(row.length as u64)),
+                Value::known(row.hash_rlc),
+            ],
+        )?;
 
         let mut hash_cells = Vec::with_capacity(NUM_BYTES_FINAL_HASH);
         if !row.is_final || round != NUM_ROUNDS + 7 {
@@ -764,7 +791,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
 /// KeccakCircuit
 #[derive(Default, Clone, Debug)]
 pub struct Sha256Circuit<F: Field> {
-    inputs: Vec<Vec<u8>>,
+    inputs: Vec<HashInput>,
     num_rows: usize,
     _marker: PhantomData<F>,
 }
@@ -816,7 +843,7 @@ impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
 
 impl<F: Field> Sha256Circuit<F> {
     /// Creates a new circuit instance
-    pub fn new(num_rows: usize, inputs: Vec<Vec<u8>>) -> Self {
+    pub fn new(num_rows: usize, inputs: Vec<HashInput>) -> Self {
         Sha256Circuit {
             inputs,
             num_rows,
@@ -837,7 +864,7 @@ impl<F: Field> Sha256Circuit<F> {
 
     /// Sets the witness using the data to be hashed
     pub(crate) fn generate_witness(&self, challenges: Challenges<Value<F>>) -> Vec<ShaRow<F>> {
-        multi_sha256(self.inputs.as_slice(), Sha256CircuitConfig::rnd())
+        multi_sha256(&self.inputs, Sha256CircuitConfig::rnd())
     }
 }
 
@@ -849,7 +876,7 @@ mod tests {
 
     #[derive(Default, Debug, Clone)]
     struct TestSha256<F: Field> {
-        inputs: Vec<Vec<u8>>,
+        inputs: Vec<HashInput>,
         _f: PhantomData<F>,
     }
 
@@ -876,7 +903,7 @@ mod tests {
         }
     }
 
-    fn verify<F: Field>(k: u32, inputs: Vec<Vec<u8>>, success: bool) {
+    fn verify<F: Field>(k: u32, inputs: Vec<HashInput>, success: bool) {
         let circuit = TestSha256 {
             inputs,
             _f: PhantomData,
@@ -896,8 +923,8 @@ mod tests {
 
     #[test]
     fn test_bit_sha256_simple() {
-        let k = 17;
-        let inputs: Vec<Vec<u8>> = vec![vec![0u8; 64]; 800];
+        let k = 10; //17;
+        let inputs = vec![HashInput::MerklePair(vec![2u8; 32], vec![3u8; 32]); 1];
         verify::<Fr>(k, inputs, true);
     }
 }
