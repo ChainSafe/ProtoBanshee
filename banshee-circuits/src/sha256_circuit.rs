@@ -45,6 +45,9 @@ pub struct Sha256CircuitConfig<F> {
     round_cst: Column<Fixed>,
     h_a: Column<Fixed>,
     h_e: Column<Fixed>,
+    cur_limb_rlc: Column<Advice>,
+    limb_rlcs: [Column<Advice>; ABSORB_WIDTH_PER_ROW_BYTES],
+
     /// The columns for bytes of hash results
     pub hash_table: SHA256Table,
     pub final_hash_bytes: [Column<Advice>; NUM_BYTES_FINAL_HASH],
@@ -71,7 +74,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let word_e = array_init::array_init(|_| meta.advice_column());
         let is_final = meta.advice_column();
         let is_paddings = array_init::array_init(|_| meta.advice_column());
+        let cur_limb_rlc = meta.advice_column();
         let data_rlcs = array_init::array_init(|_| meta.advice_column());
+        let limb_rlcs = array_init::array_init(|_| meta.advice_column());
+
         let round_cst = meta.fixed_column();
         let h_a = meta.fixed_column();
         let h_e = meta.fixed_column();
@@ -315,6 +321,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             let right_rlc = meta.query_advice(hash_table.limbs_rlc[1], Rotation::cur());
             let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
 
+            /// TODO:
+            /// - [ ] horisontal check r^m, m is based on `is_padding` columns
+            /// - [ ] vertical check: left_rlc == data_rlc@rotation(0) && right_rlc == data_rlc@rotation(1)
+
             cb.condition(
                 is_enabled,
                 |cb| {
@@ -420,6 +430,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             let length = meta.query_advice(length, Rotation::cur());
             let data_rlc_prev = meta.query_advice(data_rlc, Rotation::prev());
             let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
+            let limb_rlc = meta.query_advice(cur_limb_rlc, Rotation::cur());
+            let limb_rlc_prev = meta.query_advice(cur_limb_rlc, Rotation::prev());
+
+
             // Update the length/data_rlc on rows where we absorb data
             cb.condition(q_padding.expr(), |cb| {
                 // Length increases by the number of bytes that aren't padding
@@ -436,12 +450,21 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
 
                 // Use intermediate cells to keep the degree low
                 let mut new_data_rlc = data_rlc_prev.clone() * not::expr(start_new_hash.expr());
+                let mut new_limb_rlc = limb_rlc_prev.clone() * not::expr(start_new_hash.expr());
+
                 cb.require_equal(
                     "initial data rlc",
                     meta.query_advice(data_rlcs[0], Rotation::cur()),
                     new_data_rlc,
                 );
+                // cb.require_equal(
+                //     "initial limb rlc",
+                //     meta.query_advice(limb_rlcs[0], Rotation::cur()),
+                //     new_limb_rlc,
+                // );
                 new_data_rlc = meta.query_advice(data_rlcs[0], Rotation::cur());
+                new_limb_rlc = meta.query_advice(limb_rlcs[0], Rotation::cur());
+
                 for (idx, (byte, is_padding)) in
                     input_bytes.iter().zip(is_paddings.iter()).enumerate()
                 {
@@ -449,6 +472,11 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                         meta.query_advice(*is_padding, Rotation::cur()),
                         new_data_rlc.clone(),
                         new_data_rlc.clone() * r + byte.clone(),
+                    );
+                    new_limb_rlc = select::expr(
+                        meta.query_advice(*is_padding, Rotation::cur()),
+                        new_limb_rlc.clone(),
+                        new_limb_rlc.clone() * r + byte.clone(),
                     );
                     if idx < data_rlcs.len() - 1 {
                         let next_data_rlc = meta.query_advice(data_rlcs[idx + 1], Rotation::cur());
@@ -459,8 +487,19 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                         );
                         new_data_rlc = next_data_rlc;
                     }
+
+                    if idx < limb_rlcs.len() - 1 {
+                        let next_limb_rlc = meta.query_advice(limb_rlcs[idx + 1], Rotation::cur());
+                        cb.require_equal(
+                            "intermediate limb rlc",
+                            next_limb_rlc.clone(),
+                            new_limb_rlc,
+                        );
+                        new_limb_rlc = next_limb_rlc;
+                    }
                 }
                 cb.require_equal("update data rlc", data_rlc.clone(), new_data_rlc);
+                cb.require_equal("update limb rlc", limb_rlc.clone(), new_limb_rlc);
             });
             cb.gate(1.expr())
         });
@@ -588,6 +627,8 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             is_final,
             is_paddings,
             data_rlcs,
+            cur_limb_rlc,
+            limb_rlcs,
             round_cst,
             h_a,
             h_e,
@@ -729,9 +770,12 @@ impl<F: Field> Sha256CircuitConfig<F> {
             }
         }
 
-        // Data rlcs
+        if offset < 19 {
+            println!("offset: {offset} => data_rlc: {:?}", row.data_rlc);
+        }
+        // Intermediary data rlcs
         for (idx, (data_rlc, column)) in row
-            .data_rlcs
+            .intermediary_data_rlcs
             .iter()
             .zip(self.data_rlcs.iter())
             .enumerate()
@@ -742,7 +786,39 @@ impl<F: Field> Sha256CircuitConfig<F> {
                 offset,
                 || Value::known(*data_rlc),
             )?;
+            if offset < 19 {
+                println!("   offset: {offset} => data_rlcs[{idx}]: {:?}", data_rlc);
+            }
         }
+
+        region.assign_advice(
+            || format!("assign limb rlc {}", offset),
+            self.cur_limb_rlc,
+            offset,
+            || Value::known(row.limb_rlc),
+        )?;
+
+        if offset < 19 {
+            println!("offset: {offset} => limb_rlc: {:?}", row.limb_rlc);
+        }
+        for (idx, (limb_rlc, column)) in row
+            .intermediary_limb_rlcs
+            .iter()
+            .zip(self.limb_rlcs.iter())
+            .enumerate()
+        {
+            region.assign_advice(
+                || format!("assign limb rlcs {} {}", idx, offset),
+                *column,
+                offset,
+                || Value::known(*limb_rlc),
+            )?;
+            if offset < 19 {
+                println!("   offset: {offset} => limbs_rlcs[{idx}]: {:?}", limb_rlc);
+            }
+        }
+
+        
 
         // Hash data
         self.hash_table.assign_row(
