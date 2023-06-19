@@ -99,7 +99,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
                            final_hash_bytes,
                            // feature: [multi input lookups]
                            limbs_rlc,
-                           base_pow|{
+                           base_pow| {
             let word_to_bits = |value: u64, num_bits: usize| {
                 into_bits(&value.to_be_bytes())[64 - num_bits..64]
                     .iter()
@@ -147,7 +147,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
                 [F::zero(); ABSORB_WIDTH_PER_ROW_BYTES],
                 [F::zero(); NUM_BYTES_FINAL_HASH],
                 [F::zero(); 2],
-                base_pow
+                base_pow,
             )
         };
         add_row_start(d, h, idx == 0);

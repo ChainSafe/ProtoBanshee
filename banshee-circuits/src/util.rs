@@ -8,7 +8,7 @@ pub use constraint_builder::*;
 
 use crate::witness;
 use eth_types::*;
-pub use gadgets::util::{rlc, not, and, or, xor, select, sum, Expr};
+pub use gadgets::util::{and, not, or, rlc, select, sum, xor, Expr};
 use halo2_proofs::{
     circuit::{Layouter, Value},
     plonk::{
@@ -108,7 +108,6 @@ pub trait SubCircuitConfig<F: Field> {
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self;
 }
 
-
 /// Packs bits into bytes
 pub mod to_bytes {
     use eth_types::Field;
@@ -143,7 +142,6 @@ pub mod to_bytes {
         bytes
     }
 }
-
 
 /// Decodes a field element from its byte representation
 pub(crate) mod from_bytes {

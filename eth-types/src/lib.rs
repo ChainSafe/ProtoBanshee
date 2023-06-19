@@ -1,3 +1,4 @@
+use core::hash::Hash;
 use halo2_proofs::{
     arithmetic::{Field as Halo2Field, FieldExt},
     halo2curves::{
@@ -5,7 +6,6 @@ use halo2_proofs::{
         group::ff::PrimeField,
     },
 };
-use core::hash::Hash;
 
 /// Trait used to reduce verbosity with the declaration of the [`PrimeField`]
 /// trait and its repr.

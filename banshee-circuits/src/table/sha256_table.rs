@@ -47,7 +47,7 @@ impl SHA256Table {
             is_enabled: meta.advice_column(),
             limbs_rlc: [
                 meta.advice_column_in(SecondPhase),
-                meta.advice_column_in(SecondPhase)
+                meta.advice_column_in(SecondPhase),
             ],
             input_rlc: meta.advice_column_in(SecondPhase),
             input_len: meta.advice_column(),

@@ -189,7 +189,12 @@ impl<F: Field> Expr<F> for i32 {
     #[inline]
     fn expr(&self) -> Expression<F> {
         Expression::Constant(
-            F::from(self.unsigned_abs() as u64) * if self.is_negative() { -F::one() } else { F::one() },
+            F::from(self.unsigned_abs() as u64)
+                * if self.is_negative() {
+                    -F::one()
+                } else {
+                    F::one()
+                },
         )
     }
 }

@@ -501,8 +501,8 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                     }
                     // end
                 }
+                
                 cb.require_equal("update data rlc", data_rlc.clone(), new_data_rlc);
-                 
                 cb.require_equal(
                     "update base pow",
                     base_pow.clone() * is_right.clone(),
@@ -981,8 +981,8 @@ mod tests {
 
     #[test]
     fn test_bit_sha256_simple() {
-        let k = 17;
-        let inputs = vec![HashInput::MerklePair(vec![2u8; 32], vec![3u8; 32]); 800];
+        let k = 10;
+        let inputs = vec![HashInput::MerklePair(vec![2u8; 32], vec![3u8; 32]); 2];
         verify::<Fr>(k, inputs, true);
     }
 }

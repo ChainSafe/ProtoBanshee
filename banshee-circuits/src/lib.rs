@@ -1,11 +1,11 @@
-pub mod table;
-pub mod witness;
 pub(crate) mod gadget;
+pub mod table;
 pub(crate) mod util;
+pub mod witness;
 
-pub mod vs_circuit;
-pub mod state_circuit;
 pub mod sha256_circuit;
+pub mod state_circuit;
+pub mod vs_circuit;
 
 pub const MAX_VALIDATORS: usize = 100;
 

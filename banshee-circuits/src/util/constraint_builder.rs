@@ -78,7 +78,6 @@ pub(crate) trait ConstrainBuilderCommon<F: Field> {
     fn query_cells(&mut self, cell_type: CellType, count: usize) -> Vec<Cell<F>>;
 }
 
-
 #[derive(Default)]
 pub struct BaseConstraintBuilder<F> {
     pub constraints: Vec<(&'static str, Expression<F>)>,
