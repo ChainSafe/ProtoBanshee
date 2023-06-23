@@ -93,7 +93,7 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
             is_attested: meta.query_advice(c.state_table.is_attested, Rotation::cur()),
             field_tag: meta.query_advice(c.state_table.field_tag, Rotation::cur()),
             index: meta.query_advice(c.state_table.index, Rotation::cur()),
-            g_index: meta.query_advice(c.state_table.g_index, Rotation::cur()),
+            g_index: meta.query_advice(c.state_table.gindex, Rotation::cur()),
             value: meta.query_advice(c.state_table.value, Rotation::cur()),
             // vitual queries for tag == 'validator'
             balance: meta.query_advice(c.state_table.value, Rotation::cur()),

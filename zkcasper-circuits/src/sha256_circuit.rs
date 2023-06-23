@@ -855,7 +855,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
     }
 
     pub fn fixed_challenge() -> F {
-        F::from(123456)
+        F::from_u128(0xca9d6022267d3bd658bf)
     }
 }
 
