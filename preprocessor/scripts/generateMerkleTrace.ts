@@ -87,14 +87,12 @@ for (let i = 0; i < N; i++) {
     gindices.push(ValidatorsSsz.getPathInfo([i, 'exitEpoch']).gindex);
 }
 
-
 let view = ValidatorsSsz.toView(validators);
 
 let proof = createProof(view.node, {type: ProofType.multi, gindices: gindices}) as MultiProof; 
 
 const areEqual = (first: Uint8Array, second: Uint8Array) =>
     first.length === second.length && first.every((value, index) => value === second[index]);
-
 
 let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proof.witnesses, proof.gindices);
 

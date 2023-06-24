@@ -71,20 +71,6 @@ impl StateEntry {
 
                 vec![
                     new_state_row(
-                        FieldTag::PubKeyRLC,
-                        0,
-                        F::zero(),
-                        randomness.map(|rnd| rlc::value(&pubkey[0..32], rnd)),
-                        gindex * 2u64.pow(4), // pubkey chunks are 4 levels deeper
-                    ),
-                    new_state_row(
-                        FieldTag::PubKeyRLC,
-                        1,
-                        F::zero(),
-                        randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&pubkey[32..48]), rnd)),
-                        gindex * 2u64.pow(4) + 1,
-                    ),
-                    new_state_row(
                         FieldTag::EffectiveBalance,
                         0,
                         F::from(*effective_balance as u64),
@@ -117,6 +103,20 @@ impl StateEntry {
                             rlc::value(&pad_to_ssz_chunk(&exit_epoch.to_le_bytes()), rnd)
                         }),
                         gindex * 2u64.pow(3) + 6,
+                    ),
+                    new_state_row(
+                        FieldTag::PubKeyRLC,
+                        0,
+                        F::zero(),
+                        randomness.map(|rnd| rlc::value(&pubkey[0..32], rnd)),
+                        gindex * 2u64.pow(4), // pubkey chunks are 4 levels deeper
+                    ),
+                    new_state_row(
+                        FieldTag::PubKeyRLC,
+                        1,
+                        F::zero(),
+                        randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&pubkey[32..48]), rnd)),
+                        gindex * 2u64.pow(4) + 1,
                     ),
                 ]
             }

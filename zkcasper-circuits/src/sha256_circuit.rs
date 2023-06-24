@@ -599,16 +599,6 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                 .map(|i| {
                     meta.query_advice(final_hash_bytes[i], Rotation::cur())
                         .expr()
-                    /*if i < NUM_BYTES_FINAL_HASH / 2 {
-                        meta.query_advice(final_hash_bytes[i], Rotation::cur())
-                            .expr()
-                    } else {
-                        meta.query_advice(
-                            final_hash_bytes[i - (NUM_BYTES_FINAL_HASH / 2)],
-                            Rotation::next(),
-                        )
-                        .expr()
-                    }*/
                 })
                 .collect::<Vec<Expression<F>>>();
             let rlc = compose_rlc::expr(&final_word_exprs, r);
@@ -619,7 +609,6 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                     meta.query_advice(hash_rlc, Rotation::cur()),
                 );
             });
-            //cb.gate(1.expr())
             cb.gate(q_condition)
         });
 

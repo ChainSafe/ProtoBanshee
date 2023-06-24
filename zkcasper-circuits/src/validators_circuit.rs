@@ -34,7 +34,7 @@ pub struct ValidatorsCircuitConfig<F: Field> {
     tag: BinaryNumberConfig<StateTag, 3>,
     storage_phase1: Column<Advice>,
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
-    target_epoch: Column<Instance>,
+    target_epoch: Column<Advice>, // TODO: should be an instance or assigned from instance
     constraint_builder: ConstraintBuilder<F>,
 }
 
@@ -43,7 +43,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let q_enabled = meta.fixed_column();
-        let target_epoch = meta.instance_column();
+        let target_epoch = meta.advice_column();
         let state_table = args;
 
         let storage_phase1 = meta.advice_column_in(FirstPhase);
@@ -63,9 +63,6 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         let cell_manager = CellManager::new(meta, MAX_VALIDATORS, &cm_advices);
         let mut constraint_builder = ConstraintBuilder::new(cell_manager);
 
-        // Annotate circuit
-        state_table.annotate_columns(meta);
-
         let mut config = Self {
             q_enabled,
             target_epoch,
@@ -75,6 +72,13 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             byte_lookup,
             constraint_builder
         };
+
+        // Annotate circuit
+        config.state_table.annotate_columns(meta);
+        tag.annotate_columns(meta, "tag");
+        config.annotations().iter().for_each(|(col, ann)| {
+            meta.annotate_lookup_any_column(*col, || ann);
+        });
 
         meta.create_gate("validators constraints", |meta| {
             let queries = queries(meta, &config);
@@ -86,11 +90,11 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
     }
 
     fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-        self.state_table.annotate_columns_in_region(region);
-        self.tag.annotate_columns_in_region(region, "tag");
+        // self.state_table.annotate_columns_in_region(region);
+        // self.tag.annotate_columns_in_region(region, "tag");
         self.annotations()
             .into_iter()
-            .for_each(|(col, ann)| region.name_column(|| ann, col));
+            .for_each(|(col, ann)| region.name_column(|| &ann, col));
     }
 }
 
@@ -125,6 +129,13 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 
         let mut offset = 0;
         for entry in beacon_state.iter() {
+            region.assign_advice(
+                || "assign target epoch",
+                self.target_epoch,
+                offset,
+                || Value::known(F::from(target_epoch)),
+            )?; // TODO: assign from instance instead
+
             match entry {
                 StateEntry::Validator { activation_epoch, exit_epoch, ..} => {
                     // enable selector for the first row of each validator
@@ -155,12 +166,18 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
         Ok(())
     }
 
-    pub fn annotations(&self) -> Vec<(Column<Any>, &'static str)> {
-        vec![
-            (self.q_enabled.into(), "q_enabled"),
-            (self.storage_phase1.into(), "storage_phase1"),
-            (self.target_epoch.into(), "target_epoch"),
-        ]
+    pub fn annotations(&self) -> Vec<(Column<Any>, String)> {
+        let mut annotations = vec![
+            (self.q_enabled.into(), "q_enabled".to_string()),
+            (self.storage_phase1.into(), "storage_phase1".to_string()),
+            (self.target_epoch.into(), "epoch".to_string()),
+        ];
+
+        for (i, col) in self.byte_lookup.iter().copied().enumerate() {
+            annotations.push((col.into(), format!("byte_lookup_{}", i)));
+        }
+
+        annotations
     }
 }
 
@@ -226,7 +243,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
 fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig<F>) -> Queries<F> {
     Queries {
         selector: meta.query_fixed(c.q_enabled, Rotation::cur()),
-        target_epoch: meta.query_instance(c.target_epoch, Rotation::cur()),
+        target_epoch: meta.query_advice(c.target_epoch, Rotation::cur()),
         state_table: StateQueries {
             id: meta.query_advice(c.state_table.id, Rotation::cur()),
             order: meta.query_advice(c.state_table.id, Rotation::cur()),
@@ -239,9 +256,9 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
             value: meta.query_advice(c.state_table.value, Rotation::cur()),
             // vitual queries for tag == 'validator'
             balance: meta.query_advice(c.state_table.value, Rotation::cur()),
-            activation_epoch: meta.query_advice(c.state_table.value, Rotation::next()),
-            exit_epoch: meta.query_advice(c.state_table.value, Rotation(2)),
-            slashed: meta.query_advice(c.state_table.value, Rotation(3)),
+            slashed: meta.query_advice(c.state_table.value, Rotation::next()),
+            activation_epoch: meta.query_advice(c.state_table.value, Rotation(2)),
+            exit_epoch: meta.query_advice(c.state_table.value, Rotation(3)),
             pubkey_lo: meta.query_advice(c.state_table.value, Rotation(4)),
             pubkey_hi: meta.query_advice(c.state_table.value, Rotation(5)),
         },
@@ -266,7 +283,7 @@ mod tests {
         plonk::Circuit,
     };
     use itertools::Itertools;
-    use std::{fs, marker::PhantomData};
+    use std::{fs, marker::PhantomData, vec};
 
     #[derive(Debug, Clone)]
     struct TestValidators<F: Field> {
@@ -310,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn test_state_ssz_circuit() {
+    fn test_validators_circuit() {
         let k = 10;
         let state: Vec<StateEntry> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
