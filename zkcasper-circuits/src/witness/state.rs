@@ -183,7 +183,7 @@ pub enum FieldTag {
 impl_expr!(FieldTag);
 
 /// State table row assignment
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct StateRow<F> {
     pub(crate) id: F,
     pub(crate) tag: F,

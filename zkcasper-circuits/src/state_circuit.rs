@@ -176,6 +176,14 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
             state_table,
         }
     }
+
+    fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
+        self.state_table.annotate_columns_in_region(region);
+        self.sha256_table.annotate_columns_in_region(region);
+        for level in self.tree.iter() {
+            level.annotate_columns_in_region(region);
+        }
+    }
 }
 
 impl<F: Field> StateSSZCircuitConfig<F> {
@@ -196,13 +204,11 @@ impl<F: Field> StateSSZCircuitConfig<F> {
         layouter.assign_region(
             || "state ssz circuit",
             |mut region| {
-                self.state_table.annotate_columns_in_region(&mut region);
-                self.sha256_table.annotate_columns_in_region(&mut region);
+                self.annotate_columns_in_region(&mut region);
 
                 // filter out the first (root) level, state root is assigned seperately into instance column.
                 let trace_by_depth = trace_by_depth.clone().into_iter().filter(|e| e[0].depth != 1).collect_vec();
                 for (level, steps) in self.tree.iter().zip(trace_by_depth) {
-                    level.annotate_columns_in_region(&mut region);
                     level.assign_with_region(&mut region, steps, challange)?;
                 }
 
@@ -217,15 +223,13 @@ impl<F: Field> StateSSZCircuitConfig<F> {
 /// Circuit for verify Merkle-multi proof of the SSZ Merkelized `BeaconState`
 #[derive(Clone, Default, Debug)]
 pub struct StateSSZCircuit<F: Field> {
-    offset: usize,
     trace: MerkleTrace,
     _f: PhantomData<F>,
 }
 
 impl<F: Field> StateSSZCircuit<F> {
-    pub fn new(offset: usize, trace: MerkleTrace) -> Self {
+    pub fn new(trace: MerkleTrace) -> Self {
         Self {
-            offset,
             trace,
             _f: PhantomData,
         }
@@ -235,11 +239,11 @@ impl<F: Field> StateSSZCircuit<F> {
 impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
     type Config = StateSSZCircuitConfig<F>;
 
-    fn unusable_rows() -> usize {
-        todo!()
+    fn new_from_block(block: &witness::Block<F>) -> Self {
+        Self::new(block.merkle_trace.clone())
     }
 
-    fn new_from_block(block: &witness::Block<F>) -> Self {
+    fn unusable_rows() -> usize {
         todo!()
     }
 
@@ -343,7 +347,7 @@ mod tests {
 
         let circuit = TestStateSSZ::<Fr> {
             state,
-            state_circuit: StateSSZCircuit::new(0, merkle_trace),
+            state_circuit: StateSSZCircuit::new(merkle_trace),
             _f: PhantomData,
         };
 

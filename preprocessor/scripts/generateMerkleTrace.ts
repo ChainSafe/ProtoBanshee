@@ -100,11 +100,13 @@ let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proo
 
 printTrace(partial_tree, trace);
 
+const target_epoch = 25;
+
 fs.writeFileSync(
     `../test_data/validators.json`,
     serialize(Array.from(validators.entries()).map(([i, validator]) => ({Validator: {
         id: i,
-        isActive: true,
+        isActive: !validator.slashed && validator.activationEpoch <= target_epoch && target_epoch < validator.exitEpoch,
         isAttested: true,
         pubkey: Array.from(validator.pubkey),
         effectiveBalance: validator.effectiveBalance,

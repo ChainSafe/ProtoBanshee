@@ -653,6 +653,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             _marker: PhantomData,
         }
     }
+
+    fn annotate_columns_in_region(&self, region: &mut Region<F>) {
+        self.hash_table.annotate_columns_in_region(region);
+    }
 }
 
 impl<F: Field> Sha256CircuitConfig<F> {
