@@ -104,6 +104,7 @@ fs.writeFileSync(
     `../test_data/validators.json`,
     serialize(Array.from(validators.entries()).map(([i, validator]) => ({
         id: i,
+        committee: 0,
         isActive: !validator.slashed && validator.activationEpoch <= target_epoch && target_epoch < validator.exitEpoch,
         isAttested: true,
         pubkey: Array.from(validator.pubkey),
@@ -113,6 +114,17 @@ fs.writeFileSync(
         exitEpoch: validator.exitEpoch,
         gindex: validatorBaseGindices[i]
     })))
+);
+
+fs.writeFileSync(
+    `../test_data/committees.json`,
+    serialize([
+        {
+            id: 0,
+            accumulatedBalance: Array.from(validators).reduce((acc, validator) => acc + validator.effectiveBalance, 0),
+            aggregatedPubkey: Array.from(crypto.randomBytes(48)), // TODO: aggregate pubkeys
+        }
+    ])
 );
 
 fs.writeFileSync(

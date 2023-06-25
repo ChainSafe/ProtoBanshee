@@ -2,7 +2,7 @@ use super::cell_manager::*;
 use crate::{
     gadget::LtGadget,
     util::{Cell, CellType, ConstrainBuilderCommon, Constraint, Expr, Lookup},
-    witness::{Validator, ValidatorsRow, StateTag},
+    witness::{Committee, StateTag, Validator, CasperEntityRow, CasperEntity},
     N_BYTES_U64,
 };
 use eth_types::Field;
@@ -106,7 +106,7 @@ impl<F: Field> ConstraintBuilder<F> {
         &self,
         region: &mut Region<F>,
         offset: usize,
-        data: &Validator,
+        data: &CasperEntity,
         target_epoch: u64,
     ) {
         let target_gte_activation = self
@@ -118,18 +118,22 @@ impl<F: Field> ConstraintBuilder<F> {
             .as_ref()
             .expect("target_lt_exited gadget is expected");
 
-            target_gte_activation.assign(
-                region,
-                offset,
-                F::from(data.activation_epoch),
-                F::from(target_epoch + 1),
-            );
-            target_lt_exit.assign(
-                region,
-                offset,
-                F::from(target_epoch),
-                F::from(data.exit_epoch),
-            );
+        match data {
+            CasperEntity::Validator(Validator {
+                activation_epoch,
+                exit_epoch,
+                ..
+            }) => {
+                target_gte_activation.assign(
+                    region,
+                    offset,
+                    F::from(*activation_epoch),
+                    F::from(target_epoch + 1),
+                );
+                target_lt_exit.assign(region, offset, F::from(target_epoch), F::from(*exit_epoch));
+            }
+            CasperEntity::Committee(Committee { .. }) => {}
+        }
     }
 }
 

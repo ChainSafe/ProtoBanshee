@@ -1,6 +1,6 @@
 use itertools::Itertools;
 
-use crate::witness::{Validator, ValidatorsRow, Committee};
+use crate::witness::{into_casper_entities, CasperEntityRow, Committee, Validator};
 
 use super::*;
 
@@ -73,11 +73,11 @@ impl ValidatorsTable {
         }
     }
 
-    fn assign<F: Field>(
+    pub fn assign_with_region<F: Field>(
         &self,
         region: &mut Region<'_, F>,
         offset: usize,
-        row: &ValidatorsRow<Value<F>>,
+        row: &CasperEntityRow<Value<F>>,
     ) -> Result<(), Error> {
         for (column, value) in [
             (self.id, row.id),
@@ -101,23 +101,25 @@ impl ValidatorsTable {
     }
 
     /// Load the validators table into the circuit.
-    pub fn load<F: Field>(
+    pub fn dev_load<F: Field>(
         &self,
         layouter: &mut impl Layouter<F>,
         validators: &[Validator],
-        // TODO: committess: &[Committee],
+        committees: &[Committee],
         challenge: Value<F>,
     ) -> Result<(), Error> {
+        let casper_entities = into_casper_entities(validators.iter(), committees.iter());
+
         layouter.assign_region(
-            || "state table",
+            || "dev load state table",
             |mut region| {
                 self.annotate_columns_in_region(&mut region);
-                for (offset, row) in validators
+                for (offset, row) in casper_entities
                     .iter()
                     .flat_map(|e| e.table_assignment(challenge))
                     .enumerate()
                 {
-                    self.assign(&mut region, offset, &row)?;
+                    self.assign_with_region(&mut region, offset, &row)?;
                 }
 
                 Ok(())
@@ -139,9 +141,8 @@ impl ValidatorsTable {
             ),
             (
                 value_rlc.clone() * enable.clone(),
-                meta.query_advice(self.ssz_rlc, Rotation::cur())
-            )
-            // TODO: should any other columns be included?
+                meta.query_advice(self.ssz_rlc, Rotation::cur()),
+            ), // TODO: should any other columns be included?
         ]
     }
 }

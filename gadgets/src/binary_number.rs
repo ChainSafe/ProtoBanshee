@@ -191,7 +191,7 @@ where
 
     /// Assign a value to the binary number chip. A generic type that implements
     /// the AsBits trait can be provided for assignment.
-    pub fn assign(
+    pub fn assign_with_region(
         &self,
         region: &mut Region<'_, F>,
         offset: usize,

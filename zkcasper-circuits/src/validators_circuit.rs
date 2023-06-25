@@ -2,10 +2,12 @@ pub(crate) mod cell_manager;
 pub(crate) mod constraint_builder;
 
 use crate::{
-    table::{LookupTable, ValidatorsTable, state_table::StateTables},
+    table::{state_table::StateTables, LookupTable, ValidatorsTable},
     util::{Cell, Challenges, SubCircuit, SubCircuitConfig},
-    witness::{self, StateEntry, StateTag, ValidatorsRow},
-    MAX_VALIDATORS, STATE_ROWS_PER_VALIDATOR, STATE_ROWS_PER_COMMITEE,
+    witness::{
+        self, into_casper_entities, CasperEntity, CasperEntityRow, Committee, StateTag, Validator,
+    },
+    MAX_VALIDATORS, STATE_ROWS_PER_COMMITEE, STATE_ROWS_PER_VALIDATOR,
 };
 use cell_manager::CellManager;
 use constraint_builder::*;
@@ -17,8 +19,8 @@ use gadgets::{
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{
-        Advice, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed, Instance,
-        SecondPhase, Selector, VirtualCells, Any,
+        Advice, Any, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed, Instance,
+        SecondPhase, Selector, VirtualCells,
     },
     poly::Rotation,
 };
@@ -31,7 +33,7 @@ pub(crate) const N_BYTE_LOOKUPS: usize = 8;
 pub struct ValidatorsCircuitConfig<F: Field> {
     q_enabled: Column<Fixed>,
     state_tables: StateTables,
-    validators_table: ValidatorsTable,
+    pub validators_table: ValidatorsTable,
     tag: BinaryNumberConfig<StateTag, 3>,
     storage_phase1: Column<Advice>,
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
@@ -39,8 +41,7 @@ pub struct ValidatorsCircuitConfig<F: Field> {
     constraint_builder: ConstraintBuilder<F>,
 }
 
-pub struct ValidatorsCircuitArgs{
-    pub validators_table: ValidatorsTable,
+pub struct ValidatorsCircuitArgs {
     pub state_tables: StateTables,
 }
 
@@ -51,7 +52,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         let q_enabled = meta.fixed_column();
         let target_epoch = meta.advice_column();
         let state_tables = args.state_tables;
-        let validators_table: ValidatorsTable = args.validators_table;
+        let validators_table: ValidatorsTable = ValidatorsTable::construct(meta);
 
         let storage_phase1 = meta.advice_column_in(FirstPhase);
         let byte_lookup: [_; N_BYTE_LOOKUPS] = (0..N_BYTE_LOOKUPS)
@@ -78,7 +79,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             tag,
             storage_phase1,
             byte_lookup,
-            constraint_builder
+            constraint_builder,
         };
 
         // Annotate circuit
@@ -110,14 +111,21 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
     fn assign(
         &self,
         layouter: &mut impl Layouter<F>,
-        beacon_state: &[StateEntry],
+        validators: &[Validator],
+        committees: &[Committee],
         target_epoch: u64,
         challange: Value<F>,
     ) -> Result<(), Error> {
         layouter.assign_region(
             || "validators circuit",
             |mut region| {
-                self.assign_with_region(&mut region, beacon_state, target_epoch, challange)
+                self.assign_with_region(
+                    &mut region,
+                    validators,
+                    committees,
+                    target_epoch,
+                    challange,
+                )
             },
         );
 
@@ -127,16 +135,17 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
     fn assign_with_region(
         &self,
         region: &mut Region<'_, F>,
-        beacon_state: &[StateEntry],
+        validators: &[Validator],
+        committees: &[Committee],
         target_epoch: u64,
         randomness: Value<F>,
     ) -> Result<(), Error> {
-        self.annotate_columns_in_region(region);
+        let casper_entities = into_casper_entities(validators.iter(), committees.iter());
 
         let tag_chip = BinaryNumberChip::construct(self.tag);
 
         let mut offset = 0;
-        for entry in beacon_state.iter() {
+        for entity in casper_entities.iter() {
             region.assign_advice(
                 || "assign target epoch",
                 self.target_epoch,
@@ -144,8 +153,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 || Value::known(F::from(target_epoch)),
             )?; // TODO: assign from instance instead
 
-            match entry {
-                StateEntry::Validator { activation_epoch, exit_epoch, ..} => {
+            match entity {
+                CasperEntity::Validator(validator) => {
                     // enable selector for the first row of each validator
                     region.assign_fixed(
                         || "assign q_enabled",
@@ -153,23 +162,53 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                         offset,
                         || Value::known(F::one()),
                     )?;
-                    
-                    self.constraint_builder.assign_with_region(region, offset, &entry, target_epoch);
 
-                    for i in 0..STATE_ROWS_PER_VALIDATOR {
-                        tag_chip.assign(region, offset + i, &StateTag::Validator)?;
+                    self.constraint_builder.assign_with_region(
+                        region,
+                        offset,
+                        entity,
+                        target_epoch,
+                    );
+
+                    let validator_rows = validator.table_assignment(randomness);
+
+                    assert_eq!(validator_rows.len(), STATE_ROWS_PER_VALIDATOR);
+
+                    for (i, row) in validator_rows.into_iter().enumerate() {
+                        tag_chip.assign_with_region(region, offset + i, &StateTag::Validator)?;
+                        self.validators_table
+                            .assign_with_region(region, offset + i, &row)?;
                     }
-                   
+
                     offset += STATE_ROWS_PER_VALIDATOR;
                 }
-                StateEntry::Committee { .. } => {
-                    tag_chip.assign(region, offset, &StateTag::Committee)?;
-                    self.constraint_builder.assign_with_region(region, offset, &entry, target_epoch);
+                CasperEntity::Committee(committee) => {
+                    tag_chip.assign_with_region(region, offset, &StateTag::Committee)?;
+                    self.constraint_builder.assign_with_region(
+                        region,
+                        offset,
+                        &entity,
+                        target_epoch,
+                    );
+
+                    let committee_rows = committee.table_assignment(randomness);
+
+                    // TODO: assert_eq!(committee_rows.len(), STATE_ROWS_PER_COMMITEE);
+
+                    for (i, row) in committee_rows.into_iter().enumerate() {
+                        tag_chip.assign_with_region(region, offset + i, &StateTag::Committee)?;
+                        self.validators_table
+                            .assign_with_region(region, offset + i, &row)?;
+                    }
+
                     offset += STATE_ROWS_PER_COMMITEE;
                 }
-            } 
+            }
             // todo cell manager assignments
         }
+
+        // annotate circuit
+        self.annotate_columns_in_region(region);
 
         Ok(())
     }
@@ -192,16 +231,18 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 /// State Circuit for proving RwTable is valid
 #[derive(Default, Clone, Debug)]
 pub struct ValidatorsCircuit<F> {
-    pub(crate) validators: Vec<StateEntry>,
+    pub(crate) validators: Vec<Validator>,
+    pub(crate) committees: Vec<Committee>,
     target_epoch: u64,
     _f: PhantomData<F>,
 }
 
 impl<F: Field> ValidatorsCircuit<F> {
     /// make a new state circuit from an RwMap
-    pub fn new(validators: Vec<StateEntry>, target_epoch: u64) -> Self {
+    pub fn new(validators: Vec<Validator>, committees: Vec<Committee>, target_epoch: u64) -> Self {
         Self {
             validators,
+            committees,
             target_epoch,
             _f: PhantomData,
         }
@@ -212,11 +253,15 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
     type Config = ValidatorsCircuitConfig<F>;
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
-        Self::new(block.validators.clone(), block.target_epoch)
+        Self::new(
+            block.validators.clone(),
+            block.committees.clone(),
+            block.target_epoch,
+        )
     }
 
     fn unusable_rows() -> usize {
-       todo!()
+        todo!()
     }
 
     /// Return the minimum number of rows required to prove the block
@@ -234,8 +279,14 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
         layouter.assign_region(
             || "validators circuit",
             |mut region| {
-                config.assign_with_region(&mut region, &self.validators, self.target_epoch, challenges.sha256_input())
-            }
+                config.assign_with_region(
+                    &mut region,
+                    &self.validators,
+                    &self.committees,
+                    self.target_epoch,
+                    challenges.sha256_input(),
+                )
+            },
         );
 
         Ok(())
@@ -246,7 +297,6 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
         vec![]
     }
 }
-
 
 fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig<F>) -> Queries<F> {
     Queries {
@@ -277,12 +327,11 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
     }
 }
 
-
-
 mod tests {
     use super::*;
     use crate::{
-        witness::{MerkleTrace, StateEntry}, table::state_table::StateTables,
+        table::state_table::StateTables,
+        witness::{Committee, MerkleTrace, Validator},
     };
     use halo2_proofs::{
         circuit::{SimpleFloorPlanner, Value},
@@ -311,11 +360,11 @@ mod tests {
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let args = ValidatorsCircuitArgs {
                 state_tables: StateTables::dev_construct(meta),
-                validators_table: ValidatorsTable::construct(meta)
             };
+
             (
                 ValidatorsCircuitConfig::new(meta, args),
-                Challenges::construct(meta)
+                Challenges::construct(meta),
             )
         }
 
@@ -325,10 +374,6 @@ mod tests {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let challenge = config.1.sha256_input();
-            config
-                .0
-                .validators_table
-                .load(&mut layouter, &self.validators_circuit.validators, challenge)?;
             config
                 .0
                 .state_tables
@@ -345,13 +390,15 @@ mod tests {
     #[test]
     fn test_validators_circuit() {
         let k = 10;
-        let validators: Vec<StateEntry> =
+        let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
+        let committees: Vec<Committee> =
+            serde_json::from_slice(&fs::read("../test_data/committees.json").unwrap()).unwrap();
         let state_tree_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
-    
+
         let circuit = TestValidators::<Fr> {
-            validators_circuit: ValidatorsCircuit::new(validators, 25),
+            validators_circuit: ValidatorsCircuit::new(validators, committees, 25),
             state_tree_trace,
             _f: PhantomData,
         };

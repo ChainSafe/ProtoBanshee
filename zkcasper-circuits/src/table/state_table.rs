@@ -132,7 +132,8 @@ impl StateTables {
         trace: &MerkleTrace,
         challenge: Value<F>,
     ) -> Result<(), Error> {
-        let trace_by_depth = trace.trace_by_levels();
+        let trace_by_depth = trace.trace_by_levels()
+            .into_iter().filter(|e| e[0].depth != 1).collect_vec();
         
         layouter.assign_region(
             || "dev load state tables",

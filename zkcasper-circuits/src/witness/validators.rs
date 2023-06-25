@@ -16,6 +16,7 @@ use strum_macros::EnumIter;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Validator {
     pub id: usize,
+    pub committee: usize,
     pub is_active: bool,
     pub is_attested: bool,
     pub effective_balance: u64,
@@ -38,9 +39,9 @@ impl Validator {
     pub(crate) fn table_assignment<F: Field>(
         &self,
         randomness: Value<F>,
-    ) -> Vec<ValidatorsRow<Value<F>>> {
+    ) -> Vec<CasperEntityRow<Value<F>>> {
         let new_state_row =
-            |field_tag: FieldTag, index: usize, value, ssz_rlc, gindex: u64| ValidatorsRow {
+            |field_tag: FieldTag, index: usize, value, ssz_rlc, gindex: u64| CasperEntityRow {
                 id: Value::known(F::from(self.id as u64)),
                 tag: Value::known(F::from(StateTag::Validator as u64)),
                 is_active: Value::known(F::from(self.is_active as u64)),
@@ -113,8 +114,8 @@ impl Committee {
     pub(crate) fn table_assignment<F: Field>(
         &self,
         randomness: Value<F>,
-    ) -> Vec<ValidatorsRow<Value<F>>> {
-        let new_state_row = |field_tag: FieldTag, index: usize, value| ValidatorsRow {
+    ) -> Vec<CasperEntityRow<Value<F>>> {
+        let new_state_row = |field_tag: FieldTag, index: usize, value| CasperEntityRow {
             id: Value::known(F::from(self.id as u64)),
             tag: Value::known(F::from(StateTag::Committee as u64)),
             is_active: Value::known(F::zero()),
@@ -138,10 +139,58 @@ impl Committee {
             Value::known(F::from(self.accumulated_balance as u64)),
         )]
         .into_iter()
+        // TODO: 
         // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.x), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
         // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.y), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
         .collect()
     }
+}
+
+
+pub enum CasperEntity<'a> {
+    Validator(&'a Validator),
+    Committee(&'a Committee)
+}
+
+impl<'a> CasperEntity<'a> {
+    pub fn table_assignment<F: Field>(&self, randomness: Value<F>) -> Vec<CasperEntityRow<Value<F>>> {
+        match self {
+            CasperEntity::Validator(v) => v.table_assignment(randomness),
+            CasperEntity::Committee(c) => c.table_assignment(randomness),
+        }
+    }
+}
+
+pub fn into_casper_entities<'a>(
+    validators: impl Iterator<Item=&'a Validator>,
+    committees: impl Iterator<Item=&'a Committee>,
+) -> Vec<CasperEntity<'a>> {
+    let mut casper_entity = vec![];
+
+    let mut committees: Vec<&Committee> = committees.collect();
+
+    let groups = validators
+        .group_by(|v| v.committee);
+    let validators_per_committees = {
+        groups
+        .into_iter()
+        .sorted_by_key(|(committee, vs)| *committee)
+        .map(|(_, vs)| vs.collect_vec())};
+
+    assert_eq!(
+        validators_per_committees.len(),
+        committees.len(),
+        "number of given committees not equal to number of committees of given validators",
+    );
+
+    committees.sort_by_key(|v| v.id);
+
+    for (comm_idx, validators) in validators_per_committees.enumerate() {
+        casper_entity.extend(validators.into_iter().map(|v| CasperEntity::Validator(v)));
+        casper_entity.push(CasperEntity::Committee(committees[comm_idx]));
+    }
+
+    casper_entity
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, EnumIter, Hash)]
@@ -171,7 +220,7 @@ impl_expr!(FieldTag);
 
 /// State table row assignment
 #[derive(Clone, Copy, Debug)]
-pub struct ValidatorsRow<F> {
+pub struct CasperEntityRow<F> {
     pub(crate) id: F,
     pub(crate) tag: F,
     pub(crate) is_active: F,
@@ -183,7 +232,7 @@ pub struct ValidatorsRow<F> {
     pub(crate) ssz_rlc: F,
 }
 
-impl<F: Field> ValidatorsRow<F> {
+impl<F: Field> CasperEntityRow<F> {
     pub(crate) fn values(&self) -> [F; 9] {
         [
             self.id,
