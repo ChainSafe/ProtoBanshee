@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use crate::{
         sha256_circuit::{Sha256Circuit, Sha256CircuitConfig},
-        witness::{MerkleTrace, StateEntry},
+        witness::{MerkleTrace, Validator},
     };
     use halo2_proofs::{
         circuit::{SimpleFloorPlanner, Value},
@@ -238,7 +238,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestStateSSZ<F: Field> {
-        state: Vec<StateEntry>,
+        validators: Vec<Validator>,
         state_circuit: StateSSZCircuit<F>,
         _f: PhantomData<F>,
     }
@@ -289,13 +289,13 @@ mod tests {
     #[test]
     fn test_state_ssz_circuit() {
         let k = 10;
-        let state: Vec<StateEntry> =
+        let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
         let merkle_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
         let circuit = TestStateSSZ::<Fr> {
-            state,
+            validators,
             state_circuit: StateSSZCircuit::new(merkle_trace),
             _f: PhantomData,
         };

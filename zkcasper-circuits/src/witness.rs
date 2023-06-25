@@ -3,8 +3,8 @@
 mod block;
 pub use block::*;
 
-mod state;
-pub use state::*;
+mod validators;
+pub use validators::*;
 
 mod merkle;
 pub use merkle::*;

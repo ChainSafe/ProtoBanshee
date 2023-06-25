@@ -1,6 +1,6 @@
 use itertools::Itertools;
 
-use crate::witness::{StateEntry, StateRow};
+use crate::witness::{Validator, ValidatorsRow, Committee};
 
 use super::*;
 
@@ -9,7 +9,7 @@ use super::*;
 pub struct ValidatorsTable {
     /// ValidatorIndex when tag == 'Validator', CommitteeIndex otherwise.
     pub id: Column<Advice>,
-    /// Type of entity contained in BeaconState "god" object
+    /// Validator or Committee
     pub tag: Column<Advice>,
     /// Signals whether validator is active during that epoch.
     pub is_active: Column<Advice>,
@@ -77,7 +77,7 @@ impl ValidatorsTable {
         &self,
         region: &mut Region<'_, F>,
         offset: usize,
-        row: &StateRow<Value<F>>,
+        row: &ValidatorsRow<Value<F>>,
     ) -> Result<(), Error> {
         for (column, value) in [
             (self.id, row.id),
@@ -104,14 +104,15 @@ impl ValidatorsTable {
     pub fn load<F: Field>(
         &self,
         layouter: &mut impl Layouter<F>,
-        entries: &[StateEntry],
+        validators: &[Validator],
+        // TODO: committess: &[Committee],
         challenge: Value<F>,
     ) -> Result<(), Error> {
         layouter.assign_region(
             || "state table",
             |mut region| {
                 self.annotate_columns_in_region(&mut region);
-                for (offset, row) in entries
+                for (offset, row) in validators
                     .iter()
                     .flat_map(|e| e.table_assignment(challenge))
                     .enumerate()

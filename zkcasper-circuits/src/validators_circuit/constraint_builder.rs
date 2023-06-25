@@ -2,7 +2,7 @@ use super::cell_manager::*;
 use crate::{
     gadget::LtGadget,
     util::{Cell, CellType, ConstrainBuilderCommon, Constraint, Expr, Lookup},
-    witness::{StateEntry, StateRow, StateTag},
+    witness::{Validator, ValidatorsRow, StateTag},
     N_BYTES_U64,
 };
 use eth_types::Field;
@@ -106,7 +106,7 @@ impl<F: Field> ConstraintBuilder<F> {
         &self,
         region: &mut Region<F>,
         offset: usize,
-        data: &StateEntry,
+        data: &Validator,
         target_epoch: u64,
     ) {
         let target_gte_activation = self
@@ -118,27 +118,18 @@ impl<F: Field> ConstraintBuilder<F> {
             .as_ref()
             .expect("target_lt_exited gadget is expected");
 
-        match data {
-            StateEntry::Validator {
-                activation_epoch,
-                exit_epoch,
-                ..
-            } => {
-                target_gte_activation.assign(
-                    region,
-                    offset,
-                    F::from(*activation_epoch),
-                    F::from(target_epoch + 1),
-                );
-                target_lt_exit.assign(
-                    region,
-                    offset,
-                    F::from(target_epoch),
-                    F::from(*exit_epoch),
-                );
-            }
-            StateEntry::Committee { .. } => {}
-        }
+            target_gte_activation.assign(
+                region,
+                offset,
+                F::from(data.activation_epoch),
+                F::from(target_epoch + 1),
+            );
+            target_lt_exit.assign(
+                region,
+                offset,
+                F::from(target_epoch),
+                F::from(data.exit_epoch),
+            );
     }
 }
 

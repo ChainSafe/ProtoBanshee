@@ -102,7 +102,7 @@ const target_epoch = 25;
 
 fs.writeFileSync(
     `../test_data/validators.json`,
-    serialize(Array.from(validators.entries()).map(([i, validator]) => ({Validator: {
+    serialize(Array.from(validators.entries()).map(([i, validator]) => ({
         id: i,
         isActive: !validator.slashed && validator.activationEpoch <= target_epoch && target_epoch < validator.exitEpoch,
         isAttested: true,
@@ -112,7 +112,7 @@ fs.writeFileSync(
         activationEpoch: validator.activationEpoch,
         exitEpoch: validator.exitEpoch,
         gindex: validatorBaseGindices[i]
-    }})))
+    })))
 );
 
 fs.writeFileSync(

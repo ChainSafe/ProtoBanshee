@@ -2,9 +2,9 @@ pub(crate) mod cell_manager;
 pub(crate) mod constraint_builder;
 
 use crate::{
-    table::{LookupTable, ValidatorsTable},
+    table::{LookupTable, ValidatorsTable, state_table::StateTables},
     util::{Cell, Challenges, SubCircuit, SubCircuitConfig},
-    witness::{self, StateEntry, StateTag, StateRow},
+    witness::{self, StateEntry, StateTag, ValidatorsRow},
     MAX_VALIDATORS, STATE_ROWS_PER_VALIDATOR, STATE_ROWS_PER_COMMITEE,
 };
 use cell_manager::CellManager;
@@ -29,8 +29,9 @@ pub(crate) const N_BYTE_LOOKUPS: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct ValidatorsCircuitConfig<F: Field> {
-    q_enabled: Column<Fixed>, // TODO: use selector instead
-    state_table: ValidatorsTable,
+    q_enabled: Column<Fixed>,
+    state_tables: StateTables,
+    validators_table: ValidatorsTable,
     tag: BinaryNumberConfig<StateTag, 3>,
     storage_phase1: Column<Advice>,
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
@@ -38,13 +39,19 @@ pub struct ValidatorsCircuitConfig<F: Field> {
     constraint_builder: ConstraintBuilder<F>,
 }
 
+pub struct ValidatorsCircuitArgs{
+    pub validators_table: ValidatorsTable,
+    pub state_tables: StateTables,
+}
+
 impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
-    type ConfigArgs = ValidatorsTable;
+    type ConfigArgs = ValidatorsCircuitArgs;
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let q_enabled = meta.fixed_column();
         let target_epoch = meta.advice_column();
-        let state_table = args;
+        let state_tables = args.state_tables;
+        let validators_table: ValidatorsTable = args.validators_table;
 
         let storage_phase1 = meta.advice_column_in(FirstPhase);
         let byte_lookup: [_; N_BYTE_LOOKUPS] = (0..N_BYTE_LOOKUPS)
@@ -58,7 +65,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             .collect_vec();
 
         let tag: BinaryNumberConfig<StateTag, 3> =
-            BinaryNumberChip::configure(meta, q_enabled, Some(state_table.tag));
+            BinaryNumberChip::configure(meta, q_enabled, Some(validators_table.tag));
 
         let cell_manager = CellManager::new(meta, MAX_VALIDATORS, &cm_advices);
         let mut constraint_builder = ConstraintBuilder::new(cell_manager);
@@ -66,7 +73,8 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         let mut config = Self {
             q_enabled,
             target_epoch,
-            state_table,
+            state_tables,
+            validators_table,
             tag,
             storage_phase1,
             byte_lookup,
@@ -74,7 +82,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         };
 
         // Annotate circuit
-        config.state_table.annotate_columns(meta);
+        config.validators_table.annotate_columns(meta);
         tag.annotate_columns(meta, "tag");
         config.annotations().iter().for_each(|(col, ann)| {
             meta.annotate_lookup_any_column(*col, || ann);
@@ -184,16 +192,16 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 /// State Circuit for proving RwTable is valid
 #[derive(Default, Clone, Debug)]
 pub struct ValidatorsCircuit<F> {
-    pub(crate) beacon_state: Vec<StateEntry>,
+    pub(crate) validators: Vec<StateEntry>,
     target_epoch: u64,
     _f: PhantomData<F>,
 }
 
 impl<F: Field> ValidatorsCircuit<F> {
     /// make a new state circuit from an RwMap
-    pub fn new(beacon_state: Vec<StateEntry>, target_epoch: u64) -> Self {
+    pub fn new(validators: Vec<StateEntry>, target_epoch: u64) -> Self {
         Self {
-            beacon_state,
+            validators,
             target_epoch,
             _f: PhantomData,
         }
@@ -204,7 +212,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
     type Config = ValidatorsCircuitConfig<F>;
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
-        Self::new(block.beacon_state.clone(), block.target_epoch)
+        Self::new(block.validators.clone(), block.target_epoch)
     }
 
     fn unusable_rows() -> usize {
@@ -226,7 +234,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
         layouter.assign_region(
             || "validators circuit",
             |mut region| {
-                config.assign_with_region(&mut region, &self.beacon_state, self.target_epoch, challenges.sha256_input())
+                config.assign_with_region(&mut region, &self.validators, self.target_epoch, challenges.sha256_input())
             }
         );
 
@@ -245,22 +253,22 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
         selector: meta.query_fixed(c.q_enabled, Rotation::cur()),
         target_epoch: meta.query_advice(c.target_epoch, Rotation::cur()),
         state_table: StateQueries {
-            id: meta.query_advice(c.state_table.id, Rotation::cur()),
-            order: meta.query_advice(c.state_table.id, Rotation::cur()),
-            tag: meta.query_advice(c.state_table.tag, Rotation::cur()),
-            is_active: meta.query_advice(c.state_table.is_active, Rotation::cur()),
-            is_attested: meta.query_advice(c.state_table.is_attested, Rotation::cur()),
-            field_tag: meta.query_advice(c.state_table.field_tag, Rotation::cur()),
-            index: meta.query_advice(c.state_table.index, Rotation::cur()),
-            g_index: meta.query_advice(c.state_table.gindex, Rotation::cur()),
-            value: meta.query_advice(c.state_table.value, Rotation::cur()),
+            id: meta.query_advice(c.validators_table.id, Rotation::cur()),
+            order: meta.query_advice(c.validators_table.id, Rotation::cur()),
+            tag: meta.query_advice(c.validators_table.tag, Rotation::cur()),
+            is_active: meta.query_advice(c.validators_table.is_active, Rotation::cur()),
+            is_attested: meta.query_advice(c.validators_table.is_attested, Rotation::cur()),
+            field_tag: meta.query_advice(c.validators_table.field_tag, Rotation::cur()),
+            index: meta.query_advice(c.validators_table.index, Rotation::cur()),
+            g_index: meta.query_advice(c.validators_table.gindex, Rotation::cur()),
+            value: meta.query_advice(c.validators_table.value, Rotation::cur()),
             // vitual queries for tag == 'validator'
-            balance: meta.query_advice(c.state_table.value, Rotation::cur()),
-            slashed: meta.query_advice(c.state_table.value, Rotation::next()),
-            activation_epoch: meta.query_advice(c.state_table.value, Rotation(2)),
-            exit_epoch: meta.query_advice(c.state_table.value, Rotation(3)),
-            pubkey_lo: meta.query_advice(c.state_table.value, Rotation(4)),
-            pubkey_hi: meta.query_advice(c.state_table.value, Rotation(5)),
+            balance: meta.query_advice(c.validators_table.value, Rotation::cur()),
+            slashed: meta.query_advice(c.validators_table.value, Rotation::next()),
+            activation_epoch: meta.query_advice(c.validators_table.value, Rotation(2)),
+            exit_epoch: meta.query_advice(c.validators_table.value, Rotation(3)),
+            pubkey_lo: meta.query_advice(c.validators_table.value, Rotation(4)),
+            pubkey_hi: meta.query_advice(c.validators_table.value, Rotation(5)),
         },
         tag_bits: c
             .tag
@@ -274,7 +282,7 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
 mod tests {
     use super::*;
     use crate::{
-        witness::{MerkleTrace, StateEntry},
+        witness::{MerkleTrace, StateEntry}, table::state_table::StateTables,
     };
     use halo2_proofs::{
         circuit::{SimpleFloorPlanner, Value},
@@ -288,6 +296,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TestValidators<F: Field> {
         validators_circuit: ValidatorsCircuit<F>,
+        state_tree_trace: MerkleTrace,
         _f: PhantomData<F>,
     }
 
@@ -300,9 +309,12 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let state_table = ValidatorsTable::construct(meta);
+            let args = ValidatorsCircuitArgs {
+                state_tables: StateTables::dev_construct(meta),
+                validators_table: ValidatorsTable::construct(meta)
+            };
             (
-                ValidatorsCircuitConfig::new(meta, state_table),
+                ValidatorsCircuitConfig::new(meta, args),
                 Challenges::construct(meta)
             )
         }
@@ -315,8 +327,12 @@ mod tests {
             let challenge = config.1.sha256_input();
             config
                 .0
-                .state_table
-                .load(&mut layouter, &self.validators_circuit.beacon_state, challenge)?;
+                .validators_table
+                .load(&mut layouter, &self.validators_circuit.validators, challenge)?;
+            config
+                .0
+                .state_tables
+                .dev_load(&mut layouter, &self.state_tree_trace, challenge)?;
             self.validators_circuit.synthesize_sub(
                 &config.0,
                 &config.1.values(&mut layouter),
@@ -329,11 +345,14 @@ mod tests {
     #[test]
     fn test_validators_circuit() {
         let k = 10;
-        let state: Vec<StateEntry> =
+        let validators: Vec<StateEntry> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
+        let state_tree_trace: MerkleTrace =
+            serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
     
         let circuit = TestValidators::<Fr> {
-            validators_circuit: ValidatorsCircuit::new(state, 25),
+            validators_circuit: ValidatorsCircuit::new(validators, 25),
+            state_tree_trace,
             _f: PhantomData,
         };
 

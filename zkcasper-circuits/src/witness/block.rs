@@ -1,4 +1,4 @@
-use super::{StateEntry, MerkleTrace};
+use super::{Validator, MerkleTrace};
 
 // TODO: Remove fields that are duplicated in`eth_block`
 /// Block is the struct used by all circuits, which contains all the needed
@@ -11,7 +11,7 @@ pub struct Block<F> {
     /// The target epoch
     pub target_epoch: u64,
 
-    pub beacon_state: Vec<StateEntry>,
+    pub validators: Vec<Validator>,
 
     pub merkle_trace: MerkleTrace,
 }
