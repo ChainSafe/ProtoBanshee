@@ -1,4 +1,4 @@
-use crate::{table::state_table, util::ConstrainBuilderCommon, MAX_VALIDATORS};
+use crate::{table::{validators_table, state_table::StateTable}, util::ConstrainBuilderCommon, MAX_VALIDATORS};
 
 pub mod cell_manager;
 use cell_manager::CellManager;
@@ -11,7 +11,7 @@ use merkle_tree::TreeLevel;
 
 use crate::{
     gadget::IsEqualGadget,
-    table::{sha256_table, LookupTable, SHA256Table, StateTable},
+    table::{sha256_table, LookupTable, SHA256Table},
     util::{Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, MerkleTrace},
 };
@@ -50,13 +50,13 @@ pub const VALIDATORS_LEVEL: usize = PUBKEYS_LEVEL - 1;
 pub struct StateSSZCircuitConfig<F: Field> {
     tree: [TreeLevel<F>; TREE_DEPTH - 1],
     sha256_table: SHA256Table,
-    state_table: StateTable,
+    pub state_table: [StateTable; 2],
+    
     // state_root: Column<Instance>
 }
 
 pub struct StateSSZCircuitArgs {
     pub sha256_table: SHA256Table,
-    pub state_table: StateTable,
 }
 
 impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
@@ -64,16 +64,21 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let sha256_table = args.sha256_table;
-        let state_table = args.state_table;
 
-        let mut tree = vec![TreeLevel::configure(meta, PUBKEYS_LEVEL, 0, 3, true)];
+        let pubkeys_level = TreeLevel::configure(meta, PUBKEYS_LEVEL, 0, 3);
+        let validators_level = TreeLevel::configure(meta, VALIDATORS_LEVEL, 0, 0);
+
+        let state_table: [StateTable; 2] = [
+            pubkeys_level.clone().into(),
+            validators_level.clone().into(),
+        ];
+
+        let mut tree = vec![pubkeys_level, validators_level];
 
         let mut padding = 0;
-        for i in (2..TREE_DEPTH).rev() {
-            if i != VALIDATORS_LEVEL {
-                padding = padding * 2 + 1;
-            }
-            let level = TreeLevel::configure(meta, i, 0, padding, i == VALIDATORS_LEVEL);
+        for i in (2..=TREE_DEPTH-2).rev() {
+            padding = padding * 2 + 1;
+            let level = TreeLevel::configure(meta, i, 0, padding);
             tree.push(level);
         }
 
@@ -81,7 +86,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
 
         // Annotate circuit
         sha256_table.annotate_columns(meta);
-        state_table.annotate_columns(meta);
+        state_table.iter().for_each(|table| table.annotate_columns(meta));
 
         for depth in (2..TREE_DEPTH).rev() {
             let depth = depth - 1;
@@ -92,58 +97,8 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
                 let selector = level.selector(meta);
                 let mut cb = ConstraintBuilder::new();
                 cb.require_boolean("into_left is boolean", level.into_left(meta));
-                if let Some(is_left_col) = level.is_left {
-                    cb.require_boolean(
-                        "is_left is boolean",
-                        meta.query_advice(is_left_col, Rotation::cur()),
-                    );
-                }
-                if let Some(is_right_col) = level.is_right {
-                    cb.require_boolean(
-                        "is_right is boolean",
-                        meta.query_advice(is_right_col, Rotation::cur()),
-                    );
-                }
                 cb.gate(selector)
             });
-
-            if let Some(is_left_col) = level.is_left {
-                meta.lookup_any(
-                    "state_table.lookup(index, node)",
-                    |meta| {
-                        let selector = level.selector(meta);
-                        let is_left = meta.query_advice(is_left_col, Rotation::cur());
-                        let index = level.index(meta);
-                        let node = level.node(meta);
-
-                        state_table.build_lookup(
-                            meta,
-                            selector * is_left,
-                            index,
-                            node,
-                        )
-                    },
-                );
-            }
-
-            if let Some(is_right_col) = level.is_right {
-                meta.lookup_any(
-                    "state_table.lookup(sibling_index, sibling)",
-                    |meta| {
-                        let selector = level.selector(meta);
-                        let is_right = meta.query_advice(is_right_col, Rotation::cur());
-                        let sibling_index = level.sibling_index(meta);
-                        let sibling = level.sibling(meta);
-
-                        state_table.build_lookup(
-                            meta,
-                            selector * is_right,
-                            sibling_index,
-                            sibling,
-                        )
-                    },
-                );
-            }
 
             meta.lookup_any("hash(node, sibling) == next_level.node", |meta| {
                 let selector = level.selector(meta);
@@ -178,7 +133,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
     }
 
     fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-        self.state_table.annotate_columns_in_region(region);
+        self.state_table.iter().for_each(|table| table.annotate_columns_in_region(region));
         self.sha256_table.annotate_columns_in_region(region);
         for level in self.tree.iter() {
             level.annotate_columns_in_region(region);
@@ -191,7 +146,7 @@ impl<F: Field> StateSSZCircuitConfig<F> {
         &self,
         layouter: &mut impl Layouter<F>,
         witness: &MerkleTrace,
-        challange: Value<F>,
+        challenge: Value<F>,
     ) -> Result<usize, Error> {
         let trace_by_depth = witness.trace_by_levels();
 
@@ -209,7 +164,7 @@ impl<F: Field> StateSSZCircuitConfig<F> {
                 // filter out the first (root) level, state root is assigned seperately into instance column.
                 let trace_by_depth = trace_by_depth.clone().into_iter().filter(|e| e[0].depth != 1).collect_vec();
                 for (level, steps) in self.tree.iter().zip(trace_by_depth) {
-                    level.assign_with_region(&mut region, steps, challange)?;
+                    level.assign_with_region(&mut region, steps, challenge)?;
                 }
 
                 Ok(())
@@ -297,14 +252,12 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let state_table = StateTable::construct(meta);
             let sha256_table = SHA256Table::construct(meta);
 
             let config = {
                 StateSSZCircuitConfig::new(
                     meta,
                     StateSSZCircuitArgs {
-                        state_table,
                         sha256_table,
                     },
                 )
@@ -320,10 +273,6 @@ mod tests {
         ) -> Result<(), Error> {
             let challenge = config.1.sha256_input();
             let hash_inputs = self.state_circuit.trace.sha256_inputs();
-            config
-                .0
-                .state_table
-                .load(&mut layouter, &self.state, challenge)?;
             config
                 .0
                 .sha256_table

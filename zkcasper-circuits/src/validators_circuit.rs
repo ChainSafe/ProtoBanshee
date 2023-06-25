@@ -2,7 +2,7 @@ pub(crate) mod cell_manager;
 pub(crate) mod constraint_builder;
 
 use crate::{
-    table::{LookupTable, StateTable},
+    table::{LookupTable, ValidatorsTable},
     util::{Cell, Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, StateEntry, StateTag, StateRow},
     MAX_VALIDATORS, STATE_ROWS_PER_VALIDATOR, STATE_ROWS_PER_COMMITEE,
@@ -30,7 +30,7 @@ pub(crate) const N_BYTE_LOOKUPS: usize = 8;
 #[derive(Clone, Debug)]
 pub struct ValidatorsCircuitConfig<F: Field> {
     q_enabled: Column<Fixed>, // TODO: use selector instead
-    state_table: StateTable,
+    state_table: ValidatorsTable,
     tag: BinaryNumberConfig<StateTag, 3>,
     storage_phase1: Column<Advice>,
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
@@ -39,7 +39,7 @@ pub struct ValidatorsCircuitConfig<F: Field> {
 }
 
 impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
-    type ConfigArgs = StateTable;
+    type ConfigArgs = ValidatorsTable;
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let q_enabled = meta.fixed_column();
@@ -300,7 +300,7 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let state_table = StateTable::construct(meta);
+            let state_table = ValidatorsTable::construct(meta);
             (
                 ValidatorsCircuitConfig::new(meta, state_table),
                 Challenges::construct(meta)

@@ -56,27 +56,27 @@ for (let i = 0; i < N; i++) {
     console.log([
         [
             ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n, 
-            ValidatorsSsz.getPathInfo([i]).gindex * 16n
+            "pubkey1"
         ],
         [
             ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n + 1n, 
-            ValidatorsSsz.getPathInfo([i]).gindex * 16n + 1n
+            "pubkey2"
         ],
         [
             ValidatorsSsz.getPathInfo([i, 'effectiveBalance']).gindex, 
-            ValidatorsSsz.getPathInfo([i]).gindex * 8n + 2n
+            "effectiveBalance"
         ],
         [
             ValidatorsSsz.getPathInfo([i, 'slashed']).gindex, 
-            ValidatorsSsz.getPathInfo([i]).gindex * 8n + 3n
+            "slashed"
         ],
         [
             ValidatorsSsz.getPathInfo([i, 'activationEpoch']).gindex, 
-            ValidatorsSsz.getPathInfo([i]).gindex * 8n + 5n
+            "activationEpoch"            
         ],
         [
             ValidatorsSsz.getPathInfo([i, 'exitEpoch']).gindex, 
-            ValidatorsSsz.getPathInfo([i]).gindex * 8n + 6n
+            "exitEpoch"
         ],
     ]);
     gindices.push(ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n);

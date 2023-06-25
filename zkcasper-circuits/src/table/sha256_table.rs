@@ -124,7 +124,7 @@ impl SHA256Table {
         ]
     }
 
-    /// Load sha256 table but without running the full sha256 circuit.
+    /// Load sha256 table without running the full sha256 circuit.
     pub fn dev_load<'a, F: Field>(
         &self,
         layouter: &mut impl Layouter<F>,

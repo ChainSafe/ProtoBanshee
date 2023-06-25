@@ -2,7 +2,7 @@ use super::cell_manager::CellManager;
 use crate::{
     state_circuit::{StateSSZCircuitConfig, TREE_LEVEL_AUX_COLUMNS},
     util::{Cell, CellType},
-    witness::{MerkleTrace, MerkleTraceStep},
+    witness::{MerkleTrace, MerkleTraceStep}, table::state_table::StateTable,
 };
 use eth_types::*;
 use gadgets::{binary_number::BinaryNumberConfig, util::{Expr, rlc}};
@@ -24,8 +24,6 @@ pub struct TreeLevel<F> {
     node: Column<Advice>,
     index: Column<Advice>,
     into_left: Column<Advice>,
-    pub(crate) is_left: Option<Column<Advice>>,
-    pub(crate) is_right: Option<Column<Advice>>,
     offset: usize,
     _f: std::marker::PhantomData<F>,
     // pub(super) cell_manager: CellManager<F>,
@@ -37,7 +35,6 @@ impl<F: Field> TreeLevel<F> {
         depth: usize,
         offset: usize,
         padding: usize,
-        has_leaves: bool,
     ) -> Self {
         let q_enabled = meta.fixed_column();
         let sibling = meta.advice_column();
@@ -45,16 +42,6 @@ impl<F: Field> TreeLevel<F> {
         let node = meta.advice_column();
         let index = meta.advice_column();
         let into_left = meta.advice_column();
-        let is_left = if has_leaves {
-            Some(meta.advice_column())
-        } else {
-            None
-        };
-        let is_right = if has_leaves {
-            Some(meta.advice_column())
-        } else {
-            None
-        };
         
         let config = Self {
             q_enabled,
@@ -65,8 +52,6 @@ impl<F: Field> TreeLevel<F> {
             node,
             index,
             into_left,
-            is_left,
-            is_right,
             offset,
             _f: std::marker::PhantomData,
         };
@@ -91,7 +76,6 @@ impl<F: Field> TreeLevel<F> {
             assert_eq!(step.node.len(), 32);
             let node_rlc = challange.map(|rnd| rlc::value(&step.node, rnd));
             let sibling_rlc = challange.map(|rnd| rlc::value(&step.sibling, rnd));
-            let parent_rlc = challange.map(|rnd| rlc::value(&step.parent, rnd));
 
             region.assign_fixed(
                 || "q_enabled",
@@ -129,43 +113,20 @@ impl<F: Field> TreeLevel<F> {
                 offset,
                 || Value::known(F::from(step.into_left as u64)),
             )?;
-            if let Some(is_left) = self.is_left {
-                region.assign_advice(
-                    || "is_left",
-                    is_left,
-                    offset,
-                    || Value::known(F::from(step.is_left as u64)),
-                )?;
-            }
-            if let Some(is_right) = self.is_right {
-                region.assign_advice(
-                    || "is_right",
-                    is_right,
-                    offset,
-                    || Value::known(F::from(step.is_right as u64)),
-                )?;
-            }
         }
 
         Ok(())
     }
 
     pub fn annotations(&self) -> Vec<(Column<Any>, String)> {
-        let mut annotations: Vec<(Column<Any>, String)> = vec![
+        vec![
             (self.q_enabled.into(), format!("{}/q_enabled", self.depth)),
             (self.sibling.into(), format!("{}/sibling", self.depth)),
             (self.sibling_index.into(), format!("{}/sibling_index", self.depth)),
             (self.node.into(), format!("{}/node", self.depth)),
             (self.index.into(), format!("{}/index", self.depth)),
             (self.into_left.into(), format!("{}/into_left", self.depth))
-        ];
-        if let Some(is_left) = self.is_left {
-            annotations.push((is_left.into(), format!("{}/is_left", self.depth)));
-        }
-        if let Some(is_right) = self.is_right {
-            annotations.push((is_right.into(), format!("{}/is_right", self.depth)));
-        }
-        annotations
+        ]
     }
 
     pub fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
@@ -216,5 +177,17 @@ impl<F: Field> TreeLevel<F> {
 
     pub fn into_left(&self, meta: &mut VirtualCells<'_, F>) -> Expression<F> {
         meta.query_advice(self.into_left, Rotation::cur())
+    }
+}
+
+impl<F: Field> Into<StateTable> for TreeLevel<F> {
+    fn into(self) -> StateTable {
+        StateTable{
+            is_enabled: self.q_enabled,
+            sibling: self.sibling,
+            sibling_index: self.sibling_index,
+            node: self.node,
+            index: self.index,
+        }
     }
 }
