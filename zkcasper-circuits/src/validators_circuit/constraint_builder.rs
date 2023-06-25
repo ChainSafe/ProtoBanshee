@@ -20,7 +20,11 @@ pub struct ConstraintBuilder<'a, F: Field> {
 }
 
 impl<'a, F: Field> ConstraintBuilder<'a, F> {
-    pub fn new(cell_manager: &'a mut CellManager<F>, max_degree: usize, selector: Expression<F>) -> Self {
+    pub fn new(
+        cell_manager: &'a mut CellManager<F>,
+        max_degree: usize,
+        selector: Expression<F>,
+    ) -> Self {
         Self {
             constraints: vec![],
             lookups: vec![],
@@ -89,7 +93,6 @@ pub struct Queries<F: Field> {
     pub target_epoch: Expression<F>,
     pub table: ValidatorTableQueries<F>,
 }
-
 
 impl<F: Field> Queries<F> {
     pub fn selector(&self) -> Expression<F> {

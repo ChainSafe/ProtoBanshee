@@ -1,4 +1,4 @@
-use super::{Validator, MerkleTrace, Committee};
+use super::{Committee, MerkleTrace, Validator};
 
 // TODO: Remove fields that are duplicated in`eth_block`
 /// Block is the struct used by all circuits, which contains all the needed

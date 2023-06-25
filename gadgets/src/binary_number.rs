@@ -101,7 +101,9 @@ where
         self.bits
             .iter()
             .zip(annotations.iter())
-            .for_each(|(col, ann)| meta.annotate_lookup_any_column(*col, || format!("{}_{}", prefix, ann)));
+            .for_each(|(col, ann)| {
+                meta.annotate_lookup_any_column(*col, || format!("{}_{}", prefix, ann))
+            });
     }
 
     /// Annotates columns of this gadget embedded within a circuit region.

@@ -12,8 +12,7 @@ use crate::{
     witness::{
         self, into_casper_entities, CasperEntity, CasperEntityRow, Committee, StateTag, Validator,
     },
-    MAX_VALIDATORS, N_BYTES_U64,
-    VALIDATOR0_GINDEX,
+    MAX_VALIDATORS, N_BYTES_U64, VALIDATOR0_GINDEX,
 };
 use cell_manager::CellManager;
 use constraint_builder::*;
@@ -132,7 +131,10 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             );
 
             cb.condition(q.table.is_active(), |cb| {
-                cb.require_zero("slashed is false for active validators", q.table.slashed.value());
+                cb.require_zero(
+                    "slashed is false for active validators",
+                    q.table.slashed.value(),
+                );
 
                 cb.require_true(
                     "activation_epoch <= target_epoch > exit_epoch for active validators",
@@ -231,9 +233,11 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_zero("is_active is 0 for committees", q.table.is_active());
             cb.require_zero("is_attested is 0 for committees", q.table.is_attested());
             cb.require_zero("slashed is 0 for committees", q.table.slashed.value());
-            cb.require_zero("activation epoch is 0 for committees", q.table.exit_epoch.value());
+            cb.require_zero(
+                "activation epoch is 0 for committees",
+                q.table.exit_epoch.value(),
+            );
             cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch.value());
-
 
             cb.gate(q.selector() * q.table.is_committee())
         });
@@ -303,8 +307,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 || Value::known(F::from(target_epoch)),
             )?; // TODO: assign from instance instead
 
-              // TODO: enable selector to max_rows
-              region.assign_fixed(
+            // TODO: enable selector to max_rows
+            region.assign_fixed(
                 || "assign q_enabled",
                 self.q_enabled,
                 offset,

@@ -1,14 +1,20 @@
 use super::cell_manager::CellManager;
 use crate::{
     state_circuit::{StateSSZCircuitConfig, TREE_LEVEL_AUX_COLUMNS},
+    table::state_table::StateTable,
     util::{Cell, CellType},
-    witness::{MerkleTrace, MerkleTraceStep}, table::state_table::StateTable,
+    witness::{MerkleTrace, MerkleTraceStep},
 };
 use eth_types::*;
-use gadgets::{binary_number::BinaryNumberConfig, util::{Expr, rlc}};
+use gadgets::{
+    binary_number::BinaryNumberConfig,
+    util::{rlc, Expr},
+};
 use halo2_proofs::{
     circuit::{Region, Value},
-    plonk::{Advice, Column, ConstraintSystem, Error, Expression, VirtualCells, Fixed, Any, SecondPhase},
+    plonk::{
+        Advice, Any, Column, ConstraintSystem, Error, Expression, Fixed, SecondPhase, VirtualCells,
+    },
     poly::Rotation,
 };
 use itertools::Itertools;
@@ -42,7 +48,7 @@ impl<F: Field> TreeLevel<F> {
         let node = meta.advice_column_in(SecondPhase);
         let index = meta.advice_column_in(SecondPhase);
         let into_left = meta.advice_column();
-        
+
         let config = Self {
             q_enabled,
             depth,
@@ -57,9 +63,10 @@ impl<F: Field> TreeLevel<F> {
         };
 
         // Annotate columns
-       config.annotations()
-        .into_iter()
-        .for_each(|(col, ann)| meta.annotate_lookup_any_column(col, || &ann));
+        config
+            .annotations()
+            .into_iter()
+            .for_each(|(col, ann)| meta.annotate_lookup_any_column(col, || &ann));
 
         config
     }
@@ -68,7 +75,7 @@ impl<F: Field> TreeLevel<F> {
         &self,
         region: &mut Region<'_, F>,
         steps: Vec<&MerkleTraceStep>,
-        challange: Value<F>
+        challange: Value<F>,
     ) -> Result<(), Error> {
         for (i, step) in steps.into_iter().enumerate() {
             let offset = self.offset + i * (self.padding + 1);
@@ -77,31 +84,21 @@ impl<F: Field> TreeLevel<F> {
             let node_rlc = challange.map(|rnd| rlc::value(&step.node, rnd));
             let sibling_rlc = challange.map(|rnd| rlc::value(&step.sibling, rnd));
 
-            // TODO: fixed q_enabled should be set seprarately to the bottom of the table 
+            // TODO: fixed q_enabled should be set seprarately to the bottom of the table
             region.assign_fixed(
                 || "q_enabled",
                 self.q_enabled,
                 offset,
                 || Value::known(F::one()),
             )?;
-            region.assign_advice(
-                || "sibling",
-                self.sibling,
-                offset,
-                || sibling_rlc,
-            )?;
+            region.assign_advice(|| "sibling", self.sibling, offset, || sibling_rlc)?;
             region.assign_advice(
                 || "sibling_index",
                 self.sibling_index,
                 offset,
                 || Value::known(F::from(step.sibling_index as u64)),
             )?;
-            region.assign_advice(
-                || "node",
-                self.node,
-                offset,
-                || node_rlc,
-            )?;
+            region.assign_advice(|| "node", self.node, offset, || node_rlc)?;
             region.assign_advice(
                 || "index",
                 self.index,
@@ -123,17 +120,20 @@ impl<F: Field> TreeLevel<F> {
         vec![
             (self.q_enabled.into(), format!("{}/q_enabled", self.depth)),
             (self.sibling.into(), format!("{}/sibling", self.depth)),
-            (self.sibling_index.into(), format!("{}/sibling_index", self.depth)),
+            (
+                self.sibling_index.into(),
+                format!("{}/sibling_index", self.depth),
+            ),
             (self.node.into(), format!("{}/node", self.depth)),
             (self.index.into(), format!("{}/index", self.depth)),
-            (self.into_left.into(), format!("{}/into_left", self.depth))
+            (self.into_left.into(), format!("{}/into_left", self.depth)),
         ]
     }
 
     pub fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-       self.annotations()
-       .into_iter()
-       .for_each(|(col, ann)| region.name_column(|| &ann, col));
+        self.annotations()
+            .into_iter()
+            .for_each(|(col, ann)| region.name_column(|| &ann, col));
     }
 
     pub fn padding(&self) -> i32 {
@@ -183,7 +183,7 @@ impl<F: Field> TreeLevel<F> {
 
 impl<F: Field> Into<StateTable> for TreeLevel<F> {
     fn into(self) -> StateTable {
-        StateTable{
+        StateTable {
             is_enabled: self.q_enabled,
             sibling: self.sibling,
             sibling_index: self.sibling_index,

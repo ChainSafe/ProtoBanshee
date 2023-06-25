@@ -41,42 +41,40 @@ impl Validator {
         &self,
         randomness: Value<F>,
     ) -> Vec<CasperEntityRow<F>> {
-        vec![
-            CasperEntityRow {
-                id: Value::known(F::from(self.id as u64)),
-                tag: Value::known(F::one()),
-                is_active: Value::known(F::from(self.is_active as u64)),
-                is_attested: Value::known(F::from(self.is_attested as u64)),
-                balance: ValueRLC::new(
-                    Value::known(F::from(self.effective_balance as u64)),
-                    randomness.map(|rnd| {
-                        rlc::value(
-                            &pad_to_ssz_chunk(&self.effective_balance.to_le_bytes()),
-                            rnd,
-                        )
-                    })
-                ),
-                slashed: ValueRLC::new(
-                    Value::known(F::from(self.slashed as u64)),
-                    randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&[self.slashed as u8]), rnd))
-                ),
-                activation_epoch: ValueRLC::new(
-                    Value::known(F::from(self.activation_epoch as u64)),
-                    randomness.map(|rnd| {
-                        rlc::value(&pad_to_ssz_chunk(&self.activation_epoch.to_le_bytes()), rnd)
-                    })
-                ),
-                exit_epoch: ValueRLC::new(
-                    Value::known(F::from(self.exit_epoch as u64)),
-                    randomness
-                        .map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.exit_epoch.to_le_bytes()), rnd)),
-                ),
-                pubkey: [
-                    randomness.map(|rnd| rlc::value(&self.pubkey[0..32], rnd)),
-                    randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.pubkey[32..48]), rnd))
-                ],
-            }
-        ]
+        vec![CasperEntityRow {
+            id: Value::known(F::from(self.id as u64)),
+            tag: Value::known(F::one()),
+            is_active: Value::known(F::from(self.is_active as u64)),
+            is_attested: Value::known(F::from(self.is_attested as u64)),
+            balance: ValueRLC::new(
+                Value::known(F::from(self.effective_balance as u64)),
+                randomness.map(|rnd| {
+                    rlc::value(
+                        &pad_to_ssz_chunk(&self.effective_balance.to_le_bytes()),
+                        rnd,
+                    )
+                }),
+            ),
+            slashed: ValueRLC::new(
+                Value::known(F::from(self.slashed as u64)),
+                randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&[self.slashed as u8]), rnd)),
+            ),
+            activation_epoch: ValueRLC::new(
+                Value::known(F::from(self.activation_epoch as u64)),
+                randomness.map(|rnd| {
+                    rlc::value(&pad_to_ssz_chunk(&self.activation_epoch.to_le_bytes()), rnd)
+                }),
+            ),
+            exit_epoch: ValueRLC::new(
+                Value::known(F::from(self.exit_epoch as u64)),
+                randomness
+                    .map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.exit_epoch.to_le_bytes()), rnd)),
+            ),
+            pubkey: [
+                randomness.map(|rnd| rlc::value(&self.pubkey[0..32], rnd)),
+                randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.pubkey[32..48]), rnd)),
+            ],
+        }]
     }
 }
 
@@ -85,40 +83,33 @@ impl Committee {
         &self,
         randomness: Value<F>,
     ) -> Vec<CasperEntityRow<F>> {
-        vec![
-            CasperEntityRow {
-                id: Value::known(F::from(self.id as u64)),
-                tag: Value::known(F::zero()),
-                is_active: Value::known(F::zero()),
-                is_attested: Value::known(F::zero()),
-                balance: ValueRLC::new(
-                    Value::known(F::from(self.accumulated_balance as u64)),
-                    randomness.map(|rnd| {
-                        rlc::value(
-                            &pad_to_ssz_chunk(&self.accumulated_balance.to_le_bytes()),
-                            rnd,
-                        )
-                    })
-                ),
-                slashed: ValueRLC::empty(),
-                activation_epoch: ValueRLC::empty(),
-                exit_epoch: ValueRLC::empty(),
-                pubkey: [
-                    Value::known(F::zero()),
-                    Value::known(F::zero())
-                ]
-                // TODO: 
-                // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.x), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
-                // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.y), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
-            }
-        ]
+        vec![CasperEntityRow {
+            id: Value::known(F::from(self.id as u64)),
+            tag: Value::known(F::zero()),
+            is_active: Value::known(F::zero()),
+            is_attested: Value::known(F::zero()),
+            balance: ValueRLC::new(
+                Value::known(F::from(self.accumulated_balance as u64)),
+                randomness.map(|rnd| {
+                    rlc::value(
+                        &pad_to_ssz_chunk(&self.accumulated_balance.to_le_bytes()),
+                        rnd,
+                    )
+                }),
+            ),
+            slashed: ValueRLC::empty(),
+            activation_epoch: ValueRLC::empty(),
+            exit_epoch: ValueRLC::empty(),
+            pubkey: [Value::known(F::zero()), Value::known(F::zero())], // TODO:
+                                                                        // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.x), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
+                                                                        // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.y), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
+        }]
     }
 }
 
-
 pub enum CasperEntity<'a> {
     Validator(&'a Validator),
-    Committee(&'a Committee)
+    Committee(&'a Committee),
 }
 
 impl<'a> CasperEntity<'a> {
@@ -131,20 +122,20 @@ impl<'a> CasperEntity<'a> {
 }
 
 pub fn into_casper_entities<'a>(
-    validators: impl Iterator<Item=&'a Validator>,
-    committees: impl Iterator<Item=&'a Committee>,
+    validators: impl Iterator<Item = &'a Validator>,
+    committees: impl Iterator<Item = &'a Committee>,
 ) -> Vec<CasperEntity<'a>> {
     let mut casper_entity = vec![];
 
     let mut committees: Vec<&Committee> = committees.collect();
 
-    let groups = validators
-        .group_by(|v| v.committee);
+    let groups = validators.group_by(|v| v.committee);
     let validators_per_committees = {
         groups
-        .into_iter()
-        .sorted_by_key(|(committee, vs)| *committee)
-        .map(|(_, vs)| vs.collect_vec())};
+            .into_iter()
+            .sorted_by_key(|(committee, vs)| *committee)
+            .map(|(_, vs)| vs.collect_vec())
+    };
 
     assert_eq!(
         validators_per_committees.len(),
@@ -175,8 +166,6 @@ impl From<StateTag> for usize {
     }
 }
 
-
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldTag {
     EffectiveBalance = 0,
@@ -188,7 +177,6 @@ pub enum FieldTag {
     PubKeyAffineY,
 }
 impl_expr!(FieldTag);
-
 
 /// State table row assignment
 #[derive(Clone, Debug)]

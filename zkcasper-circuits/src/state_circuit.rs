@@ -1,4 +1,8 @@
-use crate::{table::{validators_table, state_table::StateTable}, util::ConstrainBuilderCommon, MAX_VALIDATORS};
+use crate::{
+    table::{state_table::StateTable, validators_table},
+    util::ConstrainBuilderCommon,
+    MAX_VALIDATORS,
+};
 
 pub mod cell_manager;
 use cell_manager::CellManager;
@@ -51,7 +55,6 @@ pub struct StateSSZCircuitConfig<F: Field> {
     tree: [TreeLevel<F>; TREE_DEPTH - 1],
     sha256_table: SHA256Table,
     pub state_table: [StateTable; 2],
-    
     // state_root: Column<Instance>
 }
 
@@ -76,17 +79,20 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
         let mut tree = vec![pubkeys_level, validators_level];
 
         let mut padding = 0;
-        for i in (2..=TREE_DEPTH-2).rev() {
+        for i in (2..=TREE_DEPTH - 2).rev() {
             padding = padding * 2 + 1;
             let level = TreeLevel::configure(meta, i, 0, padding);
             tree.push(level);
         }
 
-        let mut tree: [_; TREE_DEPTH - 1] = tree.into_iter().rev().collect_vec().try_into().unwrap();
+        let mut tree: [_; TREE_DEPTH - 1] =
+            tree.into_iter().rev().collect_vec().try_into().unwrap();
 
         // Annotate circuit
         sha256_table.annotate_columns(meta);
-        state_table.iter().for_each(|table| table.annotate_columns(meta));
+        state_table
+            .iter()
+            .for_each(|table| table.annotate_columns(meta));
 
         for depth in (2..TREE_DEPTH).rev() {
             let depth = depth - 1;
@@ -115,13 +121,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
                 let node = level.node(meta);
                 let sibling = level.sibling(meta);
                 let parent = next_level.sibling_at(level.padding().add(1).mul(-1), meta);
-                sha256_table.build_lookup(
-                    meta,
-                    selector * into_sibling,
-                    node,
-                    sibling,
-                    parent,
-                )
+                sha256_table.build_lookup(meta, selector * into_sibling, node, sibling, parent)
             });
         }
 
@@ -133,7 +133,9 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
     }
 
     fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-        self.state_table.iter().for_each(|table| table.annotate_columns_in_region(region));
+        self.state_table
+            .iter()
+            .for_each(|table| table.annotate_columns_in_region(region));
         self.sha256_table.annotate_columns_in_region(region);
         for level in self.tree.iter() {
             level.annotate_columns_in_region(region);
@@ -162,7 +164,11 @@ impl<F: Field> StateSSZCircuitConfig<F> {
                 self.annotate_columns_in_region(&mut region);
 
                 // filter out the first (root) level, state root is assigned seperately into instance column.
-                let trace_by_depth = trace_by_depth.clone().into_iter().filter(|e| e[0].depth != 1).collect_vec();
+                let trace_by_depth = trace_by_depth
+                    .clone()
+                    .into_iter()
+                    .filter(|e| e[0].depth != 1)
+                    .collect_vec();
                 for (level, steps) in self.tree.iter().zip(trace_by_depth) {
                     level.assign_with_region(&mut region, steps, challenge)?;
                 }
@@ -254,14 +260,7 @@ mod tests {
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let sha256_table = SHA256Table::construct(meta);
 
-            let config = {
-                StateSSZCircuitConfig::new(
-                    meta,
-                    StateSSZCircuitArgs {
-                        sha256_table,
-                    },
-                )
-            };
+            let config = { StateSSZCircuitConfig::new(meta, StateSSZCircuitArgs { sha256_table }) };
 
             (config, Challenges::construct(meta))
         }
