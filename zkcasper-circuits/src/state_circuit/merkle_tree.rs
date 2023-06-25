@@ -77,6 +77,7 @@ impl<F: Field> TreeLevel<F> {
             let node_rlc = challange.map(|rnd| rlc::value(&step.node, rnd));
             let sibling_rlc = challange.map(|rnd| rlc::value(&step.sibling, rnd));
 
+            // TODO: fixed q_enabled should be set seprarately to the bottom of the table 
             region.assign_fixed(
                 || "q_enabled",
                 self.q_enabled,

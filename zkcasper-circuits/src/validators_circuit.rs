@@ -2,19 +2,20 @@ pub(crate) mod cell_manager;
 pub(crate) mod constraint_builder;
 
 use crate::{
+    gadget::LtGadget,
     table::{state_table::StateTables, LookupTable, ValidatorsTable},
-    util::{Cell, Challenges, SubCircuit, SubCircuitConfig},
+    util::{Cell, Challenges, ConstrainBuilderCommon, SubCircuit, SubCircuitConfig},
     witness::{
         self, into_casper_entities, CasperEntity, CasperEntityRow, Committee, StateTag, Validator,
     },
-    MAX_VALIDATORS, STATE_ROWS_PER_COMMITEE, STATE_ROWS_PER_VALIDATOR,
+    MAX_VALIDATORS, N_BYTES_U64, STATE_ROWS_PER_COMMITEE, STATE_ROWS_PER_VALIDATOR,
 };
 use cell_manager::CellManager;
 use constraint_builder::*;
 use eth_types::*;
 use gadgets::{
     batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
-    binary_number::{BinaryNumberChip, BinaryNumberConfig},
+    binary_number::{BinaryNumberChip, BinaryNumberConfig}, util::not,
 };
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
@@ -25,20 +26,26 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use itertools::Itertools;
+use lazy_static::lazy::Lazy;
 use std::{iter, marker::PhantomData};
 
 pub(crate) const N_BYTE_LOOKUPS: usize = 8;
+pub(crate) const MAX_DEGREE: usize = 5;
 
 #[derive(Clone, Debug)]
 pub struct ValidatorsCircuitConfig<F: Field> {
     q_enabled: Column<Fixed>,
+    is_validator: Column<Advice>,
+    is_committee: Column<Advice>,
     state_tables: StateTables,
     pub validators_table: ValidatorsTable,
-    tag: BinaryNumberConfig<StateTag, 3>,
+    // tag: BinaryNumberConfig<StateTag, 3>,
     storage_phase1: Column<Advice>,
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
     target_epoch: Column<Advice>, // TODO: should be an instance or assigned from instance
-    constraint_builder: ConstraintBuilder<F>,
+    target_gte_activation: Option<LtGadget<F, N_BYTES_U64>>,
+    target_lt_exit: Option<LtGadget<F, N_BYTES_U64>>,
+    cell_manager: CellManager<F>,
 }
 
 pub struct ValidatorsCircuitArgs {
@@ -50,6 +57,8 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let q_enabled = meta.fixed_column();
+        let is_validator = meta.advice_column();
+        let is_committee = meta.advice_column();
         let target_epoch = meta.advice_column();
         let state_tables = args.state_tables;
         let validators_table: ValidatorsTable = ValidatorsTable::construct(meta);
@@ -65,34 +74,77 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             .chain(byte_lookup.iter().copied())
             .collect_vec();
 
-        let tag: BinaryNumberConfig<StateTag, 3> =
-            BinaryNumberChip::configure(meta, q_enabled, Some(validators_table.tag));
+        // let tag: BinaryNumberConfig<StateTag, 3> =
+        //     BinaryNumberChip::configure(meta, is_validator, Some(validators_table.tag));
 
         let cell_manager = CellManager::new(meta, MAX_VALIDATORS, &cm_advices);
-        let mut constraint_builder = ConstraintBuilder::new(cell_manager);
 
         let mut config = Self {
             q_enabled,
+            is_validator,
+            is_committee,
             target_epoch,
             state_tables,
             validators_table,
-            tag,
             storage_phase1,
             byte_lookup,
-            constraint_builder,
+            target_gte_activation: None,
+            target_lt_exit: None,
+            cell_manager,
         };
 
         // Annotate circuit
         config.validators_table.annotate_columns(meta);
-        tag.annotate_columns(meta, "tag");
+        // tag.annotate_columns(meta, "tag");
         config.annotations().iter().for_each(|(col, ann)| {
             meta.annotate_lookup_any_column(*col, || ann);
         });
 
         meta.create_gate("validators constraints", |meta| {
-            let queries = queries(meta, &config);
-            config.constraint_builder.build(&queries);
-            config.constraint_builder.gate(queries.selector)
+            let q = queries(meta, &config);
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
+
+            cb.require_boolean("tag in [validator/committee]", q.tag());
+            cb.require_boolean("is_active is boolean", q.is_active());
+            cb.require_boolean("is_attested is boolean", q.is_attested());
+            cb.require_boolean("slashed is boolean", q.slashed());
+
+            cb.condition(q.is_attested(), |cb| {
+                cb.require_true("is_active is true when is_attested is true", q.is_active());
+            });
+
+            let target_gte_activation = LtGadget::<_, N_BYTES_U64>::construct(
+                &mut cb,
+                q.activation_epoch(),
+                q.next_epoch(),
+            );
+            let target_lt_exit =
+                LtGadget::<_, N_BYTES_U64>::construct(&mut cb, q.target_epoch(), q.exit_epoch());
+
+            cb.condition(q.is_active(), |cb| {
+                cb.require_zero("slashed is false for active validators", q.slashed());
+
+                cb.require_true(
+                    "activation_epoch <= target_epoch > exit_epoch for active validators",
+                    target_gte_activation.expr() * target_lt_exit.expr(),
+                )
+            });
+
+            config.target_gte_activation.insert(target_gte_activation);
+            config.target_lt_exit.insert(target_lt_exit);
+
+            cb.gate(q.selector() * q.is_validator())
+        });
+
+        meta.create_gate("committee constraints", |meta| {
+            let q = queries(meta, &config);
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
+            cb.require_boolean("tag in [validator/committee]", q.tag());
+            cb.require_zero("is_active is 0 for committees", q.is_active());
+            cb.require_zero("is_attested is 0 for committees", q.is_attested());
+            cb.require_zero("slashed is 0 for committees", q.slashed());
+
+            cb.gate(q.selector() * q.is_committee())
         });
 
         config
@@ -142,7 +194,16 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
     ) -> Result<(), Error> {
         let casper_entities = into_casper_entities(validators.iter(), committees.iter());
 
-        let tag_chip = BinaryNumberChip::construct(self.tag);
+        let target_gte_activation = self
+            .target_gte_activation
+            .as_ref()
+            .expect("target_gte_activation gadget is expected");
+        let target_lt_exit = self
+            .target_lt_exit
+            .as_ref()
+            .expect("target_lt_exited gadget is expected");
+
+        // let tag_chip = BinaryNumberChip::construct(self.tag);
 
         let mut offset = 0;
         for entity in casper_entities.iter() {
@@ -156,18 +217,24 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             match entity {
                 CasperEntity::Validator(validator) => {
                     // enable selector for the first row of each validator
-                    region.assign_fixed(
+                    region.assign_advice(
                         || "assign q_enabled",
-                        self.q_enabled,
+                        self.is_validator,
                         offset,
                         || Value::known(F::one()),
                     )?;
 
-                    self.constraint_builder.assign_with_region(
+                    target_gte_activation.assign(
                         region,
                         offset,
-                        entity,
-                        target_epoch,
+                        F::from(validator.activation_epoch),
+                        F::from(target_epoch + 1),
+                    );
+                    target_lt_exit.assign(
+                        region,
+                        offset,
+                        F::from(target_epoch),
+                        F::from(validator.exit_epoch),
                     );
 
                     let validator_rows = validator.table_assignment(randomness);
@@ -175,7 +242,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     assert_eq!(validator_rows.len(), STATE_ROWS_PER_VALIDATOR);
 
                     for (i, row) in validator_rows.into_iter().enumerate() {
-                        tag_chip.assign_with_region(region, offset + i, &StateTag::Validator)?;
+                        // tag_chip.assign_with_region(region, offset + i, &StateTag::Validator)?;
                         self.validators_table
                             .assign_with_region(region, offset + i, &row)?;
                     }
@@ -183,20 +250,20 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     offset += STATE_ROWS_PER_VALIDATOR;
                 }
                 CasperEntity::Committee(committee) => {
-                    tag_chip.assign_with_region(region, offset, &StateTag::Committee)?;
-                    self.constraint_builder.assign_with_region(
-                        region,
+                    region.assign_advice(
+                        || "assign is_committee",
+                        self.is_committee,
                         offset,
-                        &entity,
-                        target_epoch,
-                    );
+                        || Value::known(F::one()),
+                    )?;
+                    // tag_chip.assign_with_region(region, offset, &StateTag::Committee)?;
 
                     let committee_rows = committee.table_assignment(randomness);
 
                     // TODO: assert_eq!(committee_rows.len(), STATE_ROWS_PER_COMMITEE);
 
                     for (i, row) in committee_rows.into_iter().enumerate() {
-                        tag_chip.assign_with_region(region, offset + i, &StateTag::Committee)?;
+                        // tag_chip.assign_with_region(region, offset + i, &StateTag::Committee)?;
                         self.validators_table
                             .assign_with_region(region, offset + i, &row)?;
                     }
@@ -204,7 +271,6 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     offset += STATE_ROWS_PER_COMMITEE;
                 }
             }
-            // todo cell manager assignments
         }
 
         // annotate circuit
@@ -215,7 +281,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 
     pub fn annotations(&self) -> Vec<(Column<Any>, String)> {
         let mut annotations = vec![
-            (self.q_enabled.into(), "q_enabled".to_string()),
+            (self.is_validator.into(), "q_enabled".to_string()),
             (self.storage_phase1.into(), "storage_phase1".to_string()),
             (self.target_epoch.into(), "epoch".to_string()),
         ];
@@ -300,7 +366,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
 
 fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig<F>) -> Queries<F> {
     Queries {
-        selector: meta.query_fixed(c.q_enabled, Rotation::cur()),
+        q_enabled: meta.query_fixed(c.q_enabled, Rotation::cur()),
         target_epoch: meta.query_advice(c.target_epoch, Rotation::cur()),
         state_table: StateQueries {
             id: meta.query_advice(c.validators_table.id, Rotation::cur()),
@@ -320,10 +386,6 @@ fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig
             pubkey_lo: meta.query_advice(c.validators_table.value, Rotation(4)),
             pubkey_hi: meta.query_advice(c.validators_table.value, Rotation(5)),
         },
-        tag_bits: c
-            .tag
-            .bits
-            .map(|bit| meta.query_advice(bit, Rotation::cur())),
     }
 }
 

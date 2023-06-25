@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use gadgets::util::rlc;
+use itertools::Itertools;
+use std::collections::HashMap;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use itertools::Itertools;
 
 use crate::witness::{MerkleTrace, MerkleTraceStep};
 
@@ -24,7 +24,7 @@ pub struct StateTable {
 #[derive(Clone, Debug, EnumIter, PartialEq, Eq, Hash)]
 pub enum StateTreeLevel {
     PubKeys,
-    Validators
+    Validators,
 }
 
 impl<F: Field> LookupTable<F> for StateTable {
@@ -51,15 +51,13 @@ impl<F: Field> LookupTable<F> for StateTable {
 
 impl StateTable {
     // For `StateTables::dev_constract` only.
-    fn constuct<F: Field>(
-        meta: &mut ConstraintSystem<F>,
-    ) -> Self {
+    fn constuct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         let is_enabled = meta.fixed_column();
         let sibling = meta.advice_column();
         let sibling_index = meta.advice_column();
         let node = meta.advice_column();
         let index = meta.advice_column();
-        
+
         Self {
             is_enabled,
             sibling,
@@ -74,7 +72,7 @@ impl StateTable {
         &self,
         region: &mut Region<'_, F>,
         steps: Vec<&MerkleTraceStep>,
-        challange: Value<F>
+        challange: Value<F>,
     ) -> Result<(), Error> {
         for (i, step) in steps.into_iter().enumerate() {
             assert_eq!(step.sibling.len(), 32);
@@ -88,24 +86,14 @@ impl StateTable {
                 i,
                 || Value::known(F::one()),
             )?;
-            region.assign_advice(
-                || "sibling",
-                self.sibling,
-                i,
-                || sibling_rlc,
-            )?;
+            region.assign_advice(|| "sibling", self.sibling, i, || sibling_rlc)?;
             region.assign_advice(
                 || "sibling_index",
                 self.sibling_index,
                 i,
                 || Value::known(F::from(step.sibling_index as u64)),
             )?;
-            region.assign_advice(
-                || "node",
-                self.node,
-                i,
-                || node_rlc,
-            )?;
+            region.assign_advice(|| "node", self.node, i, || node_rlc)?;
             region.assign_advice(
                 || "index",
                 self.index,
@@ -118,11 +106,14 @@ impl StateTable {
     }
 }
 
-
 impl StateTables {
     /// Construct a new [`ValidatorsTable`] outside of [`StateTable`].
     pub fn dev_construct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
-        StateTables(StateTreeLevel::iter().map(|level| (level, StateTable::constuct(meta))).collect())
+        StateTables(
+            StateTreeLevel::iter()
+                .map(|level| (level, StateTable::constuct(meta)))
+                .collect(),
+        )
     }
 
     /// Load state tables without running the full [`StateTable`].
@@ -132,9 +123,12 @@ impl StateTables {
         trace: &MerkleTrace,
         challenge: Value<F>,
     ) -> Result<(), Error> {
-        let trace_by_depth = trace.trace_by_levels()
-            .into_iter().filter(|e| e[0].depth != 1).collect_vec();
-        
+        let trace_by_depth = trace
+            .trace_by_levels()
+            .into_iter()
+            .filter(|e| e[0].depth != 1)
+            .collect_vec();
+
         layouter.assign_region(
             || "dev load state tables",
             |mut region| {
@@ -153,12 +147,37 @@ impl StateTables {
     pub fn build_lookup<F: Field>(
         &self,
         meta: &mut VirtualCells<'_, F>,
+        level: StateTreeLevel,
+        is_left: bool,
         enable: Expression<F>,
         gindex: Expression<F>,
         value_rlc: Expression<F>,
     ) -> Vec<(Expression<F>, Expression<F>)> {
+        let lookup_table = self.0.get(&level).unwrap();
+        let value_col = if is_left {
+            lookup_table.node
+        } else {
+            lookup_table.sibling
+        };
+        let index_col = if is_left {
+            lookup_table.index
+        } else {
+            lookup_table.sibling_index
+        };
+
         vec![
-            // TODO: should any other columns be included?
+            (
+                enable.clone(),
+                meta.query_fixed(lookup_table.is_enabled, Rotation::cur()),
+            ),
+            (
+                value_rlc * enable.clone(),
+                meta.query_advice(value_col, Rotation::cur()),
+            ),
+            (
+                gindex * enable,
+                meta.query_advice(index_col, Rotation::cur()),
+            ),
         ]
     }
 }
