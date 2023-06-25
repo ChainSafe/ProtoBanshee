@@ -88,7 +88,6 @@ pub struct Queries<F: Field> {
     pub q_enabled: Expression<F>,
     pub target_epoch: Expression<F>,
     pub state_table: StateQueries<F>,
-    // pub tag_bits: [Expression<F>; 3],
 }
 
 #[derive(Clone)]
@@ -122,7 +121,7 @@ impl<F: Field> Queries<F> {
     pub fn is_committee(&self) -> Expression<F> {
         not::expr(self.state_table.tag.clone())
     }
-    
+
     pub fn target_epoch(&self) -> Expression<F> {
         self.target_epoch.clone()
     }

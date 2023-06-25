@@ -15,7 +15,8 @@ use constraint_builder::*;
 use eth_types::*;
 use gadgets::{
     batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
-    binary_number::{BinaryNumberChip, BinaryNumberConfig}, util::not,
+    binary_number::{BinaryNumberChip, BinaryNumberConfig},
+    util::not,
 };
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
@@ -39,7 +40,6 @@ pub struct ValidatorsCircuitConfig<F: Field> {
     is_committee: Column<Advice>,
     state_tables: StateTables,
     pub validators_table: ValidatorsTable,
-    // tag: BinaryNumberConfig<StateTag, 3>,
     storage_phase1: Column<Advice>,
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
     target_epoch: Column<Advice>, // TODO: should be an instance or assigned from instance
@@ -74,9 +74,6 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             .chain(byte_lookup.iter().copied())
             .collect_vec();
 
-        // let tag: BinaryNumberConfig<StateTag, 3> =
-        //     BinaryNumberChip::configure(meta, is_validator, Some(validators_table.tag));
-
         let cell_manager = CellManager::new(meta, MAX_VALIDATORS, &cm_advices);
 
         let mut config = Self {
@@ -95,7 +92,6 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
         // Annotate circuit
         config.validators_table.annotate_columns(meta);
-        // tag.annotate_columns(meta, "tag");
         config.annotations().iter().for_each(|(col, ann)| {
             meta.annotate_lookup_any_column(*col, || ann);
         });
@@ -203,8 +199,6 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             .as_ref()
             .expect("target_lt_exited gadget is expected");
 
-        // let tag_chip = BinaryNumberChip::construct(self.tag);
-
         let mut offset = 0;
         for entity in casper_entities.iter() {
             region.assign_advice(
@@ -242,7 +236,6 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     assert_eq!(validator_rows.len(), STATE_ROWS_PER_VALIDATOR);
 
                     for (i, row) in validator_rows.into_iter().enumerate() {
-                        // tag_chip.assign_with_region(region, offset + i, &StateTag::Validator)?;
                         self.validators_table
                             .assign_with_region(region, offset + i, &row)?;
                     }
@@ -256,14 +249,12 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                         offset,
                         || Value::known(F::one()),
                     )?;
-                    // tag_chip.assign_with_region(region, offset, &StateTag::Committee)?;
 
                     let committee_rows = committee.table_assignment(randomness);
 
                     // TODO: assert_eq!(committee_rows.len(), STATE_ROWS_PER_COMMITEE);
 
                     for (i, row) in committee_rows.into_iter().enumerate() {
-                        // tag_chip.assign_with_region(region, offset + i, &StateTag::Committee)?;
                         self.validators_table
                             .assign_with_region(region, offset + i, &row)?;
                     }
