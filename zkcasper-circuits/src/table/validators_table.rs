@@ -2,6 +2,7 @@ use gadgets::util::{not, Expr};
 use itertools::Itertools;
 
 use crate::{
+    util::layout::{ValueRlcColumn, ValueRlcExpr},
     witness::{into_casper_entities, CasperEntityRow, Committee, Validator},
     VALIDATOR0_GINDEX,
 };
@@ -19,16 +20,16 @@ pub struct ValidatorsTable {
     pub is_active: Column<Advice>,
     /// Signals whether validator have attested during that epoch.
     pub is_attested: Column<Advice>,
-    /// Type of field the row represents.
-    pub field_tag: Column<Advice>,
-    /// Index for FieldTag
-    pub index: Column<Advice>,
-    /// Generalized index for State tree Merkle proofs.
-    pub gindex: Column<Advice>,
-    /// Value
-    pub value: Column<Advice>,
-    /// SSZ chunk RLC
-    pub ssz_rlc: Column<Advice>,
+    /// Effective balance of validator/committee.
+    pub balance: ValueRlcColumn,
+    /// Signals whether validator is slashed.
+    pub slashed: ValueRlcColumn,
+    /// Epoch when validator activated.
+    pub activation_epoch: ValueRlcColumn,
+    /// Epoch when validator exited.
+    pub exit_epoch: ValueRlcColumn,
+    /// Public key of a validator/committee.
+    pub pubkey: [Column<Advice>; 2],
 }
 
 impl<F: Field> LookupTable<F> for ValidatorsTable {
@@ -38,11 +39,16 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
             self.tag.into(),
             self.is_active.into(),
             self.is_attested.into(),
-            self.field_tag.into(),
-            self.index.into(),
-            self.gindex.into(),
-            self.value.into(),
-            self.ssz_rlc.into(),
+            self.balance.value.into(),
+            self.balance.rlc.into(),
+            self.slashed.value.into(),
+            self.slashed.rlc.into(),
+            self.activation_epoch.value.into(),
+            self.activation_epoch.rlc.into(),
+            self.exit_epoch.value.into(),
+            self.exit_epoch.rlc.into(),
+            self.pubkey[0].into(),
+            self.pubkey[1].into(),
         ]
     }
 
@@ -52,11 +58,16 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
             String::from("tag"),
             String::from("is_active"),
             String::from("is_attested"),
-            String::from("field_tag"),
-            String::from("index"),
-            String::from("gindex"),
-            String::from("value"),
-            String::from("ssz_rlc"),
+            String::from("balance.value"),
+            String::from("balance.rlc"),
+            String::from("slashed.value"),
+            String::from("slashed.rlc"),
+            String::from("activation_epoch.value"),
+            String::from("activation_epoch.rlc"),
+            String::from("exit_epoch.value"),
+            String::from("exit_epoch.rlc"),
+            String::from("pubkey[0]"),
+            String::from("pubkey[1]"),
         ]
     }
 }
@@ -69,11 +80,14 @@ impl ValidatorsTable {
             tag: meta.advice_column(),
             is_active: meta.advice_column(),
             is_attested: meta.advice_column(),
-            field_tag: meta.advice_column(),
-            index: meta.advice_column(), // meta.advice_column_in(SecondPhase),
-            gindex: meta.advice_column_in(SecondPhase),
-            value: meta.advice_column_in(SecondPhase),
-            ssz_rlc: meta.advice_column_in(SecondPhase),
+            balance: ValueRlcColumn::construct_in_phase(meta, SecondPhase, SecondPhase),
+            slashed: ValueRlcColumn::construct_in_phase(meta, SecondPhase, SecondPhase),
+            activation_epoch: ValueRlcColumn::construct_in_phase(meta, SecondPhase, SecondPhase),
+            exit_epoch: ValueRlcColumn::construct_in_phase(meta, SecondPhase, SecondPhase),
+            pubkey: [
+                meta.advice_column_in(SecondPhase),
+                meta.advice_column_in(SecondPhase),
+            ],
         }
     }
 
@@ -81,7 +95,7 @@ impl ValidatorsTable {
         &self,
         region: &mut Region<'_, F>,
         offset: usize,
-        row: &CasperEntityRow<Value<F>>,
+        row: &CasperEntityRow<F>,
     ) -> Result<(), Error> {
         // println!("assigning row.ssz_rlc: {:?}", row.ssz_rlc);
         for (column, value) in [
@@ -89,11 +103,16 @@ impl ValidatorsTable {
             (self.tag, row.tag),
             (self.is_active, row.is_active),
             (self.is_attested, row.is_attested),
-            (self.field_tag, row.field_tag),
-            (self.index, row.index),
-            (self.gindex, row.gindex),
-            (self.value, row.value),
-            (self.ssz_rlc, row.ssz_rlc),
+            (self.balance.value, row.balance.value),
+            (self.balance.rlc, row.balance.rlc),
+            (self.slashed.value, row.slashed.value),
+            (self.slashed.rlc, row.slashed.rlc),
+            (self.activation_epoch.value, row.activation_epoch.value),
+            (self.activation_epoch.rlc, row.activation_epoch.rlc),
+            (self.exit_epoch.value, row.exit_epoch.value),
+            (self.exit_epoch.rlc, row.exit_epoch.rlc),
+            (self.pubkey[0], row.pubkey[0]),
+            (self.pubkey[1], row.pubkey[1]),
         ] {
             region.assign_advice(
                 || "assign state row on state table",
@@ -139,37 +158,15 @@ impl ValidatorsTable {
             is_active: meta.query_advice(self.is_active, Rotation::cur()),
             is_attested: meta.query_advice(self.is_attested, Rotation::cur()),
             // vitual queries for values
-            balance: meta.query_advice(self.value, Rotation::cur()),
-            slashed: meta.query_advice(self.value, Rotation::next()),
-            activation_epoch: meta.query_advice(self.value, Rotation(2)),
-            exit_epoch: meta.query_advice(self.value, Rotation(3)),
-            // vitual queries for RLCs
-            balance_rlc: meta.query_advice(self.ssz_rlc, Rotation::cur()),
-            slashed_rlc: meta.query_advice(self.ssz_rlc, Rotation::next()),
-            activation_epoch_rlc: meta.query_advice(self.ssz_rlc, Rotation(2)),
-            exit_epoch_rlc: meta.query_advice(self.ssz_rlc, Rotation(3)),
-            pubkey_lo_rlc: meta.query_advice(self.ssz_rlc, Rotation(4)),
-            pubkey_hi_rlc: meta.query_advice(self.ssz_rlc, Rotation(5)),
+            balance: self.balance.query(meta, Rotation::cur()),
+            slashed: self.slashed.query(meta, Rotation::cur()),
+            activation_epoch: self.activation_epoch.query(meta, Rotation::cur()),
+            exit_epoch: self.exit_epoch.query(meta, Rotation::cur()),
+            pubkey_rlc: [
+                meta.query_advice(self.pubkey[0], Rotation::cur()),
+                meta.query_advice(self.pubkey[1], Rotation::cur()),
+            ],
         }
-    }
-
-    pub fn build_lookup<F: Field>(
-        &self,
-        meta: &mut VirtualCells<'_, F>,
-        enable: Expression<F>,
-        gindex: Expression<F>,
-        value_rlc: Expression<F>,
-    ) -> Vec<(Expression<F>, Expression<F>)> {
-        vec![
-            (
-                gindex.clone() * enable.clone(),
-                meta.query_advice(self.gindex, Rotation::cur()),
-            ),
-            (
-                value_rlc.clone() * enable.clone(),
-                meta.query_advice(self.ssz_rlc, Rotation::cur()),
-            ), // TODO: should any other columns be included?
-        ]
     }
 }
 
@@ -179,18 +176,11 @@ pub struct ValidatorTableQueries<F: Field> {
     pub tag: Expression<F>,
     pub is_active: Expression<F>,
     pub is_attested: Expression<F>,
-    /// Values
-    pub balance: Expression<F>,
-    pub activation_epoch: Expression<F>,
-    pub exit_epoch: Expression<F>,
-    pub slashed: Expression<F>,
-    /// RLCs
-    pub balance_rlc: Expression<F>,
-    pub activation_epoch_rlc: Expression<F>,
-    pub exit_epoch_rlc: Expression<F>,
-    pub slashed_rlc: Expression<F>,
-    pub pubkey_lo_rlc: Expression<F>,
-    pub pubkey_hi_rlc: Expression<F>,
+    pub balance: ValueRlcExpr<F>,
+    pub activation_epoch: ValueRlcExpr<F>,
+    pub exit_epoch: ValueRlcExpr<F>,
+    pub slashed: ValueRlcExpr<F>,
+    pub pubkey_rlc: [Expression<F>; 2],
 }
 
 impl<F: Field> ValidatorTableQueries<F> {
@@ -218,50 +208,18 @@ impl<F: Field> ValidatorTableQueries<F> {
         self.is_attested.clone()
     }
 
-    pub fn balance(&self) -> Expression<F> {
-        self.balance.clone()
-    }
-
-    pub fn activation_epoch(&self) -> Expression<F> {
-        self.activation_epoch.clone()
-    }
-
-    pub fn exit_epoch(&self) -> Expression<F> {
-        self.exit_epoch.clone()
-    }
-
-    pub fn slashed(&self) -> Expression<F> {
-        self.slashed.clone()
-    }
-
-    pub fn balance_rlc(&self) -> Expression<F> {
-        self.balance_rlc.clone()
-    }
-
-    pub fn activation_epoch_rlc(&self) -> Expression<F> {
-        self.activation_epoch_rlc.clone()
-    }
-
-    pub fn exit_epoch_rlc(&self) -> Expression<F> {
-        self.exit_epoch_rlc.clone()
-    }
-
-    pub fn slashed_rlc(&self) -> Expression<F> {
-        self.slashed_rlc.clone()
-    }
-
-    pub fn pubkey_lo_rlc(&self) -> Expression<F> {
-        self.pubkey_lo_rlc.clone()
-    }
-
-    pub fn pubkey_hi_rlc(&self) -> Expression<F> {
-        self.pubkey_hi_rlc.clone()
-    }
-
     pub fn balance_gindex(&self) -> Expression<F> {
         (VALIDATOR0_GINDEX.expr() + self.id())
             * 2u64.pow(3).expr() // 3 levels deeper
             + 2.expr() // skip pubkeyRoot and withdrawalCredentials
+    }
+
+    pub fn pubkey_lo_rlc(&self) -> Expression<F> {
+        self.pubkey_rlc[0].clone()
+    }
+
+    pub fn pubkey_hi_rlc(&self) -> Expression<F> {
+        self.pubkey_rlc[1].clone()
     }
 
     pub fn slashed_gindex(&self) -> Expression<F> {

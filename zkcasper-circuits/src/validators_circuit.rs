@@ -12,7 +12,7 @@ use crate::{
     witness::{
         self, into_casper_entities, CasperEntity, CasperEntityRow, Committee, StateTag, Validator,
     },
-    MAX_VALIDATORS, N_BYTES_U64, STATE_ROWS_PER_COMMITEE, STATE_ROWS_PER_VALIDATOR,
+    MAX_VALIDATORS, N_BYTES_U64,
     VALIDATOR0_GINDEX,
 };
 use cell_manager::CellManager;
@@ -35,7 +35,7 @@ use itertools::Itertools;
 use lazy_static::lazy::Lazy;
 use std::{iter, marker::PhantomData};
 
-pub(crate) const N_BYTE_LOOKUPS: usize = 8;
+pub(crate) const N_BYTE_LOOKUPS: usize = 16; // 8 per lt gadget (target_gte_activation, target_lt_exit)
 pub(crate) const MAX_DEGREE: usize = 5;
 
 #[derive(Clone, Debug)]
@@ -48,9 +48,10 @@ pub struct ValidatorsCircuitConfig<F: Field> {
     storage_phase1: Column<Advice>,
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
     target_epoch: Column<Advice>, // TODO: should be an instance or assigned from instance
+    cell_manager: CellManager<F>,
+    // Lazy initialized
     target_gte_activation: Option<LtGadget<F, N_BYTES_U64>>,
     target_lt_exit: Option<LtGadget<F, N_BYTES_U64>>,
-    cell_manager: CellManager<F>,
 }
 
 pub struct ValidatorsCircuitArgs {
@@ -110,7 +111,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_boolean("is_active is boolean", q.table.is_active());
             cb.require_boolean("is_attested is boolean", q.table.is_attested());
-            cb.require_boolean("slashed is boolean", q.table.slashed());
+            cb.require_boolean("slashed is boolean", q.table.slashed.value());
 
             cb.condition(q.table.is_attested(), |cb| {
                 cb.require_true(
@@ -121,17 +122,17 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
             let target_gte_activation = LtGadget::<_, N_BYTES_U64>::construct(
                 &mut cb,
-                q.table.activation_epoch(),
+                q.table.activation_epoch.value(),
                 q.next_epoch(),
             );
             let target_lt_exit = LtGadget::<_, N_BYTES_U64>::construct(
                 &mut cb,
                 q.target_epoch(),
-                q.table.exit_epoch(),
+                q.table.exit_epoch.value(),
             );
 
             cb.condition(q.table.is_active(), |cb| {
-                cb.require_zero("slashed is false for active validators", q.table.slashed());
+                cb.require_zero("slashed is false for active validators", q.table.slashed.value());
 
                 cb.require_true(
                     "activation_epoch <= target_epoch > exit_epoch for active validators",
@@ -150,7 +151,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     true,
                     q.table.is_validator(),
                     q.table.balance_gindex(),
-                    q.table.balance_rlc(),
+                    q.table.balance.rlc(),
                 ),
             );
 
@@ -162,7 +163,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     false,
                     q.table.is_validator(),
                     q.table.slashed_gindex(),
-                    q.table.slashed_rlc(),
+                    q.table.slashed.rlc(),
                 ),
             );
 
@@ -174,7 +175,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     false,
                     q.table.is_validator(),
                     q.table.activation_epoch_gindex(),
-                    q.table.activation_epoch_rlc(),
+                    q.table.activation_epoch.rlc(),
                 ),
             );
 
@@ -186,7 +187,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     true,
                     q.table.is_validator(),
                     q.table.exit_epoch_gindex(),
-                    q.table.exit_epoch_rlc(),
+                    q.table.exit_epoch.rlc(),
                 ),
             );
 
@@ -229,7 +230,10 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_zero("is_active is 0 for committees", q.table.is_active());
             cb.require_zero("is_attested is 0 for committees", q.table.is_attested());
-            cb.require_zero("slashed is 0 for committees", q.table.slashed());
+            cb.require_zero("slashed is 0 for committees", q.table.slashed.value());
+            cb.require_zero("activation epoch is 0 for committees", q.table.exit_epoch.value());
+            cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch.value());
+
 
             cb.gate(q.selector() * q.table.is_committee())
         });
@@ -299,16 +303,16 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 || Value::known(F::from(target_epoch)),
             )?; // TODO: assign from instance instead
 
+              // TODO: enable selector to max_rows
+              region.assign_fixed(
+                || "assign q_enabled",
+                self.q_enabled,
+                offset,
+                || Value::known(F::one()),
+            )?;
+
             match entity {
                 CasperEntity::Validator(validator) => {
-                    // enable selector for the first row of each validator
-                    region.assign_fixed(
-                        || "assign q_enabled",
-                        self.q_enabled,
-                        offset,
-                        || Value::known(F::one()),
-                    )?;
-
                     target_gte_activation.assign(
                         region,
                         offset,
@@ -324,33 +328,22 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 
                     let validator_rows = validator.table_assignment(randomness);
 
-                    assert_eq!(validator_rows.len(), STATE_ROWS_PER_VALIDATOR);
-
                     for (i, row) in validator_rows.into_iter().enumerate() {
                         self.validators_table
                             .assign_with_region(region, offset + i, &row)?;
                     }
 
-                    offset += STATE_ROWS_PER_VALIDATOR;
+                    offset += 1;
                 }
                 CasperEntity::Committee(committee) => {
-                    region.assign_fixed(
-                        || "assign q_enabled",
-                        self.q_enabled,
-                        offset,
-                        || Value::known(F::one()),
-                    )?;
-
                     let committee_rows = committee.table_assignment(randomness);
-
-                    // TODO: assert_eq!(committee_rows.len(), STATE_ROWS_PER_COMMITEE);
 
                     for (i, row) in committee_rows.into_iter().enumerate() {
                         self.validators_table
                             .assign_with_region(region, offset + i, &row)?;
                     }
 
-                    offset += STATE_ROWS_PER_COMMITEE;
+                    offset += 1;
                 }
             }
         }
