@@ -43,7 +43,7 @@ impl Validator {
         let new_state_row =
             |field_tag: FieldTag, index: usize, value, ssz_rlc, gindex: u64| CasperEntityRow {
                 id: Value::known(F::from(self.id as u64)),
-                tag: Value::known(F::from(StateTag::Validator as u64)),
+                tag: Value::known(F::one()),
                 is_active: Value::known(F::from(self.is_active as u64)),
                 is_attested: Value::known(F::from(self.is_attested as u64)),
                 field_tag: Value::known(F::from(field_tag as u64)),
@@ -117,7 +117,7 @@ impl Committee {
     ) -> Vec<CasperEntityRow<Value<F>>> {
         let new_state_row = |field_tag: FieldTag, index: usize, value| CasperEntityRow {
             id: Value::known(F::from(self.id as u64)),
-            tag: Value::known(F::from(StateTag::Committee as u64)),
+            tag: Value::known(F::zero()),
             is_active: Value::known(F::zero()),
             is_attested: Value::known(F::zero()),
             field_tag: Value::known(F::from(field_tag as u64)),

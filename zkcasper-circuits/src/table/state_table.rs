@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-use crate::witness::{MerkleTrace, MerkleTraceStep};
+use crate::{
+    state_circuit::{PUBKEYS_LEVEL, VALIDATORS_LEVEL},
+    witness::{MerkleTrace, MerkleTraceStep},
+};
 
 use super::*;
 
@@ -54,9 +57,9 @@ impl StateTable {
     fn constuct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         let is_enabled = meta.fixed_column();
         let sibling = meta.advice_column();
-        let sibling_index = meta.advice_column();
+        let sibling_index = meta.advice_column_in(FirstPhase);
         let node = meta.advice_column();
-        let index = meta.advice_column();
+        let index = meta.advice_column_in(FirstPhase);
 
         Self {
             is_enabled,
@@ -123,19 +126,30 @@ impl StateTables {
         trace: &MerkleTrace,
         challenge: Value<F>,
     ) -> Result<(), Error> {
-        let trace_by_depth = trace
-            .trace_by_levels()
-            .into_iter()
-            .filter(|e| e[0].depth != 1)
-            .collect_vec();
+        let mut trace_by_depth = trace.trace_by_level_map();
+
+        let pubkey_level_trace = trace_by_depth.remove(&PUBKEYS_LEVEL).unwrap();
+        let validators_level_trace = trace_by_depth.remove(&VALIDATORS_LEVEL).unwrap();
+
+        let pubkey_table = self.0.get(&StateTreeLevel::PubKeys).unwrap();
+        let validators_table = self.0.get(&StateTreeLevel::Validators).unwrap();
 
         layouter.assign_region(
             || "dev load state tables",
             |mut region| {
-                for (table, steps) in self.0.values().zip(trace_by_depth.clone()) {
-                    table.annotate_columns_in_region(&mut region);
-                    table.assign_with_region(&mut region, steps, challenge)?;
-                }
+                pubkey_table.annotate_columns_in_region(&mut region);
+                validators_table.annotate_columns_in_region(&mut region);
+
+                pubkey_table.assign_with_region(
+                    &mut region,
+                    pubkey_level_trace.clone(),
+                    challenge,
+                )?;
+                validators_table.assign_with_region(
+                    &mut region,
+                    validators_level_trace.clone(),
+                    challenge,
+                )?;
 
                 Ok(())
             },

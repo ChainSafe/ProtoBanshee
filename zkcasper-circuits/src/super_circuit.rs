@@ -3,3 +3,4 @@
 // - [ ] issue for permutation based state circuit proto
 // - [ ] issue for rust memory optimizations
 // - [ ] issue for super circuit and block
+// - [ ] issue for basnhee spec trait

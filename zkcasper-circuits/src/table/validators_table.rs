@@ -1,6 +1,10 @@
+use gadgets::util::{not, Expr};
 use itertools::Itertools;
 
-use crate::witness::{into_casper_entities, CasperEntityRow, Committee, Validator};
+use crate::{
+    witness::{into_casper_entities, CasperEntityRow, Committee, Validator},
+    VALIDATOR0_GINDEX,
+};
 
 use super::*;
 
@@ -79,6 +83,7 @@ impl ValidatorsTable {
         offset: usize,
         row: &CasperEntityRow<Value<F>>,
     ) -> Result<(), Error> {
+        // println!("assigning row.ssz_rlc: {:?}", row.ssz_rlc);
         for (column, value) in [
             (self.id, row.id),
             (self.tag, row.tag),
@@ -127,6 +132,27 @@ impl ValidatorsTable {
         )
     }
 
+    pub fn queries<F: Field>(&self, meta: &mut VirtualCells<'_, F>) -> ValidatorTableQueries<F> {
+        ValidatorTableQueries {
+            id: meta.query_advice(self.id, Rotation::cur()),
+            tag: meta.query_advice(self.tag, Rotation::cur()),
+            is_active: meta.query_advice(self.is_active, Rotation::cur()),
+            is_attested: meta.query_advice(self.is_attested, Rotation::cur()),
+            // vitual queries for values
+            balance: meta.query_advice(self.value, Rotation::cur()),
+            slashed: meta.query_advice(self.value, Rotation::next()),
+            activation_epoch: meta.query_advice(self.value, Rotation(2)),
+            exit_epoch: meta.query_advice(self.value, Rotation(3)),
+            // vitual queries for RLCs
+            balance_rlc: meta.query_advice(self.ssz_rlc, Rotation::cur()),
+            slashed_rlc: meta.query_advice(self.ssz_rlc, Rotation::next()),
+            activation_epoch_rlc: meta.query_advice(self.ssz_rlc, Rotation(2)),
+            exit_epoch_rlc: meta.query_advice(self.ssz_rlc, Rotation(3)),
+            pubkey_lo_rlc: meta.query_advice(self.ssz_rlc, Rotation(4)),
+            pubkey_hi_rlc: meta.query_advice(self.ssz_rlc, Rotation(5)),
+        }
+    }
+
     pub fn build_lookup<F: Field>(
         &self,
         meta: &mut VirtualCells<'_, F>,
@@ -144,5 +170,117 @@ impl ValidatorsTable {
                 meta.query_advice(self.ssz_rlc, Rotation::cur()),
             ), // TODO: should any other columns be included?
         ]
+    }
+}
+
+#[derive(Clone)]
+pub struct ValidatorTableQueries<F: Field> {
+    pub id: Expression<F>,
+    pub tag: Expression<F>,
+    pub is_active: Expression<F>,
+    pub is_attested: Expression<F>,
+    /// Values
+    pub balance: Expression<F>,
+    pub activation_epoch: Expression<F>,
+    pub exit_epoch: Expression<F>,
+    pub slashed: Expression<F>,
+    /// RLCs
+    pub balance_rlc: Expression<F>,
+    pub activation_epoch_rlc: Expression<F>,
+    pub exit_epoch_rlc: Expression<F>,
+    pub slashed_rlc: Expression<F>,
+    pub pubkey_lo_rlc: Expression<F>,
+    pub pubkey_hi_rlc: Expression<F>,
+}
+
+impl<F: Field> ValidatorTableQueries<F> {
+    pub fn is_validator(&self) -> Expression<F> {
+        self.tag.clone()
+    }
+
+    pub fn is_committee(&self) -> Expression<F> {
+        not::expr(self.tag.clone())
+    }
+
+    pub fn id(&self) -> Expression<F> {
+        self.id.clone()
+    }
+
+    pub fn tag(&self) -> Expression<F> {
+        self.tag.clone()
+    }
+
+    pub fn is_active(&self) -> Expression<F> {
+        self.is_active.clone()
+    }
+
+    pub fn is_attested(&self) -> Expression<F> {
+        self.is_attested.clone()
+    }
+
+    pub fn balance(&self) -> Expression<F> {
+        self.balance.clone()
+    }
+
+    pub fn activation_epoch(&self) -> Expression<F> {
+        self.activation_epoch.clone()
+    }
+
+    pub fn exit_epoch(&self) -> Expression<F> {
+        self.exit_epoch.clone()
+    }
+
+    pub fn slashed(&self) -> Expression<F> {
+        self.slashed.clone()
+    }
+
+    pub fn balance_rlc(&self) -> Expression<F> {
+        self.balance_rlc.clone()
+    }
+
+    pub fn activation_epoch_rlc(&self) -> Expression<F> {
+        self.activation_epoch_rlc.clone()
+    }
+
+    pub fn exit_epoch_rlc(&self) -> Expression<F> {
+        self.exit_epoch_rlc.clone()
+    }
+
+    pub fn slashed_rlc(&self) -> Expression<F> {
+        self.slashed_rlc.clone()
+    }
+
+    pub fn pubkey_lo_rlc(&self) -> Expression<F> {
+        self.pubkey_lo_rlc.clone()
+    }
+
+    pub fn pubkey_hi_rlc(&self) -> Expression<F> {
+        self.pubkey_hi_rlc.clone()
+    }
+
+    pub fn balance_gindex(&self) -> Expression<F> {
+        (VALIDATOR0_GINDEX.expr() + self.id())
+            * 2u64.pow(3).expr() // 3 levels deeper
+            + 2.expr() // skip pubkeyRoot and withdrawalCredentials
+    }
+
+    pub fn slashed_gindex(&self) -> Expression<F> {
+        (VALIDATOR0_GINDEX.expr() + self.id()) * 2u64.pow(3).expr() + 3.expr()
+    }
+
+    pub fn activation_epoch_gindex(&self) -> Expression<F> {
+        (VALIDATOR0_GINDEX.expr() + self.id()) * 2u64.pow(3).expr() + 5.expr() // skip activationEligibilityEpoch
+    }
+
+    pub fn exit_epoch_gindex(&self) -> Expression<F> {
+        (VALIDATOR0_GINDEX.expr() + self.id()) * 2u64.pow(3).expr() + 6.expr()
+    }
+
+    pub fn pubkey_lo_gindex(&self) -> Expression<F> {
+        (VALIDATOR0_GINDEX.expr() + self.id()) * 2u64.pow(4).expr() // 4 levels deeper
+    }
+
+    pub fn pubkey_hi_gindex(&self) -> Expression<F> {
+        (VALIDATOR0_GINDEX.expr() + self.id()) * 2u64.pow(4).expr() + 1.expr()
     }
 }

@@ -3,12 +3,17 @@ pub(crate) mod constraint_builder;
 
 use crate::{
     gadget::LtGadget,
-    table::{state_table::StateTables, LookupTable, ValidatorsTable},
+    table::{
+        state_table::{StateTables, StateTreeLevel},
+        validators_table::ValidatorTableQueries,
+        LookupTable, ValidatorsTable,
+    },
     util::{Cell, Challenges, ConstrainBuilderCommon, SubCircuit, SubCircuitConfig},
     witness::{
         self, into_casper_entities, CasperEntity, CasperEntityRow, Committee, StateTag, Validator,
     },
     MAX_VALIDATORS, N_BYTES_U64, STATE_ROWS_PER_COMMITEE, STATE_ROWS_PER_VALIDATOR,
+    VALIDATOR0_GINDEX,
 };
 use cell_manager::CellManager;
 use constraint_builder::*;
@@ -16,7 +21,7 @@ use eth_types::*;
 use gadgets::{
     batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
     binary_number::{BinaryNumberChip, BinaryNumberConfig},
-    util::not,
+    util::{not, Expr},
 };
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
@@ -96,29 +101,37 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             meta.annotate_lookup_any_column(*col, || ann);
         });
 
+        let mut lookups = Vec::new();
+
         meta.create_gate("validators constraints", |meta| {
             let q = queries(meta, &config);
-            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE, q.selector());
 
-            cb.require_boolean("tag in [validator/committee]", q.tag());
-            cb.require_boolean("is_active is boolean", q.is_active());
-            cb.require_boolean("is_attested is boolean", q.is_attested());
-            cb.require_boolean("slashed is boolean", q.slashed());
+            cb.require_boolean("tag in [validator/committee]", q.table.tag());
+            cb.require_boolean("is_active is boolean", q.table.is_active());
+            cb.require_boolean("is_attested is boolean", q.table.is_attested());
+            cb.require_boolean("slashed is boolean", q.table.slashed());
 
-            cb.condition(q.is_attested(), |cb| {
-                cb.require_true("is_active is true when is_attested is true", q.is_active());
+            cb.condition(q.table.is_attested(), |cb| {
+                cb.require_true(
+                    "is_active is true when is_attested is true",
+                    q.table.is_active(),
+                );
             });
 
             let target_gte_activation = LtGadget::<_, N_BYTES_U64>::construct(
                 &mut cb,
-                q.activation_epoch(),
+                q.table.activation_epoch(),
                 q.next_epoch(),
             );
-            let target_lt_exit =
-                LtGadget::<_, N_BYTES_U64>::construct(&mut cb, q.target_epoch(), q.exit_epoch());
+            let target_lt_exit = LtGadget::<_, N_BYTES_U64>::construct(
+                &mut cb,
+                q.target_epoch(),
+                q.table.exit_epoch(),
+            );
 
-            cb.condition(q.is_active(), |cb| {
-                cb.require_zero("slashed is false for active validators", q.slashed());
+            cb.condition(q.table.is_active(), |cb| {
+                cb.require_zero("slashed is false for active validators", q.table.slashed());
 
                 cb.require_true(
                     "activation_epoch <= target_epoch > exit_epoch for active validators",
@@ -129,18 +142,96 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             config.target_gte_activation.insert(target_gte_activation);
             config.target_lt_exit.insert(target_lt_exit);
 
-            cb.gate(q.selector() * q.is_validator())
+            cb.add_lookup(
+                "validator.balance in state table",
+                config.state_tables.build_lookup(
+                    meta,
+                    StateTreeLevel::Validators,
+                    true,
+                    q.table.is_validator(),
+                    q.table.balance_gindex(),
+                    q.table.balance_rlc(),
+                ),
+            );
+
+            cb.add_lookup(
+                "validator.slashed in state table",
+                config.state_tables.build_lookup(
+                    meta,
+                    StateTreeLevel::Validators,
+                    false,
+                    q.table.is_validator(),
+                    q.table.slashed_gindex(),
+                    q.table.slashed_rlc(),
+                ),
+            );
+
+            cb.add_lookup(
+                "validator.activation_epoch in state table",
+                config.state_tables.build_lookup(
+                    meta,
+                    StateTreeLevel::Validators,
+                    false,
+                    q.table.is_validator(),
+                    q.table.activation_epoch_gindex(),
+                    q.table.activation_epoch_rlc(),
+                ),
+            );
+
+            cb.add_lookup(
+                "validator.exit_epoch in state table",
+                config.state_tables.build_lookup(
+                    meta,
+                    StateTreeLevel::Validators,
+                    true,
+                    q.table.is_validator(),
+                    q.table.exit_epoch_gindex(),
+                    q.table.exit_epoch_rlc(),
+                ),
+            );
+
+            cb.add_lookup(
+                "validator.pubkey[0..32] in state table",
+                config.state_tables.build_lookup(
+                    meta,
+                    StateTreeLevel::PubKeys,
+                    true,
+                    q.table.is_validator(),
+                    q.table.pubkey_lo_gindex(),
+                    q.table.pubkey_lo_rlc(),
+                ),
+            );
+
+            cb.add_lookup(
+                "validator.pubkey[32..48] in state table",
+                config.state_tables.build_lookup(
+                    meta,
+                    StateTreeLevel::PubKeys,
+                    false,
+                    q.table.is_validator(),
+                    q.table.pubkey_hi_gindex(),
+                    q.table.pubkey_hi_rlc(),
+                ),
+            );
+
+            lookups = cb.lookups();
+            cb.gate(q.table.is_validator())
         });
+
+        for (name, lookup) in lookups {
+            meta.lookup_any(name, |_| lookup);
+        }
 
         meta.create_gate("committee constraints", |meta| {
             let q = queries(meta, &config);
-            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
-            cb.require_boolean("tag in [validator/committee]", q.tag());
-            cb.require_zero("is_active is 0 for committees", q.is_active());
-            cb.require_zero("is_attested is 0 for committees", q.is_attested());
-            cb.require_zero("slashed is 0 for committees", q.slashed());
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE, q.selector());
 
-            cb.gate(q.selector() * q.is_committee())
+            cb.require_boolean("tag in [validator/committee]", q.table.tag());
+            cb.require_zero("is_active is 0 for committees", q.table.is_active());
+            cb.require_zero("is_attested is 0 for committees", q.table.is_attested());
+            cb.require_zero("slashed is 0 for committees", q.table.slashed());
+
+            cb.gate(q.selector() * q.table.is_committee())
         });
 
         config
@@ -211,9 +302,9 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             match entity {
                 CasperEntity::Validator(validator) => {
                     // enable selector for the first row of each validator
-                    region.assign_advice(
+                    region.assign_fixed(
                         || "assign q_enabled",
-                        self.is_validator,
+                        self.q_enabled,
                         offset,
                         || Value::known(F::one()),
                     )?;
@@ -243,9 +334,9 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     offset += STATE_ROWS_PER_VALIDATOR;
                 }
                 CasperEntity::Committee(committee) => {
-                    region.assign_advice(
-                        || "assign is_committee",
-                        self.is_committee,
+                    region.assign_fixed(
+                        || "assign q_enabled",
+                        self.q_enabled,
                         offset,
                         || Value::known(F::one()),
                     )?;
@@ -355,28 +446,14 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
     }
 }
 
-fn queries<F: Field>(meta: &mut VirtualCells<'_, F>, c: &ValidatorsCircuitConfig<F>) -> Queries<F> {
+fn queries<F: Field>(
+    meta: &mut VirtualCells<'_, F>,
+    config: &ValidatorsCircuitConfig<F>,
+) -> Queries<F> {
     Queries {
-        q_enabled: meta.query_fixed(c.q_enabled, Rotation::cur()),
-        target_epoch: meta.query_advice(c.target_epoch, Rotation::cur()),
-        state_table: StateQueries {
-            id: meta.query_advice(c.validators_table.id, Rotation::cur()),
-            order: meta.query_advice(c.validators_table.id, Rotation::cur()),
-            tag: meta.query_advice(c.validators_table.tag, Rotation::cur()),
-            is_active: meta.query_advice(c.validators_table.is_active, Rotation::cur()),
-            is_attested: meta.query_advice(c.validators_table.is_attested, Rotation::cur()),
-            field_tag: meta.query_advice(c.validators_table.field_tag, Rotation::cur()),
-            index: meta.query_advice(c.validators_table.index, Rotation::cur()),
-            g_index: meta.query_advice(c.validators_table.gindex, Rotation::cur()),
-            value: meta.query_advice(c.validators_table.value, Rotation::cur()),
-            // vitual queries for tag == 'validator'
-            balance: meta.query_advice(c.validators_table.value, Rotation::cur()),
-            slashed: meta.query_advice(c.validators_table.value, Rotation::next()),
-            activation_epoch: meta.query_advice(c.validators_table.value, Rotation(2)),
-            exit_epoch: meta.query_advice(c.validators_table.value, Rotation(3)),
-            pubkey_lo: meta.query_advice(c.validators_table.value, Rotation(4)),
-            pubkey_hi: meta.query_advice(c.validators_table.value, Rotation(5)),
-        },
+        q_enabled: meta.query_fixed(config.q_enabled, Rotation::cur()),
+        target_epoch: meta.query_advice(config.target_epoch, Rotation::cur()),
+        table: config.validators_table.queries(meta),
     }
 }
 

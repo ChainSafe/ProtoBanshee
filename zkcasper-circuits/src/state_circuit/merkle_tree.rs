@@ -8,7 +8,7 @@ use eth_types::*;
 use gadgets::{binary_number::BinaryNumberConfig, util::{Expr, rlc}};
 use halo2_proofs::{
     circuit::{Region, Value},
-    plonk::{Advice, Column, ConstraintSystem, Error, Expression, VirtualCells, Fixed, Any},
+    plonk::{Advice, Column, ConstraintSystem, Error, Expression, VirtualCells, Fixed, Any, SecondPhase},
     poly::Rotation,
 };
 use itertools::Itertools;
@@ -37,10 +37,10 @@ impl<F: Field> TreeLevel<F> {
         padding: usize,
     ) -> Self {
         let q_enabled = meta.fixed_column();
-        let sibling = meta.advice_column();
-        let sibling_index = meta.advice_column();
-        let node = meta.advice_column();
-        let index = meta.advice_column();
+        let sibling = meta.advice_column_in(SecondPhase);
+        let sibling_index = meta.advice_column_in(SecondPhase);
+        let node = meta.advice_column_in(SecondPhase);
+        let index = meta.advice_column_in(SecondPhase);
         let into_left = meta.advice_column();
         
         let config = Self {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gadgets::impl_expr;
 use itertools::Itertools;
 use strum_macros::EnumIter;
@@ -25,7 +27,6 @@ pub struct MerkleTraceStep {
 
 
 impl MerkleTrace {
-    // levels
     pub fn trace_by_levels<'a>(&'a self) -> Vec<Vec<&'a MerkleTraceStep>> {
         self.0
             .iter()
@@ -34,6 +35,12 @@ impl MerkleTrace {
             .sorted_by_key(|(depth, steps)| depth.clone())
             .map(|(depth, steps)| steps.collect_vec())
             .collect_vec()
+    }
+
+    pub fn trace_by_level_map<'a>(&'a self) -> HashMap<usize, Vec<&'a MerkleTraceStep>> {
+        self.0
+            .iter()
+            .into_group_map_by(|step| step.depth)
     }
 
     pub fn sha256_inputs(&self) -> Vec<HashInput> {

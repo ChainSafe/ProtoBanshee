@@ -41,6 +41,8 @@ let validators: Validator[] = [];
 let gindices: bigint[] = [];
 let validatorBaseGindices: bigint[] = [];
 
+console.log("validators[0].gindex:", ValidatorsSsz.getPathInfo([0]).gindex);
+
 for (let i = 0; i < N; i++) {
     validators.push({
         pubkey: Uint8Array.from(crypto.randomBytes(48)),
