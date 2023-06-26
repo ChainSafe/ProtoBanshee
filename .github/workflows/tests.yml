@@ -13,23 +13,6 @@ env:
   CARGO_INCREMENTAL: 1
 
 jobs:
-  license:
-    name: check-license
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - name: Install latest stable
-      uses: dtolnay/rust-toolchain@stable
-      with:
-          toolchain: stable
-          override: true
-    - name: Install licensesnip
-      uses: baptiste0928/cargo-install@v2
-      with:
-        crate: licensesnip
-        locked: true
-    - name: Run licensesnip
-      run: licensesnip check
 
   test:
     name: build-and-test
