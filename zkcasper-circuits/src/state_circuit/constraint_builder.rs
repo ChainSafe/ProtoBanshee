@@ -1,4 +1,4 @@
-use super::cell_manager::*;
+
 use crate::{
     state_circuit::*,
     util::{Cell, CellType, ConstrainBuilderCommon, Constraint, Expr, Lookup},
@@ -36,7 +36,7 @@ impl<F: Field> ConstrainBuilderCommon<F> for ConstraintBuilder<F> {
             .push((name, self.condition.clone() * constraint));
     }
 
-    fn query_cells(&mut self, cell_type: CellType, count: usize) -> Vec<Cell<F>> {
+    fn query_cells(&mut self, _cell_type: CellType, _count: usize) -> Vec<Cell<F>> {
         // self.cell_manager.query_cells(cell_type, count)
         unimplemented!()
     }

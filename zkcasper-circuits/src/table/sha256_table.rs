@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    util::{rlc, Challenges},
+    util::{rlc},
     witness::HashInput,
 };
 use itertools::Itertools;
@@ -83,7 +83,7 @@ impl SHA256Table {
                 let input_rlc = challenge.map(|randomness| rlc::value(input, randomness));
 
                 (
-                    input_rlc.clone(),
+                    input_rlc,
                     Value::known(F::zero()),
                     input_rlc,
                     input.clone(),
@@ -130,7 +130,7 @@ impl SHA256Table {
 
                 let sha256_table_columns = <SHA256Table as LookupTable<F>>::advice_columns(self);
                 for input in inputs.clone() {
-                    let row = Self::assignments(input, challenge.clone());
+                    let row = Self::assignments(input, challenge);
 
                     for (&column, value) in sha256_table_columns.iter().zip_eq(row) {
                         region.assign_advice(

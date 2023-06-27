@@ -1,11 +1,10 @@
 use crate::{
-    table::{state_table::StateTable, validators_table},
+    table::{state_table::StateTable},
     util::ConstrainBuilderCommon,
-    MAX_VALIDATORS,
 };
 
 pub mod cell_manager;
-use cell_manager::CellManager;
+
 
 pub mod constraint_builder;
 use constraint_builder::ConstraintBuilder;
@@ -14,29 +13,22 @@ pub mod merkle_tree;
 use merkle_tree::TreeLevel;
 
 use crate::{
-    gadget::IsEqualGadget,
-    table::{sha256_table, LookupTable, SHA256Table},
+    table::{LookupTable, SHA256Table},
     util::{Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, MerkleTrace},
 };
 use eth_types::*;
 use gadgets::{
-    batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
-    binary_number::{BinaryNumberChip, BinaryNumberConfig},
-    util::{not, Expr},
+    util::{not},
 };
 use halo2_proofs::{
-    circuit::{Chip, Layouter, Region, Value},
+    circuit::{Layouter, Region, Value},
     plonk::{
-        Advice, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed, Instance,
-        SecondPhase, Selector, VirtualCells,
+        ConstraintSystem, Error, Expression,
     },
-    poly::Rotation,
 };
 use itertools::Itertools;
 use std::{
-    fmt::format,
-    iter,
     marker::PhantomData,
     ops::{Add, Mul},
     vec,
@@ -85,7 +77,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
             tree.push(level);
         }
 
-        let mut tree: [_; TREE_DEPTH - 1] =
+        let tree: [_; TREE_DEPTH - 1] =
             tree.into_iter().rev().collect_vec().try_into().unwrap();
 
         // Annotate circuit
@@ -208,7 +200,7 @@ impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
         todo!()
     }
 
-    fn min_num_rows_block(block: &witness::Block<F>) -> (usize, usize) {
+    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
         todo!()
     }
 

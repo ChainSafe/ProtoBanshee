@@ -14,7 +14,7 @@ pub use gadgets::util::{and, not, or, rlc, select, sum, xor, Expr};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{
-        Advice, Challenge, Circuit, ConstraintSystem, Error, Expression, FirstPhase, SecondPhase,
+        Challenge, ConstraintSystem, Error, Expression, SecondPhase,
         VirtualCells,
     },
 };

@@ -1,19 +1,13 @@
 use crate::{
-    util::{query_expression, Cell, CellType, Challenges, Expr},
+    util::{query_expression, Cell, CellType},
     validators_circuit::N_BYTE_LOOKUPS,
-    witness::*,
 };
 use eth_types::*;
 use halo2_proofs::{
-    circuit::{AssignedCell, Region, Value},
-    plonk::{Advice, Assigned, Column, ConstraintSystem, Error, Expression, VirtualCells},
-    poly::Rotation,
+    plonk::{Advice, Column, ConstraintSystem},
 };
-use itertools::Itertools;
-use std::{
-    collections::BTreeMap,
-    hash::{Hash, Hasher},
-};
+
+
 
 #[derive(Clone, Debug)]
 pub(crate) struct CellColumn {
