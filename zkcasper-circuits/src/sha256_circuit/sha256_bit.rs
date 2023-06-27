@@ -5,8 +5,6 @@ use eth_types::Field;
 use itertools::Itertools;
 use log::debug;
 
-use std::io::Read;
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaRow<F> {
     pub(crate) w: [bool; NUM_BITS_PER_WORD_W],

@@ -6,7 +6,6 @@ use crate::{
 use eth_types::Field;
 
 use halo2_proofs::plonk::Expression;
-use strum::IntoEnumIterator;
 
 pub struct ConstraintBuilder<'a, F: Field> {
     pub constraints: Vec<Constraint<F>>,

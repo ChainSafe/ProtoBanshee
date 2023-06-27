@@ -20,7 +20,6 @@ use halo2_proofs::{
     plonk::{Advice, Column, ConstraintSystem, Error, Expression, Fixed, VirtualCells},
     poly::Rotation,
 };
-use itertools::Itertools;
 
 use log::debug;
 use snark_verifier::loader::LoadedScalar;

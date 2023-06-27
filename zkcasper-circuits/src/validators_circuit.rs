@@ -14,7 +14,6 @@ use crate::{
 use cell_manager::CellManager;
 use constraint_builder::*;
 use eth_types::*;
-use gadgets::util::Expr;
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells},
