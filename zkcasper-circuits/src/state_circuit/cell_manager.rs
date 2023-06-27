@@ -3,11 +3,7 @@ use crate::{
     util::{query_expression, Cell, CellType},
 };
 use eth_types::*;
-use halo2_proofs::{
-    plonk::{Advice, Column, ConstraintSystem},
-};
-
-
+use halo2_proofs::plonk::{Advice, Column, ConstraintSystem};
 
 #[derive(Clone, Debug)]
 pub(crate) struct CellColumn {

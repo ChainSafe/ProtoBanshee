@@ -1,12 +1,6 @@
-
-use crate::{
-    table::state_table::StateTable,
-    witness::{MerkleTraceStep},
-};
+use crate::{table::state_table::StateTable, witness::MerkleTraceStep};
 use eth_types::*;
-use gadgets::{
-    util::{rlc},
-};
+use gadgets::util::rlc;
 use halo2_proofs::{
     circuit::{Region, Value},
     plonk::{
@@ -14,8 +8,6 @@ use halo2_proofs::{
     },
     poly::Rotation,
 };
-
-
 
 #[derive(Clone, Debug)]
 pub struct TreeLevel<F> {

@@ -1,11 +1,11 @@
 use super::cell_manager::*;
 use crate::{
-    table::{validators_table::ValidatorTableQueries},
+    table::validators_table::ValidatorTableQueries,
     util::{Cell, CellType, ConstrainBuilderCommon, Constraint, Expr, Lookup},
 };
 use eth_types::Field;
 
-use halo2_proofs::{plonk::Expression};
+use halo2_proofs::plonk::Expression;
 use strum::IntoEnumIterator;
 
 pub struct ConstraintBuilder<'a, F: Field> {

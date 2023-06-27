@@ -5,9 +5,8 @@ use eth_types::Field;
 use gadgets::impl_expr;
 use gadgets::util::rlc;
 
-
+use halo2_proofs::circuit::Value;
 use halo2_proofs::plonk::Expression;
-use halo2_proofs::{circuit::Value};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;

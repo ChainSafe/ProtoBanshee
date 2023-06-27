@@ -153,8 +153,7 @@ impl StateTables {
 
                 Ok(())
             },
-        );
-
+        )?;
         Ok(())
     }
 

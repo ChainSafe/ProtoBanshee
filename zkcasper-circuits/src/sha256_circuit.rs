@@ -22,7 +22,7 @@ use halo2_proofs::{
 };
 use itertools::Itertools;
 
-use log::{debug};
+use log::debug;
 use snark_verifier::loader::LoadedScalar;
 use util::*;
 
@@ -935,7 +935,9 @@ impl<F: Field> Sha256Circuit<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr};
+    use halo2_proofs::{
+        circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
+    };
 
     #[derive(Default, Debug, Clone)]
     struct TestSha256<F: Field> {

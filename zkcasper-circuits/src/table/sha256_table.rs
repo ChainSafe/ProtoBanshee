@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    util::{rlc},
-    witness::HashInput,
-};
+use crate::{util::rlc, witness::HashInput};
 use itertools::Itertools;
 use sha2::Digest;
 
@@ -82,12 +79,7 @@ impl SHA256Table {
             HashInput::Single(input) => {
                 let input_rlc = challenge.map(|randomness| rlc::value(input, randomness));
 
-                (
-                    input_rlc,
-                    Value::known(F::zero()),
-                    input_rlc,
-                    input.clone(),
-                )
+                (input_rlc, Value::known(F::zero()), input_rlc, input.clone())
             }
             HashInput::MerklePair(left, right) => {
                 let left_rlc = challenge.map(|randomness| rlc::value(left, randomness));

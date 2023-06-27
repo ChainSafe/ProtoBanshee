@@ -1,4 +1,4 @@
-use crate::util::{Expr};
+use crate::util::Expr;
 use eth_types::*;
 use halo2_proofs::{
     circuit::{AssignedCell, Region, Value},
@@ -6,9 +6,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 
-use std::{
-    hash::{Hash, Hasher},
-};
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug)]
 pub struct Cell<F> {

@@ -1,15 +1,11 @@
 use super::util::*;
-use crate::{
-    util::{rlc},
-    witness::HashInput,
-};
+use crate::{util::rlc, witness::HashInput};
 use eth_types::Field;
 
-
 use itertools::Itertools;
-use log::{debug};
+use log::debug;
 
-use std::{io::Read};
+use std::io::Read;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaRow<F> {
@@ -37,11 +33,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
     let input_len = inputs[0].len() + inputs[1].len();
     // end
 
-    let mut bits = left_bits
-        .iter()
-        .copied()
-        .chain(right_bits)
-        .collect_vec();
+    let mut bits = left_bits.iter().copied().chain(right_bits).collect_vec();
 
     // Prepare inputs RLCs in advance
     let mut inputs_rlc = [F::zero(), F::zero()];
@@ -63,12 +55,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
     assert!(bits.len() % RATE_IN_BITS == 0);
 
     // Set the initial state
-    let mut hs: [u64; 8] = H
-        .iter()
-        .map(|v| *v)
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap();
+    let mut hs: [u64; 8] = H.to_vec().try_into().unwrap();
     let mut length = 0usize;
     let mut data_rlc = F::zero();
     let _limbs_rlc = [F::zero(); 2];

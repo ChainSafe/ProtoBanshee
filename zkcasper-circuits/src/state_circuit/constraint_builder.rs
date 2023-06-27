@@ -1,4 +1,3 @@
-
 use crate::{
     state_circuit::*,
     util::{Cell, CellType, ConstrainBuilderCommon, Constraint, Expr, Lookup},
@@ -11,16 +10,16 @@ pub struct ConstraintBuilder<F: Field> {
     lookups: Vec<Lookup<F>>,
     condition: Expression<F>,
 }
-
-impl<F: Field> ConstraintBuilder<F> {
-    pub fn new() -> Self {
+impl<F: Field> Default for ConstraintBuilder<F> {
+    fn default() -> Self {
         Self {
             constraints: vec![],
             lookups: vec![],
             condition: 1.expr(),
         }
     }
-
+}
+impl<F: Field> ConstraintBuilder<F> {
     pub fn gate(&self, condition: Expression<F>) -> Vec<(&'static str, Expression<F>)> {
         self.constraints
             .iter()

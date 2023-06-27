@@ -1,10 +1,6 @@
-use crate::{
-    table::{state_table::StateTable},
-    util::ConstrainBuilderCommon,
-};
+use crate::{table::state_table::StateTable, util::ConstrainBuilderCommon};
 
 pub mod cell_manager;
-
 
 pub mod constraint_builder;
 use constraint_builder::ConstraintBuilder;
@@ -18,14 +14,10 @@ use crate::{
     witness::{self, MerkleTrace},
 };
 use eth_types::*;
-use gadgets::{
-    util::{not},
-};
+use gadgets::util::not;
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
-    plonk::{
-        ConstraintSystem, Error, Expression,
-    },
+    plonk::{ConstraintSystem, Error, Expression},
 };
 use itertools::Itertools;
 use std::{
@@ -77,8 +69,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
             tree.push(level);
         }
 
-        let tree: [_; TREE_DEPTH - 1] =
-            tree.into_iter().rev().collect_vec().try_into().unwrap();
+        let tree: [_; TREE_DEPTH - 1] = tree.into_iter().rev().collect_vec().try_into().unwrap();
 
         // Annotate circuit
         sha256_table.annotate_columns(meta);
@@ -93,7 +84,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
 
             meta.create_gate("tree_level boolean checks", |meta| {
                 let selector = level.selector(meta);
-                let mut cb = ConstraintBuilder::new();
+                let mut cb = ConstraintBuilder::default();
                 cb.require_boolean("into_left is boolean", level.into_left(meta));
                 cb.gate(selector)
             });
@@ -167,7 +158,7 @@ impl<F: Field> StateSSZCircuitConfig<F> {
 
                 Ok(())
             },
-        );
+        )?;
 
         Ok(max_rows)
     }

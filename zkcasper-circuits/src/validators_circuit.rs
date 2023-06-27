@@ -8,22 +8,16 @@ use crate::{
         LookupTable, ValidatorsTable,
     },
     util::{Challenges, ConstrainBuilderCommon, SubCircuit, SubCircuitConfig},
-    witness::{
-        self, into_casper_entities, CasperEntity, Committee, Validator,
-    },
+    witness::{self, into_casper_entities, CasperEntity, Committee, Validator},
     MAX_VALIDATORS, N_BYTES_U64,
 };
 use cell_manager::CellManager;
 use constraint_builder::*;
 use eth_types::*;
-use gadgets::{
-    util::{Expr},
-};
+use gadgets::util::Expr;
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
-    plonk::{
-        Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells,
-    },
+    plonk::{Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells},
     poly::Rotation,
 };
 use itertools::Itertools;
@@ -138,8 +132,8 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                 )
             });
 
-            config.target_gte_activation.insert(target_gte_activation);
-            config.target_lt_exit.insert(target_lt_exit);
+            config.target_gte_activation = Some(target_gte_activation);
+            config.target_lt_exit = Some(target_lt_exit);
 
             cb.add_lookup(
                 "validator.balance in state table",
@@ -270,9 +264,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     challange,
                 )
             },
-        );
-
-        Ok(())
+        )
     }
 
     fn assign_with_region(
@@ -318,13 +310,13 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                         offset,
                         F::from(validator.activation_epoch),
                         F::from(target_epoch + 1),
-                    );
+                    )?;
                     target_lt_exit.assign(
                         region,
                         offset,
                         F::from(target_epoch),
                         F::from(validator.exit_epoch),
-                    );
+                    )?;
 
                     let validator_rows = validator.table_assignment(randomness);
 
@@ -428,9 +420,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
                     challenges.sha256_input(),
                 )
             },
-        );
-
-        Ok(())
+        )
     }
 
     /// powers of randomness for instance columns
@@ -450,18 +440,16 @@ fn queries<F: Field>(
     }
 }
 
+#[cfg(test)]
+
 mod tests {
     use super::*;
-    use crate::{
-        table::state_table::StateTables,
-        witness::{MerkleTrace},
-    };
+    use crate::{table::state_table::StateTables, witness::MerkleTrace};
     use halo2_proofs::{
-        circuit::{SimpleFloorPlanner},
-        plonk::Circuit,
+        circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
-    
-    use std::{marker::PhantomData};
+
+    use std::{fs, marker::PhantomData};
 
     #[derive(Debug, Clone)]
     struct TestValidators<F: Field> {

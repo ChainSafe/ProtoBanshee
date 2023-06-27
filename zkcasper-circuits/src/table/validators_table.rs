@@ -1,6 +1,5 @@
 use gadgets::util::{not, Expr};
 
-
 use crate::{
     util::layout::{ValueRlcColumn, ValueRlcExpr},
     witness::{into_casper_entities, CasperEntityRow, Committee, Validator},
