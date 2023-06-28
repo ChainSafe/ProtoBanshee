@@ -24,7 +24,7 @@ pub struct Block<F: Field> {
 }
 
 #[allow(non_camel_case_types)]
-impl<F: Field + From<u64> + Into<u64>> Block<F> {
+impl<F: Field> Block<F> {
     fn from_beacon_state<
         SLOTS_PER_HISTORICAL_ROOT,
         HISTORICAL_ROOTS_LIMIT,
