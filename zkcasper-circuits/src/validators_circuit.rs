@@ -20,6 +20,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use itertools::Itertools;
+use log::info;
 
 use std::{iter, marker::PhantomData};
 
@@ -230,6 +231,8 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
             cb.gate(q.selector() * q.table.is_committee())
         });
+
+        info!("validators circuit degree={}", meta.degree());
 
         config
     }

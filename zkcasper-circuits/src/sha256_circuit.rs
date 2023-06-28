@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use crate::{
     table::{LookupTable, SHA256Table},
     util::{not, BaseConstraintBuilder, Challenges, Expr, SubCircuit, SubCircuitConfig},
-    witness::{self, HashInput},
+    witness::{self, HashInput}, sha256_circuit::sha256_bit::fr_pow,
 };
 use eth_types::Field;
 use gadgets::util::{and, select, sum, xor};
@@ -21,7 +21,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 
-use log::debug;
+use log::{debug, info};
 use snark_verifier::loader::LoadedScalar;
 use util::*;
 
@@ -51,7 +51,9 @@ pub struct Sha256CircuitConfig<F> {
     h_e: Column<Fixed>,
     // feature: [multi input lookups]
     is_right: Column<Advice>,
-    base_pow: Column<Advice>,
+    rnd_pow: Column<Advice>,
+    // feature: [lookup by value]
+    u8_pow: [Column<Advice>; 2],
 
     /// The columns for bytes of hash results
     pub hash_table: SHA256Table,
@@ -63,6 +65,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
     type ConfigArgs = SHA256Table;
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
+        // consts
+        let two = F::from(2);
+        let f256 = fr_pow(two, 8);
+
         let r: F = Sha256CircuitConfig::fixed_challenge();
         let q_enable = meta.fixed_column();
         let q_first = meta.fixed_column();
@@ -91,10 +97,14 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let hash_table = args;
         let is_enabled = hash_table.is_enabled;
         let length = hash_table.input_len;
-        let _limbs_rlc = hash_table.limbs_rlc;
+        let chunk_vals = hash_table.chunk_vals;
         let data_rlc = hash_table.input_rlc;
         let hash_rlc = hash_table.hash_rlc;
-        let base_pow = meta.advice_column();
+        // feature: [multi input lookups]
+        let rnd_pow = meta.advice_column();
+        // feature: [lookup by value]
+        let data_vals = hash_table.chunk_vals;
+        let u8_pow = array_init::array_init(|_| meta.advice_column());
         let final_hash_bytes = array_init::array_init(|_| meta.advice_column());
         for col in final_hash_bytes.into_iter() {
             meta.enable_equality(col);
@@ -330,10 +340,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         meta.create_gate("limb rlcs", |meta| {
             let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
             let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
-            let left_rlc = meta.query_advice(hash_table.limbs_rlc[0], Rotation::cur());
-            let right_rlc = meta.query_advice(hash_table.limbs_rlc[1], Rotation::cur());
+            let left_rlc = meta.query_advice(hash_table.chunk_rlcs[0], Rotation::cur());
+            let right_rlc = meta.query_advice(hash_table.chunk_rlcs[1], Rotation::cur());
             let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
-            let base_pow = meta.query_advice(base_pow, Rotation::cur());
+            let base_pow = meta.query_advice(rnd_pow, Rotation::cur());
 
             cb.condition(is_enabled, |cb| {
                 cb.require_equal(
@@ -444,8 +454,25 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             let length = meta.query_advice(length, Rotation::cur());
             let data_rlc_prev = meta.query_advice(data_rlc, Rotation::prev());
             let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
-            let base_pow_prev = meta.query_advice(base_pow, Rotation::prev());
-            let base_pow = meta.query_advice(base_pow, Rotation::cur());
+            let data_val_prev = [
+                meta.query_advice(chunk_vals[0], Rotation::prev()),
+                meta.query_advice(chunk_vals[1], Rotation::prev())
+            ];
+            let u8_pow_prev = [
+                meta.query_advice(u8_pow[0], Rotation::prev()),
+                meta.query_advice(u8_pow[1], Rotation::prev())
+            ];
+            let u8_pow = [
+                meta.query_advice(u8_pow[0], Rotation::cur()),
+                meta.query_advice(u8_pow[1], Rotation::cur())
+            ];
+            let data_val = [
+                meta.query_advice(chunk_vals[0], Rotation::cur()),
+                meta.query_advice(chunk_vals[1], Rotation::cur())
+            ];
+
+            let rnd_pow_prev = meta.query_advice(rnd_pow, Rotation::prev());
+            let rnd_pow = meta.query_advice(rnd_pow, Rotation::cur());
 
             // Update the length/data_rlc on rows where we absorb data
             cb.condition(q_padding.expr(), |cb| {
@@ -465,7 +492,9 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
 
                 // Use intermediate cells to keep the degree low
                 let mut new_data_rlc = data_rlc_prev.clone() * not::expr(start_new_hash.expr());
-                let mut new_base_pow = base_pow_prev.clone() * not::expr(start_new_hash.expr());
+                let mut new_data_val = data_val_prev.map(|e| e.clone() * not::expr(start_new_hash.expr()));
+
+                let mut new_rnd_pow = rnd_pow_prev.clone() * not::expr(start_new_hash.expr());
 
                 cb.require_equal(
                     "initial data rlc",
@@ -494,29 +523,35 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                     }
 
                     // feature: [multi input lookups]
-                    new_base_pow = select::expr(
+                    new_rnd_pow = select::expr(
                         meta.query_advice(*is_padding, Rotation::cur()),
-                        new_base_pow.clone(),
-                        new_base_pow.clone() * r,
+                        new_rnd_pow.clone(),
+                        new_rnd_pow.clone() * r,
+                    );
+                    // feature: [multi input lookups]
+                    new_data_val[0] = select::expr(
+                        meta.query_advice(*is_padding, Rotation::cur()),
+                        new_data_val[0].clone(),
+                        new_data_val[0].clone() * r,
                     );
                     if idx < data_rlcs.len() - 1 {
-                        let next_base_pow = base_pow_prev.clone() * r.pow_const(idx as u64 + 1);
+                        let next_rnd_pow = rnd_pow_prev.clone() * r.pow_const(idx as u64 + 1);
                         cb.require_equal(
-                            "intermediate base pow",
-                            next_base_pow.clone() * is_right.clone(),
-                            new_base_pow * is_right.clone(),
+                            "intermediate rnd pow",
+                            next_rnd_pow.clone() * is_right.clone(),
+                            new_rnd_pow * is_right.clone(),
                         );
-                        new_base_pow = next_base_pow;
+                        new_rnd_pow = next_rnd_pow;
                     }
-                    // end
                 }
 
                 cb.require_equal("update data rlc", data_rlc.clone(), new_data_rlc);
+                // feature: [multi input lookups]
                 cb.require_equal(
-                    "update base pow",
-                    base_pow.clone() * is_right.clone(),
-                    new_base_pow * is_right.clone(),
-                ); // feature: [multi input lookups]
+                    "update rnd pow",
+                    rnd_pow.clone() * is_right.clone(),
+                    new_rnd_pow * is_right.clone(),
+                ); 
             });
             cb.gate(1.expr())
         });
@@ -611,8 +646,8 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             cb.gate(q_condition)
         });
 
-        debug!("Degree: {}", meta.degree());
-        debug!("Minimum rows: {}", meta.minimum_rows());
+        info!("sha256 circuit degree: {}", meta.degree());
+        debug!("minimum rows: {}", meta.minimum_rows());
 
         Sha256CircuitConfig {
             q_enable,
@@ -633,7 +668,8 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             is_final,
             is_paddings,
             data_rlcs,
-            base_pow,
+            u8_pow,
+            rnd_pow,
             round_cst,
             h_a,
             h_e,
@@ -798,12 +834,24 @@ impl<F: Field> Sha256CircuitConfig<F> {
 
         // feature: [multi input lookups]
         region.assign_advice(
-            || format!("assign base pow {}", offset),
-            self.base_pow,
+            || format!("assign rnd pow {}", offset),
+            self.rnd_pow,
             offset,
-            || Value::known(row.base_pow),
+            || Value::known(row.rnd_pow),
         )?;
         // end
+
+        // feature: [lookup by value]
+        for i in 0..2 {
+            region.assign_advice(
+                || format!("assign u8_pow[{i}] pow {}", offset),
+                self.u8_pow[i],
+                offset,
+                || Value::known(row.u8_pow[i]),
+            )?;
+        }
+        // end
+
 
         // Hash data
         self.hash_table.assign_row(
@@ -813,13 +861,13 @@ impl<F: Field> Sha256CircuitConfig<F> {
                 Value::known(F::from(row.is_final && round == NUM_ROUNDS + 7)),
                 Value::known(row.limbs_rlc[0]),
                 Value::known(row.limbs_rlc[1]),
+                Value::known(row.limbs_val[0]),
+                Value::known(row.limbs_val[1]),
                 Value::known(row.data_rlc),
                 Value::known(F::from(row.length as u64)),
                 Value::known(row.hash_rlc),
             ],
         )?;
-
-        println!("offset: {offset} => [round {round}][is_enabled {}][is_final {}][left_rlc {:?}][right_rlc {:?}][data_rlc {:?}][hash_rlc {:?}]", row.is_final, row.is_final && round == NUM_ROUNDS + 7, row.limbs_rlc[0].get_lower_32(), row.limbs_rlc[1].get_lower_32(), row.data_rlc.get_lower_32(), row.hash_rlc.get_lower_32());
 
         let mut hash_cells = Vec::with_capacity(NUM_BYTES_FINAL_HASH);
         if !row.is_final || round != NUM_ROUNDS + 7 {
@@ -933,6 +981,10 @@ impl<F: Field> Sha256Circuit<F> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use crate::witness::MerkleTrace;
+
     use super::*;
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
@@ -962,26 +1014,8 @@ mod tests {
             config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            let cells_vec = config.digest(&mut layouter, &self.inputs)?;
+            let _ = config.digest(&mut layouter, &self.inputs)?;
             Ok(())
-        }
-    }
-
-    fn verify<F: Field>(k: u32, inputs: Vec<HashInput>, success: bool) {
-        let circuit = TestSha256 {
-            inputs,
-            _f: PhantomData,
-        };
-
-        let prover = MockProver::<F>::run(k, &circuit, vec![]).unwrap();
-        let verify_result = prover.verify();
-        if verify_result.is_ok() != success {
-            if let Some(errors) = verify_result.err() {
-                for error in errors.iter() {
-                    println!("{}", error);
-                }
-            }
-            panic!();
         }
     }
 
@@ -989,6 +1023,28 @@ mod tests {
     fn test_bit_sha256_simple() {
         let k = 10;
         let inputs = vec![HashInput::MerklePair(vec![2u8; 32], vec![3u8; 32]); 1];
-        verify::<Fr>(k, inputs, true);
+        let circuit = TestSha256 {
+            inputs,
+            _f: PhantomData,
+        };
+
+        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+        prover.assert_satisfied();
+    }
+
+    #[test]
+    fn test_sha256_circuit() {
+        let k = 13;
+        let merkle_trace: MerkleTrace =
+            serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
+        let inputs = merkle_trace.sha256_inputs();
+        println!("inputs: {:?}", inputs.len());
+        let circuit = TestSha256 {
+            inputs,
+            _f: PhantomData,
+        };
+
+        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+        prover.assert_satisfied();
     }
 }

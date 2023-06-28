@@ -8,8 +8,10 @@ use sha2::Digest;
 pub struct SHA256Table {
     /// True when the row is enabled
     pub is_enabled: Column<Advice>,
-    /// Byte array first input as `RLC(input[i])`
-    pub limbs_rlc: [Column<Advice>; 2],
+    /// Inputs part as integer values.
+    pub chunk_vals: [Column<Advice>; 2],
+    /// Byte array input parts as `RLC(input[i])`
+    pub chunk_rlcs: [Column<Advice>; 2],
     /// Byte array first input as `RLC(input[i])`
     pub input_rlc: Column<Advice>,
     /// Length of first+second inputs
@@ -22,8 +24,10 @@ impl<F: Field> LookupTable<F> for SHA256Table {
     fn columns(&self) -> Vec<Column<Any>> {
         vec![
             self.is_enabled.into(),
-            self.limbs_rlc[0].into(),
-            self.limbs_rlc[1].into(),
+            self.chunk_rlcs[0].into(),
+            self.chunk_rlcs[1].into(),
+            self.chunk_vals[0].into(),
+            self.chunk_vals[1].into(),
             self.input_rlc.into(),
             self.input_len.into(),
             self.hash_rlc.into(),
@@ -35,6 +39,8 @@ impl<F: Field> LookupTable<F> for SHA256Table {
             String::from("is_enabled"),
             String::from("left_rlc"),
             String::from("right_rlc"),
+            String::from("left_val"),
+            String::from("right_val"),
             String::from("input_rlc"),
             String::from("input_len"),
             String::from("hash_rlc"),
@@ -47,7 +53,11 @@ impl SHA256Table {
     pub fn construct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         Self {
             is_enabled: meta.advice_column(),
-            limbs_rlc: [
+            chunk_rlcs: [
+                meta.advice_column_in(SecondPhase),
+                meta.advice_column_in(SecondPhase),
+            ],
+            chunk_vals: [
                 meta.advice_column_in(SecondPhase),
                 meta.advice_column_in(SecondPhase),
             ],
@@ -62,7 +72,7 @@ impl SHA256Table {
         &self,
         region: &mut Region<F>,
         offset: usize,
-        values: [Value<F>; 6],
+        values: [Value<F>; 8],
     ) -> Result<(), Error> {
         for (&column, value) in <SHA256Table as LookupTable<F>>::advice_columns(self)
             .iter()
@@ -154,11 +164,11 @@ impl SHA256Table {
             ),
             (
                 enable.clone() * fst,
-                meta.query_advice(self.limbs_rlc[0], Rotation::cur()),
+                meta.query_advice(self.chunk_rlcs[0], Rotation::cur()),
             ),
             (
                 enable.clone() * snd,
-                meta.query_advice(self.limbs_rlc[1], Rotation::cur()),
+                meta.query_advice(self.chunk_rlcs[1], Rotation::cur()),
             ),
             (
                 enable * hash,

@@ -10,7 +10,7 @@ import {
     ssz,
 } from "@lodestar/types"
 import {
-    Validator as BeaconValidator,
+    BeaconState
 } from "@lodestar/types/phase0"
 import {createProof, ProofType, MultiProof, Node} from "@chainsafe/persistent-merkle-tree";
 import crypto from "crypto";
@@ -55,32 +55,6 @@ for (let i = 0; i < N; i++) {
         withdrawableEpoch: 0
     });
     validatorBaseGindices.push(ValidatorsSsz.getPathInfo([i]).gindex);
-    console.log([
-        [
-            ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n, 
-            "pubkey1"
-        ],
-        [
-            ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n + 1n, 
-            "pubkey2"
-        ],
-        [
-            ValidatorsSsz.getPathInfo([i, 'effectiveBalance']).gindex, 
-            "effectiveBalance"
-        ],
-        [
-            ValidatorsSsz.getPathInfo([i, 'slashed']).gindex, 
-            "slashed"
-        ],
-        [
-            ValidatorsSsz.getPathInfo([i, 'activationEpoch']).gindex, 
-            "activationEpoch"            
-        ],
-        [
-            ValidatorsSsz.getPathInfo([i, 'exitEpoch']).gindex, 
-            "exitEpoch"
-        ],
-    ]);
     gindices.push(ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n);
     gindices.push(ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n + 1n);
     gindices.push(ValidatorsSsz.getPathInfo([i, 'effectiveBalance']).gindex);
