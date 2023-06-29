@@ -4,7 +4,6 @@ use eth_types::Field;
 use itertools::Itertools;
 use log::debug;
 use snark_verifier::loader::LoadedScalar;
-use lazy_static::lazy_static;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaRow<F> {
@@ -20,11 +19,11 @@ pub struct ShaRow<F> {
     pub(crate) intermediary_data_rlcs: [F; ABSORB_WIDTH_PER_ROW_BYTES],
     pub(crate) final_hash_bytes: [F; NUM_BYTES_FINAL_HASH],
     // feature: [multi input lookups]
-    pub(crate) limbs_rlc: [F; 2],
+    pub(crate) chunks_rlc: [F; 2],
     pub(crate) rnd_pow: F,
     // feature: [lookups by value]
     pub(crate) u8_pow: [F; 2],
-    pub(crate) limbs_val: [F; 2],
+    pub(crate) chunks_val: [F; 2],
     // end
 }
 
@@ -44,10 +43,11 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
     let f256 = fr_pow(two, 8);
     let mut inputs_vals = [F::zero(), F::zero()];
     for (idx, _) in inputs.iter().enumerate() {
-        for i in 0..16 {
+        for i in 0..32 {
             inputs_vals[idx] += F::from(inputs[idx][i] as u64) * fr_pow(two, i * 8);
         }
     }
+    
     // end
 
     let left_bits = into_bits(inputs[0]);
@@ -71,7 +71,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
     let mut length = 0usize;
     let mut data_rlc = F::zero();
     let mut rnd_pow = F::zero();
-    let mut u8_pow = [two.pow_const(8 * 3), F::zero()];
+    let mut u8_pow = [F::one(), F::zero()];
     let mut data_vals = [F::zero(); 2];
 
     let mut in_padding = false;
@@ -94,11 +94,11 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
              intermediary_data_rlcs,
              final_hash_bytes,
              // feature: [multi input lookups]
-             limbs_rlc,
+             chunks_rlc,
              rnd_pow: F,
              // feature: [lookups by value]
              u8_pow: [F; 2],
-             limbs_val: [F; 2]| {
+             chunks_val: [F; 2]| {
                 let word_to_bits = |value: u64, num_bits: usize| {
                     into_bits(&value.to_be_bytes())[64 - num_bits..64]
                         .iter()
@@ -118,10 +118,10 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
                     is_paddings,
                     intermediary_data_rlcs,
                     final_hash_bytes,
-                    limbs_rlc,
+                    chunks_rlc,
                     rnd_pow,
                     u8_pow,
-                    limbs_val,
+                    chunks_val,
                 });
             };
 
@@ -149,7 +149,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
                 [F::zero(); 2],
                 rnd_pow,
                 u8_pow,
-                [F::zero(); 2],
+                data_vals,
             )
         };
         add_row_start(d, h, idx == 0);
@@ -184,41 +184,24 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
                         // feature: [multi input lookups]
                         if length == inputs[0].len() {
                             rnd_pow = F::one();
-                            // feature: [lookups by value]
-                            u8_pow[0] = F::zero();
-                            if idx == 0 {
-                                u8_pow[1] = F::one();
-                            }
+                            u8_pow[1] = F::one();
                         }
                         if length > inputs[0].len() {
                             is_right = true;
                             rnd_pow *= rnd;
+                            u8_pow[0] = F::zero();
                         }
+
                         // end
                         // feature: [lookups by value]
-                        if length < input_len {
-                            let cur_byte_length = length + idx;
-                            let cur_chunk_idx = cur_byte_length / inputs[0].len();
-                            let i_lo: usize = match cur_byte_length {
-                                0..=64 => cur_byte_length % 32,
-                                _ => 0,
-                            };
-                            println!("cur_byte_length: {cur_byte_length}, cur_chunk_idx {cur_chunk_idx}, i_lo: {i_lo}");
-                            println!(
-                                "u8_pow_left: {:?}, u8_pow_right: {:?}",
-                                u8_pow[0], u8_pow[1]
-                            );
-
+                        if length <= input_len {
+                            data_vals[0] += u8_pow[0] * F::from(*byte as u64);
+                            data_vals[1] += u8_pow[1] * F::from(*byte as u64);
                             u8_pow[0] = u8_pow[0] * f256;
-                            let temp_left = data_vals[0] + u8_pow[0] * F::from(*byte as u64);
-                            let temp_right = data_vals[1] + u8_pow[1] * F::from(*byte as u64);
-                            data_vals[cur_chunk_idx] +=
-                                F::from(*byte as u64) * fr_pow(two, i_lo * 8);
-                            assert_eq!(temp_left, data_vals[0], "left bad");
-                            assert_eq!(temp_right, data_vals[1], "right bad");
-                            u8_pow[1] = u8_pow[1] * f256;
+                            if length - 4 + idx >= inputs[0].len()  {
+                                u8_pow[1] = u8_pow[1] * f256;
+                            }
                         }
-
                         // end
                     }
                     if idx < inter_data_rlcs.len() - 1 {
@@ -285,7 +268,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
                 [F::zero(); 2],
                 rnd_pow,
                 u8_pow,
-                [F::zero(); 2],
+                data_vals,
             );
 
             // Truncate the newly calculated values
@@ -366,7 +349,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
             inputs_rlc,
             rnd_pow,
             u8_pow,
-            [F::zero(); 2],
+            data_vals,
         );
 
         // Now truncate the results

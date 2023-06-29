@@ -238,8 +238,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
     }
 
     fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-        // self.state_table.annotate_columns_in_region(region);
-        // self.tag.annotate_columns_in_region(region, "tag");
+        self.state_tables.annotate_columns_in_region(region);
         self.annotations()
             .into_iter()
             .for_each(|(col, ann)| region.name_column(|| &ann, col));
