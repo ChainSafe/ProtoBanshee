@@ -24,10 +24,11 @@ pub struct ShaRow<F> {
     // feature: [lookups by value]
     pub(crate) u8_pow: [F; 2],
     pub(crate) chunks_val: [F; 2],
+    pub(crate) is_rlc: [bool; 2],
     // end
 }
 
-pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) {
+pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, is_rlc: [bool; 2]) {
     // feature: [multi input lookups]
     // Prepare inputs RLCs in advance
     let mut inputs_rlc = [F::zero(), F::zero()];
@@ -40,14 +41,13 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
 
     // feature: [lookups by value]
     let two = F::from(2);
-    let f256 = fr_pow(two, 8);
+    let f256 = two.pow_const(8);
     let mut inputs_vals = [F::zero(), F::zero()];
     for (idx, _) in inputs.iter().enumerate() {
         for i in 0..32 {
-            inputs_vals[idx] += F::from(inputs[idx][i] as u64) * fr_pow(two, i * 8);
+            inputs_vals[idx] += F::from(inputs[idx][i] as u64) * two.pow_const(i * 8);
         }
     }
-    
     // end
 
     let left_bits = into_bits(inputs[0]);
@@ -122,6 +122,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F) 
                     rnd_pow,
                     u8_pow,
                     chunks_val,
+                    is_rlc,
                 });
             };
 
@@ -371,21 +372,17 @@ pub fn multi_sha256<F: Field>(inputs: &[HashInput], rnd: F) -> Vec<ShaRow<F>> {
     let inputs = inputs
         .iter()
         .map(|input| match input {
-            HashInput::Single(bytes) => [bytes.as_slice(), &[]],
-            HashInput::MerklePair(left, right) => [left.as_slice(), right.as_slice()],
+            HashInput::Single(bytes) => ([bytes.as_slice(), &[]], [false; 2]),
+            HashInput::TwoToOne{
+                left,
+                right,
+                is_rlc,
+            } => ([left.as_slice(), right.as_slice()], is_rlc.clone()),
         })
         .collect_vec();
     let mut rows: Vec<ShaRow<F>> = Vec::new();
-    for bytes in inputs {
-        sha256(&mut rows, &bytes, rnd);
+    for (bytes, is_rlc) in inputs {
+        sha256(&mut rows, &bytes, rnd, is_rlc);
     }
     rows
-}
-
-pub(super) fn fr_pow<F: Field>(base: F, exp: usize) -> F {
-    if exp == 0 {
-        F::from(1)
-    } else {
-        base.pow_const(exp as u64)
-    }
 }

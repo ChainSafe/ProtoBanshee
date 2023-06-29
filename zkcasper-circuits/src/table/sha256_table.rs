@@ -8,10 +8,8 @@ use sha2::Digest;
 pub struct SHA256Table {
     /// True when the row is enabled
     pub is_enabled: Column<Advice>,
-    /// Inputs part as integer values.
-    pub chunk_vals: [Column<Advice>; 2],
     /// Byte array input parts as `RLC(input[i])`
-    pub chunk_rlcs: [Column<Advice>; 2],
+    pub input_chunks: [Column<Advice>; 2],
     /// Byte array first input as `RLC(input[i])`
     pub input_rlc: Column<Advice>,
     /// Length of first+second inputs
@@ -24,10 +22,8 @@ impl<F: Field> LookupTable<F> for SHA256Table {
     fn columns(&self) -> Vec<Column<Any>> {
         vec![
             self.is_enabled.into(),
-            self.chunk_rlcs[0].into(),
-            self.chunk_rlcs[1].into(),
-            self.chunk_vals[0].into(),
-            self.chunk_vals[1].into(),
+            self.input_chunks[0].into(),
+            self.input_chunks[1].into(),
             self.input_rlc.into(),
             self.input_len.into(),
             self.hash_rlc.into(),
@@ -37,10 +33,8 @@ impl<F: Field> LookupTable<F> for SHA256Table {
     fn annotations(&self) -> Vec<String> {
         vec![
             String::from("is_enabled"),
-            String::from("left_rlc"),
-            String::from("right_rlc"),
-            String::from("left_val"),
-            String::from("right_val"),
+            String::from("left_chunk"),
+            String::from("right_chunk"),
             String::from("input_rlc"),
             String::from("input_len"),
             String::from("hash_rlc"),
@@ -53,11 +47,7 @@ impl SHA256Table {
     pub fn construct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         Self {
             is_enabled: meta.advice_column(),
-            chunk_rlcs: [
-                meta.advice_column_in(SecondPhase),
-                meta.advice_column_in(SecondPhase),
-            ],
-            chunk_vals: [
+            input_chunks: [
                 meta.advice_column_in(SecondPhase),
                 meta.advice_column_in(SecondPhase),
             ],
@@ -72,7 +62,7 @@ impl SHA256Table {
         &self,
         region: &mut Region<F>,
         offset: usize,
-        values: [Value<F>; 8],
+        values: [Value<F>; 6],
     ) -> Result<(), Error> {
         for (&column, value) in <SHA256Table as LookupTable<F>>::advice_columns(self)
             .iter()
@@ -84,20 +74,36 @@ impl SHA256Table {
     }
 
     /// Generate the sha256 table assignments from a byte array input.
-    pub fn assignments<F: Field>(input: &HashInput, challenge: Value<F>) -> [Value<F>; 6] {
-        let (left_rlc, right_rlc, input_rlc, preimage) = match input {
+    pub fn assignments<F: Field>(input: &HashInput, challenge: Value<F>) -> [Value<F>; 8] {
+        let (chunks_rlcs, chunk_vals, input_rlc, preimage) = match input {
             HashInput::Single(input) => {
                 let input_rlc = challenge.map(|randomness| rlc::value(input, randomness));
+                let input_val = F::from_bytes_le_unsecure(input);
 
-                (input_rlc, Value::known(F::zero()), input_rlc, input.clone())
+                (
+                    [input_rlc, Value::known(F::zero())],
+                    [input_val, F::zero()],
+                    input_rlc,
+                    input.clone(),
+                )
             }
-            HashInput::MerklePair(left, right) => {
-                let left_rlc = challenge.map(|randomness| rlc::value(left, randomness));
-                let right_rlc = challenge.map(|randomness| rlc::value(right, randomness));
+            HashInput::TwoToOne{
+                left,
+                right,
+                is_rlc
+            } => {
+                let chunk_rlcs = [
+                    challenge.map(|randomness| rlc::value(left, randomness)),
+                    challenge.map(|randomness| rlc::value(right, randomness)),
+                ];
+                let chunk_vals = [
+                    F::from_bytes_le_unsecure(left),
+                    F::from_bytes_le_unsecure(right),
+                ];
                 let preimage = vec![left.clone(), right.clone()].concat();
                 let input_rlc = challenge.map(|randomness| rlc::value(&preimage, randomness));
 
-                (left_rlc, right_rlc, input_rlc, preimage)
+                (chunk_rlcs, chunk_vals, input_rlc, preimage)
             }
         };
 
@@ -108,8 +114,10 @@ impl SHA256Table {
 
         [
             Value::known(F::one()),
-            left_rlc,
-            right_rlc,
+            chunks_rlcs[0],
+            chunks_rlcs[1],
+            Value::known(chunk_vals[0]),
+            Value::known(chunk_vals[1]),
             input_rlc,
             Value::known(input_len),
             output_rlc,
@@ -164,11 +172,11 @@ impl SHA256Table {
             ),
             (
                 enable.clone() * fst,
-                meta.query_advice(self.chunk_rlcs[0], Rotation::cur()),
+                meta.query_advice(self.input_chunks[0], Rotation::cur()),
             ),
             (
                 enable.clone() * snd,
-                meta.query_advice(self.chunk_rlcs[1], Rotation::cur()),
+                meta.query_advice(self.input_chunks[1], Rotation::cur()),
             ),
             (
                 enable * hash,

@@ -43,6 +43,8 @@ let validatorBaseGindices: bigint[] = [];
 
 console.log("validators[0].gindex:", ValidatorsSsz.getPathInfo([0]).gindex);
 
+let nonRlcGindices = [];
+
 for (let i = 0; i < N; i++) {
     validators.push({
         pubkey: Uint8Array.from(crypto.randomBytes(48)),
@@ -61,6 +63,11 @@ for (let i = 0; i < N; i++) {
     gindices.push(ValidatorsSsz.getPathInfo([i, 'slashed']).gindex);
     gindices.push(ValidatorsSsz.getPathInfo([i, 'activationEpoch']).gindex);
     gindices.push(ValidatorsSsz.getPathInfo([i, 'exitEpoch']).gindex);
+
+    nonRlcGindices.push(ValidatorsSsz.getPathInfo([i, 'effectiveBalance']).gindex);
+    nonRlcGindices.push(ValidatorsSsz.getPathInfo([i, 'slashed']).gindex);
+    nonRlcGindices.push(ValidatorsSsz.getPathInfo([i, 'activationEpoch']).gindex);
+    nonRlcGindices.push(ValidatorsSsz.getPathInfo([i, 'exitEpoch']).gindex);
 }
 
 let view = ValidatorsSsz.toView(validators);
@@ -70,7 +77,7 @@ let proof = createProof(view.node, {type: ProofType.multi, gindices: gindices}) 
 const areEqual = (first: Uint8Array, second: Uint8Array) =>
     first.length === second.length && first.every((value, index) => value === second[index]);
 
-let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proof.witnesses, proof.gindices);
+let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proof.witnesses, proof.gindices, nonRlcGindices);
 
 printTrace(partial_tree, trace);
 

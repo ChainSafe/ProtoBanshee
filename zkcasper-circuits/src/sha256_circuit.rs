@@ -1,5 +1,5 @@
 //! The circuit for SHA256 hash function.
-//! This implementation is based on:\
+//! This implementation is based on:
 //! - https://hackmd.io/@tsgAyLwURdqHzWxSmwVLjw/Sk5AOhWhc#Bit-implementation
 //! - https://github.com/SoraSuegami/zkevm-circuits/blob/main/zkevm-circuits/src/sha256_circuit/sha256_bit.rs
 
@@ -9,7 +9,6 @@ mod util;
 use std::marker::PhantomData;
 
 use crate::{
-    sha256_circuit::sha256_bit::fr_pow,
     table::{LookupTable, SHA256Table},
     util::{not, BaseConstraintBuilder, Challenges, Expr, SubCircuit, SubCircuitConfig},
     witness::{self, HashInput},
@@ -22,8 +21,8 @@ use halo2_proofs::{
     poly::Rotation,
 };
 
-use log::{debug, info};
-use snark_verifier::loader::LoadedScalar;
+use itertools::Itertools;
+use log::debug;
 use util::*;
 
 use self::sha256_bit::{multi_sha256, ShaRow};
@@ -53,8 +52,12 @@ pub struct Sha256CircuitConfig<F> {
     // feature: [multi input lookups]
     is_right: Column<Advice>,
     rnd_pow: Column<Advice>,
+    input_rlcs: [Column<Advice>; 2],
     // feature: [lookup by value]
     u8_pow: [Column<Advice>; 2],
+    is_rlc: [Column<Advice>; 2],
+    is_left_value: Column<Advice>,
+    is_right_value: Column<Advice>,
 
     /// The columns for bytes of hash results
     pub hash_table: SHA256Table,
@@ -68,7 +71,7 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         // consts
         let two = F::from(2);
-        let f256 = fr_pow(two, 8);
+        let f256 = two.pow_const(8);
 
         let r: F = Sha256CircuitConfig::fixed_challenge();
         let q_enable = meta.fixed_column();
@@ -88,7 +91,6 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let is_right = meta.advice_column();
 
         let is_paddings = array_init::array_init(|_| meta.advice_column());
-        // let cur_limb_rlc: Column<Advice> = meta.advice_column();
         let data_rlcs: [Column<Advice>; 4] = array_init::array_init(|_| meta.advice_column());
 
         let round_cst = meta.fixed_column();
@@ -98,13 +100,16 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let hash_table = args;
         let is_enabled = hash_table.is_enabled;
         let length = hash_table.input_len;
-        let chunk_vals = hash_table.chunk_vals;
+        let input_chunks = hash_table.input_chunks;
         let data_rlc = hash_table.input_rlc;
         let hash_rlc = hash_table.hash_rlc;
         // feature: [multi input lookups]
         let rnd_pow = meta.advice_column();
+        let input_rlcs = array_init::array_init(|_| meta.advice_column());
         // feature: [lookup by value]
-        let data_vals = hash_table.chunk_vals;
+        let is_rlc = array_init::array_init(|_| meta.advice_column());
+        let is_left_value = meta.advice_column();
+        let is_right_value = meta.advice_column();
         let u8_pow = array_init::array_init(|_| meta.advice_column());
         let final_hash_bytes = array_init::array_init(|_| meta.advice_column());
         for col in final_hash_bytes.into_iter() {
@@ -337,27 +342,6 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
         });
 
-        // feature: [multi input lookups]
-        meta.create_gate("limb rlcs", |meta| {
-            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
-            let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
-            let left_rlc = meta.query_advice(hash_table.chunk_rlcs[0], Rotation::cur());
-            let right_rlc = meta.query_advice(hash_table.chunk_rlcs[1], Rotation::cur());
-            let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
-            let base_pow = meta.query_advice(rnd_pow, Rotation::cur());
-
-            cb.condition(is_enabled, |cb| {
-                cb.require_equal(
-                    "data_rlc = left_rlc * r^right.len() + right_rlc",
-                    left_rlc * base_pow + right_rlc,
-                    data_rlc,
-                );
-            });
-
-            cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
-        });
-        // end
-
         let start_new_hash = |meta: &mut VirtualCells<F>| {
             // A new hash is started when the previous hash is done or on the first row
             meta.query_advice(is_final, Rotation::cur())
@@ -449,15 +433,21 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
             let q_padding = meta.query_fixed(q_padding, Rotation::cur());
             let is_right = meta.query_advice(is_right, Rotation::cur());
-
+            let is_rlc = [
+                meta.query_advice(is_rlc[0], Rotation::cur()),
+                meta.query_advice(is_rlc[1], Rotation::cur()),
+            ];
+            let is_values = [not::expr(is_rlc[0].clone()), not::expr(is_rlc[1].clone())];
+            let is_left_value: Expression<F> = meta.query_advice(is_left_value, Rotation::cur());
+            let is_right_value: Expression<F> = meta.query_advice(is_right_value, Rotation::cur());
             let start_new_hash = start_new_hash(meta);
             let length_prev = meta.query_advice(length, Rotation::prev());
             let length = meta.query_advice(length, Rotation::cur());
             let data_rlc_prev = meta.query_advice(data_rlc, Rotation::prev());
             let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
             let data_vals_prev = [
-                meta.query_advice(chunk_vals[0], Rotation::prev()),
-                meta.query_advice(chunk_vals[1], Rotation::prev()),
+                meta.query_advice(input_chunks[0], Rotation::prev()),
+                meta.query_advice(input_chunks[1], Rotation::prev()),
             ];
             let u8_pow_prev = [
                 meta.query_advice(u8_pow[0], Rotation::prev()),
@@ -467,9 +457,9 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                 meta.query_advice(u8_pow[0], Rotation::cur()),
                 meta.query_advice(u8_pow[1], Rotation::cur()),
             ];
-            let data_vals = [
-                meta.query_advice(chunk_vals[0], Rotation::cur()),
-                meta.query_advice(chunk_vals[1], Rotation::cur()),
+            let input_chunks = [
+                meta.query_advice(input_chunks[0], Rotation::cur()),
+                meta.query_advice(input_chunks[1], Rotation::cur()),
             ];
 
             let rnd_pow_prev = meta.query_advice(rnd_pow, Rotation::prev());
@@ -526,7 +516,8 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                         new_data_rlc = next_data_rlc;
                     }
                     for (new_data_val, new_u8_pow) in
-                    new_data_val.iter_mut().zip(new_u8_pow.iter_mut()) {
+                        new_data_val.iter_mut().zip(new_u8_pow.iter_mut())
+                    {
                         *new_data_val = new_data_val.clone() + new_u8_pow.clone() * byte.clone();
                         *new_u8_pow = new_u8_pow.clone() * f256;
                     }
@@ -543,13 +534,13 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                 );
 
                 // feature: [lookup by value]
-                let is_enabled = [not::expr(is_right.clone()), is_right.clone()];
+                let is_enabled = [is_left_value, is_right_value];
                 for (i, (new_data_val, new_u8_pow)) in
                     new_data_val.into_iter().zip(new_u8_pow).enumerate()
                 {
                     cb.require_equal(
                         ["update data val left", "update data val right"][i],
-                        data_vals[i].clone() * is_enabled[i].clone(),
+                        input_chunks[i].clone() * is_enabled[i].clone(),
                         new_data_val * is_enabled[i].clone(),
                     );
                     cb.require_equal(
@@ -561,6 +552,48 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             });
             cb.gate(1.expr())
         });
+
+        // feature: [multi input lookups]
+        meta.create_gate("chunk rlcs", |meta| {
+            let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
+            let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
+            let input_rlcs = input_rlcs
+                .iter()
+                .map(|col| meta.query_advice(*col, Rotation::cur())).collect_vec();
+            let input_chunks = input_chunks
+                .iter()
+                .map(|col| meta.query_advice(*col, Rotation::cur())).collect_vec();
+            let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
+            let base_pow = meta.query_advice(rnd_pow, Rotation::cur());
+            let is_rlc = [
+                meta.query_advice(is_rlc[0], Rotation::cur()),
+                meta.query_advice(is_rlc[1], Rotation::cur()),
+            ];
+
+            for (i, (input_rlc, input_chunk)) in input_rlcs.iter()
+                .zip(input_chunks)
+                .enumerate()
+            {
+                cb.condition(is_rlc[i].clone(), |cb| {
+                    cb.require_equal(
+                        "input_rlc == input_hunk when is_rlc",
+                        input_rlc.clone(),
+                        input_chunk,
+                    );
+                });
+            }
+
+            cb.condition(is_enabled, |cb| {
+                cb.require_equal(
+                    "data_rlc = left_rlc * r^right.len() + right_rlc",
+                    input_rlcs[0].clone() * base_pow + input_rlcs[1].clone(),
+                    data_rlc,
+                );
+            });
+
+            cb.gate(meta.query_fixed(q_enable, Rotation::cur()))
+        });
+        // end
 
         // Make sure data is consistent between blocks
         meta.create_gate("cross block data consistency", |meta| {
@@ -674,8 +707,12 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             is_final,
             is_paddings,
             data_rlcs,
+            is_rlc,
+            is_left_value,
+            is_right_value,
             u8_pow,
             rnd_pow,
+            input_rlcs,
             round_cst,
             h_a,
             h_e,
@@ -859,7 +896,32 @@ impl<F: Field> Sha256CircuitConfig<F> {
                 offset,
                 || Value::known(row.u8_pow[i]),
             )?;
+            region.assign_advice(
+                || format!("assign is_rlc[{i}] {}", offset),
+                self.is_rlc[i],
+                offset,
+                || Value::known(F::from(row.is_rlc[i] as u64)),
+            )?;
+            region.assign_advice(
+                || format!("assign input_rlcs[{i}] {}", offset),
+                self.input_rlcs[i],
+                offset,
+                || Value::known(row.chunks_rlc[i]),
+            )?;
         }
+
+        region.assign_advice(
+            || format!("assign is_left_value {}", offset),
+            self.is_left_value,
+            offset,
+            || Value::known(F::from((!row.is_rlc[0] && !row.is_right) as u64)),
+        )?;
+        region.assign_advice(
+            || format!("assign is_right_value {}", offset),
+            self.is_right_value,
+            offset,
+            || Value::known(F::from((!row.is_rlc[1] && row.is_right) as u64)),
+        )?;
         // end
 
         // Hash data
@@ -868,10 +930,16 @@ impl<F: Field> Sha256CircuitConfig<F> {
             offset,
             [
                 Value::known(F::from(row.is_final && round == NUM_ROUNDS + 7)),
-                Value::known(row.chunks_rlc[0]),
-                Value::known(row.chunks_rlc[1]),
-                Value::known(row.chunks_val[0]),
-                Value::known(row.chunks_val[1]),
+                if row.is_rlc[0] {
+                    Value::known(row.chunks_rlc[0])
+                } else {
+                    Value::known(row.chunks_val[0])
+                },
+                if row.is_rlc[1] {
+                    Value::known(row.chunks_rlc[1])
+                } else {
+                    Value::known(row.chunks_val[1])
+                },
                 Value::known(row.data_rlc),
                 Value::known(F::from(row.length as u64)),
                 Value::known(row.hash_rlc),
@@ -921,6 +989,8 @@ impl<F: Field> Sha256CircuitConfig<F> {
             (self.h_e.into(), "h_e".to_string()),
             (self.is_right.into(), "is_right".to_string()),
             (self.rnd_pow.into(), "rnd_pow".to_string()),
+            (self.is_left_value.into(), "is_left_value".to_string()),
+            (self.is_right_value.into(), "is_right_value".to_string()),
         ];
 
         for (i, col) in self.word_w.iter().copied().enumerate() {
@@ -943,6 +1013,12 @@ impl<F: Field> Sha256CircuitConfig<F> {
         }
         for (i, col) in self.final_hash_bytes.iter().copied().enumerate() {
             annotations.push((col.into(), format!("final_hash_bytes_{}", i)));
+        }
+        for (i, col) in self.is_rlc.iter().copied().enumerate() {
+            annotations.push((col.into(), format!("is_rlc{}", i)));
+        }
+        for (i, col) in self.input_rlcs.iter().copied().enumerate() {
+            annotations.push((col.into(), format!("input_rlcs_{}", i)));
         }
 
         annotations
@@ -1077,10 +1153,11 @@ mod tests {
     fn test_bit_sha256_simple() {
         let k = 10;
         let inputs = vec![
-            HashInput::MerklePair(
-                vec![vec![2u8; 4], vec![0u8; 28]].concat(),
-                vec![vec![3u8; 4], vec![0u8; 28]].concat(),
-            );
+            HashInput::TwoToOne {
+                left: vec![vec![2u8; 4], vec![0u8; 28]].concat(),
+                right: vec![vec![3u8; 4], vec![0u8; 28]].concat(),
+                is_rlc: [false, false]
+            };
             1
         ];
         let circuit = TestSha256 {
