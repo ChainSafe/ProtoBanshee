@@ -100,7 +100,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_boolean("is_active is boolean", q.table.is_active());
             cb.require_boolean("is_attested is boolean", q.table.is_attested());
-            cb.require_boolean("slashed is boolean", q.table.slashed.value());
+            cb.require_boolean("slashed is boolean", q.table.slashed());
 
             cb.condition(q.table.is_attested(), |cb| {
                 cb.require_true(
@@ -111,20 +111,17 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
             let target_gte_activation = LtGadget::<_, N_BYTES_U64>::construct(
                 &mut cb,
-                q.table.activation_epoch.value(),
+                q.table.activation_epoch(),
                 q.next_epoch(),
             );
             let target_lt_exit = LtGadget::<_, N_BYTES_U64>::construct(
                 &mut cb,
                 q.target_epoch(),
-                q.table.exit_epoch.value(),
+                q.table.exit_epoch(),
             );
 
             cb.condition(q.table.is_active(), |cb| {
-                cb.require_zero(
-                    "slashed is false for active validators",
-                    q.table.slashed.value(),
-                );
+                cb.require_zero("slashed is false for active validators", q.table.slashed());
 
                 cb.require_true(
                     "activation_epoch <= target_epoch > exit_epoch for active validators",
@@ -143,7 +140,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     true,
                     q.table.is_validator(),
                     q.table.balance_gindex(),
-                    q.table.balance.rlc(),
+                    q.table.balance(),
                 ),
             );
 
@@ -155,7 +152,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     false,
                     q.table.is_validator(),
                     q.table.slashed_gindex(),
-                    q.table.slashed.rlc(),
+                    q.table.slashed(),
                 ),
             );
 
@@ -167,7 +164,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     false,
                     q.table.is_validator(),
                     q.table.activation_epoch_gindex(),
-                    q.table.activation_epoch.rlc(),
+                    q.table.activation_epoch(),
                 ),
             );
 
@@ -179,7 +176,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     true,
                     q.table.is_validator(),
                     q.table.exit_epoch_gindex(),
-                    q.table.exit_epoch.rlc(),
+                    q.table.exit_epoch(),
                 ),
             );
 
@@ -222,17 +219,14 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_zero("is_active is 0 for committees", q.table.is_active());
             cb.require_zero("is_attested is 0 for committees", q.table.is_attested());
-            cb.require_zero("slashed is 0 for committees", q.table.slashed.value());
-            cb.require_zero(
-                "activation epoch is 0 for committees",
-                q.table.exit_epoch.value(),
-            );
-            cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch.value());
+            cb.require_zero("slashed is 0 for committees", q.table.slashed());
+            cb.require_zero("activation epoch is 0 for committees", q.table.exit_epoch());
+            cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch());
 
             cb.gate(q.selector() * q.table.is_committee())
         });
 
-        info!("validators circuit degree={}", meta.degree());
+        println!("validators circuit degree={}", meta.degree());
 
         config
     }

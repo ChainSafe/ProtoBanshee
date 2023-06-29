@@ -109,7 +109,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
             });
         }
 
-        info!("state circuit degree={}", meta.degree());
+        println!("state circuit degree={}", meta.degree());
 
         StateSSZCircuitConfig {
             tree,

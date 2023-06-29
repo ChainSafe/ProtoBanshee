@@ -74,15 +74,13 @@ impl SHA256Table {
     }
 
     /// Generate the sha256 table assignments from a byte array input.
-    pub fn assignments<F: Field>(input: &HashInput, challenge: Value<F>) -> [Value<F>; 8] {
-        let (chunks_rlcs, chunk_vals, input_rlc, preimage) = match input {
+    pub fn assignments<F: Field>(input: &HashInput, challenge: Value<F>) -> [Value<F>; 6] {
+        let (input_chunks, input_rlc, preimage) = match input {
             HashInput::Single(input) => {
                 let input_rlc = challenge.map(|randomness| rlc::value(input, randomness));
-                let input_val = F::from_bytes_le_unsecure(input);
 
                 (
                     [input_rlc, Value::known(F::zero())],
-                    [input_val, F::zero()],
                     input_rlc,
                     input.clone(),
                 )
@@ -103,7 +101,12 @@ impl SHA256Table {
                 let preimage = vec![left.clone(), right.clone()].concat();
                 let input_rlc = challenge.map(|randomness| rlc::value(&preimage, randomness));
 
-                (chunk_rlcs, chunk_vals, input_rlc, preimage)
+                let input_chunks = [
+                    if is_rlc[0] { chunk_rlcs[0] } else { Value::known(chunk_vals[0]) },
+                    if is_rlc[1] { chunk_rlcs[1] } else { Value::known(chunk_vals[1]) },
+                ];
+
+                (input_chunks, input_rlc, preimage)
             }
         };
 
@@ -114,10 +117,8 @@ impl SHA256Table {
 
         [
             Value::known(F::one()),
-            chunks_rlcs[0],
-            chunks_rlcs[1],
-            Value::known(chunk_vals[0]),
-            Value::known(chunk_vals[1]),
+            input_chunks[0],
+            input_chunks[1],
             input_rlc,
             Value::known(input_len),
             output_rlc,
