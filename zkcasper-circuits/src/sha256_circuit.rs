@@ -1092,17 +1092,6 @@ impl<F: Field> Sha256Circuit<F> {
         }
     }
 
-    /// The number of keccak_f's that can be done in this circuit
-    pub fn capacity(&self) -> Option<usize> {
-        // if self.num_rows > 0 {
-        //     // Subtract two for unusable rows
-        //     Some(self.num_rows / ((NUM_ROUNDS + 1) * get_num_rows_per_round()) - 2)
-        // } else {
-        //     None
-        // }
-        todo!()
-    }
-
     /// Sets the witness using the data to be hashed
     pub(crate) fn generate_witness(&self, _challenges: Challenges<F, Value<F>>) -> Vec<ShaRow<F>> {
         multi_sha256(&self.inputs, Sha256CircuitConfig::fixed_challenge())

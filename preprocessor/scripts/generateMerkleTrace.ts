@@ -1,24 +1,25 @@
 import fs from "fs";
 import path from "path";
-
+import { bn254 } from '@noble/curves/bn254';
+import { bls12_381 } from '@noble/curves/bls12-381';
 import {
     ContainerType,
     ListCompositeType,
     ValueOf
-  } from "@chainsafe/ssz";
+} from "@chainsafe/ssz";
 import {
     ssz,
 } from "@lodestar/types"
 import {
     BeaconState
 } from "@lodestar/types/phase0"
-import {createProof, ProofType, MultiProof, Node} from "@chainsafe/persistent-merkle-tree";
+import { createProof, ProofType, MultiProof, Node } from "@chainsafe/persistent-merkle-tree";
 import crypto from "crypto";
 import { serialize } from "./util";
 import { createNodeFromMultiProofWithTrace, printTrace } from "./merkleTrace";
 
 
-  const ValidatorContainer = new ContainerType(
+const ValidatorContainer = new ContainerType(
     {
         pubkey: ssz.Bytes48,
         withdrawalCredentials: ssz.Bytes32,
@@ -29,8 +30,8 @@ import { createNodeFromMultiProofWithTrace, printTrace } from "./merkleTrace";
         exitEpoch: ssz.EpochInf,
         withdrawableEpoch: ssz.EpochInf,
     },
-    {typeName: "Validator", jsonCase: "eth2"}
-  );
+    { typeName: "Validator", jsonCase: "eth2" }
+);
 
 type Validator = ValueOf<typeof ValidatorContainer>;
 
@@ -46,8 +47,15 @@ console.log("validators[0].gindex:", ValidatorsSsz.getPathInfo([0]).gindex);
 let nonRlcGindices = [];
 
 for (let i = 0; i < N; i++) {
+    // let privKey = bls12_381.utils.randomPrivateKey();
+    // let pubkey = bls12_381.getPublicKey(privKey);
+    let privKey = bn254.utils.randomPrivateKey();
+    let pubkey = bn254.getPublicKey(privKey);
+    const paddedPubkey = new Uint8Array(48);
+    paddedPubkey.set(pubkey, 0);
+
     validators.push({
-        pubkey: Uint8Array.from(crypto.randomBytes(48)),
+        pubkey: paddedPubkey,
         withdrawalCredentials: Uint8Array.from(crypto.randomBytes(32)),
         effectiveBalance: 32000000,
         slashed: false,
@@ -72,7 +80,7 @@ for (let i = 0; i < N; i++) {
 
 let view = ValidatorsSsz.toView(validators);
 
-let proof = createProof(view.node, {type: ProofType.multi, gindices: gindices}) as MultiProof; 
+let proof = createProof(view.node, { type: ProofType.multi, gindices: gindices }) as MultiProof;
 
 const areEqual = (first: Uint8Array, second: Uint8Array) =>
     first.length === second.length && first.every((value, index) => value === second[index]);

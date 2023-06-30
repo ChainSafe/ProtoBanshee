@@ -1,3 +1,4 @@
+#![feature(associated_type_bounds)]
 pub(crate) mod gadget;
 pub mod table;
 pub(crate) mod util;
@@ -7,6 +8,7 @@ pub mod sha256_circuit;
 pub mod state_circuit;
 pub mod super_circuit;
 pub mod validators_circuit;
+pub mod aggregation_circuit;
 
 // TODO: impl as Spec trait
 // example: https://github.com/ChainSafe/Zipline/blob/main/finality-client/libs/zipline-spec/src/lib.rs
