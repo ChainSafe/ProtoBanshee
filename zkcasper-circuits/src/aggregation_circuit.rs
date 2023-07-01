@@ -12,11 +12,12 @@ use halo2_base::{
         flex_gate::GateInstructions,
         range::{RangeChip, RangeConfig, RangeInstructions},
     },
-    Context
+    Context,
 };
 use halo2_ecc::{
     bigint::ProperUint,
-    ecc::{EcPoint, EccChip}, bn254::FpPoint,
+    bn254::FpPoint,
+    ecc::{EcPoint, EccChip},
 };
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
@@ -24,7 +25,8 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use halo2curves::{
-    group::{Curve, Group, UncompressedEncoding, ff::PrimeField},
+    bn256::{G1Affine, G1},
+    group::{ff::PrimeField, Curve, Group, UncompressedEncoding},
     CurveAffine,
 };
 use itertools::Itertools;
@@ -42,14 +44,13 @@ const NUM_LIMBS: usize = 3;
 const MAX_DEGREE: usize = 5;
 
 #[derive(Clone, Debug)]
-pub struct AggregationCircuitConfig<F: Field, C: Curve> {
+pub struct AggregationCircuitConfig<F: Field> {
     q_enabled: Column<Fixed>,
     validators_table: ValidatorsTable,
     range: RangeConfig<F>,
     pubkey_bytes: [Column<Advice>; G1_BYTES_UNCOMPRESSED],
     x_limbs: [Column<Advice>; NUM_LIMBS],
     y_limbs: [Column<Advice>; NUM_LIMBS],
-    _curve: PhantomData<C>,
 }
 
 pub struct AggregationCircuitArgs<F: Field> {
@@ -57,9 +58,7 @@ pub struct AggregationCircuitArgs<F: Field> {
     pub range: RangeConfig<F>,
 }
 
-impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuitConfig<F>
-    for AggregationCircuitConfig<F, C>
-{
+impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
     type ConfigArgs = AggregationCircuitArgs<F>;
 
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
@@ -104,7 +103,6 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuitConfig<F>
             pubkey_bytes,
             x_limbs,
             y_limbs,
-            _curve: PhantomData,
         }
     }
 
@@ -116,7 +114,7 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuitConfig<F>
     }
 }
 
-impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> AggregationCircuitConfig<F, C> {
+impl<F: Field> AggregationCircuitConfig<F> {
     fn assign_with_region(
         &self,
         region: &mut Region<'_, F>,
@@ -138,7 +136,7 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> AggregationCircuitCon
             match entity {
                 CasperEntity::Validator(validator) => {
                     let _pk_compressed = validator.pubkey[..G1_FQ_BYTES].to_vec();
-                    let pk_affine = C::random(&mut rand::thread_rng()).to_affine();
+                    let pk_affine = G1::random(&mut rand::thread_rng()).to_affine();
                     let pk_uncompressed = pk_affine.to_uncompressed();
                     self.assign_row(region, i, aggregate_pubkeys::<F>(pk_uncompressed.as_ref()))?;
                 }
@@ -208,17 +206,13 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> AggregationCircuitCon
 }
 
 #[derive(Clone, Debug)]
-pub struct AggregationCircuit<'a, F: Field, C> {
+pub struct AggregationCircuit<'a, F: Field> {
     validators: &'a [Validator],
     committees: &'a [Committee],
     range: &'a RangeChip<F>,
-    _curve: PhantomData<C>,
-    _field: PhantomData<F>,
 }
 
-impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding + CurveAffine +halo2_base::utils::CurveAffineExt>>
-    AggregationCircuit<'a, F, C>
-{
+impl<'a, F: Field> AggregationCircuit<'a, F> {
     pub fn new(
         validators: &'a [Validator],
         committees: &'a [Committee],
@@ -228,8 +222,6 @@ impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding + CurveAffine +halo
             validators,
             committees,
             range,
-            _field: PhantomData,
-            _curve: PhantomData,
         }
     }
 
@@ -239,16 +231,20 @@ impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding + CurveAffine +halo
 
         let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
         let g1_chip = EccChip::new(&fp_chip);
-        
-        for (committee, validators) in self.validators.into_iter().group_by(|v| v.committee).into_iter() {
+
+        for (committee, validators) in self
+            .validators
+            .into_iter()
+            .group_by(|v| v.committee)
+            .into_iter()
+        {
             let committee_pubkeys = validators.map(|v| {
                 let pk_compressed = v.pubkey[..G1_FQ_BYTES].to_vec();
                 self.compressed_to_g1affine(&pk_compressed, ctx)
-            });
-            
-            // let agg_pubkey = g1_chip.sum::<C::AffineRepr>(ctx, committee_pubkeys);
-        }
+            }).collect_vec();
 
+            let agg_pubkey = g1_chip.sum::<G1Affine>(ctx, committee_pubkeys);
+        }
     }
 
     pub fn compressed_to_g1affine(
@@ -263,7 +259,7 @@ impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding + CurveAffine +halo
         let g1_chip = EccChip::new(&fp_chip);
 
         // let pk_affine = C::from_bytes(&bytes.try_into().unwrap()).unwrap();
-        let pk_affine = C::random(&mut rand::thread_rng()).to_affine();
+        let pk_affine = G1Affine::random(&mut rand::thread_rng());
         let pk_coords = pk_affine.coordinates().unwrap();
         let bytes = pk_affine.to_uncompressed();
 
@@ -312,10 +308,8 @@ impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding + CurveAffine +halo
     }
 }
 
-impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuit<F>
-    for AggregationCircuit<'a, F, C>
-{
-    type Config = AggregationCircuitConfig<F, C>;
+impl<'a, F: Field> SubCircuit<F> for AggregationCircuit<'a, F> {
+    type Config = AggregationCircuitConfig<F>;
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
         todo!()
@@ -373,12 +367,12 @@ mod tests {
     use serde::Serialize;
 
     #[derive(Debug, Clone)]
-    struct TestCircuit<'a, F: Field, C> {
-        inner: AggregationCircuit<'a, F, C>,
+    struct TestCircuit<'a, F: Field> {
+        inner: AggregationCircuit<'a, F>,
         _f: PhantomData<F>,
     }
 
-    impl<'a, F: Field, C> TestCircuit<'a, F, C> {
+    impl<'a, F: Field> TestCircuit<'a, F> {
         const NUM_ADVICE: usize = 50;
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 4;
@@ -387,10 +381,10 @@ mod tests {
         const K: usize = 13;
     }
 
-    impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding>> Circuit<F>
-        for TestCircuit<'a, F, C>
+    impl<'a, F: Field> Circuit<F>
+        for TestCircuit<'a, F>
     {
-        type Config = (AggregationCircuitConfig<F, C>, Challenges<F>);
+        type Config = (AggregationCircuitConfig<F>, Challenges<F>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -445,8 +439,8 @@ mod tests {
         let committees: Vec<Committee> =
             serde_json::from_slice(&fs::read("../test_data/committees.json").unwrap()).unwrap();
 
-        let range = RangeChip::default(TestCircuit::<Fr, G1>::LOOKUP_BITS);
-        let circuit = TestCircuit::<'_, Fr, G1> {
+        let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
+        let circuit = TestCircuit::<'_, Fr> {
             inner: AggregationCircuit::new(&validators, &committees, &range),
             _f: PhantomData,
         };
