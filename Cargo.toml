@@ -12,6 +12,7 @@ members = [
 # [patch."https://github.com/privacy-scaling-explorations/zkevm-circuits.git"]
 # eth-types = { path = "./eth-types" }
 
+
 # Definition of benchmarks profile to use.
 [profile.bench]
 opt-level = 3

@@ -51,6 +51,7 @@ for (let i = 0; i < N; i++) {
     // let pubkey = bls12_381.getPublicKey(privKey);
     let privKey = bn254.utils.randomPrivateKey();
     let pubkey = bn254.getPublicKey(privKey);
+    console.log("pubkey:", pubkey);
     const paddedPubkey = new Uint8Array(48);
     paddedPubkey.set(pubkey, 0);
 

@@ -2,22 +2,38 @@ mod witness_gen;
 
 use crate::{
     table::{LookupTable, ValidatorsTable},
-    util::{Challenges, SubCircuit, SubCircuitConfig, BaseConstraintBuilder},
+    util::{BaseConstraintBuilder, Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, into_casper_entities, CasperEntity, Committee, Validator},
 };
 use eth_types::*;
 use gadgets::util::Expr;
-use halo2_base::{gates::range::RangeConfig, safe_types::RangeChip, AssignedValue};
-use halo2_ecc::{ecc::EccChip, bn254::FpChip, bigint::{ProperCrtUint, CRTInteger, OverflowInteger}};
+use halo2_base::{
+    gates::{
+        flex_gate::GateInstructions,
+        range::{RangeChip, RangeConfig, RangeInstructions},
+    },
+    Context
+};
+use halo2_ecc::{
+    bigint::ProperUint,
+    ecc::{EcPoint, EccChip}, bn254::FpPoint,
+};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
-    plonk::{Advice, Any, Column, ConstraintSystem, Error, Fixed}, poly::Rotation,
+    plonk::{Advice, Any, Column, ConstraintSystem, Error, Fixed},
+    poly::Rotation,
 };
-use halo2curves::group::{Curve, Group, UncompressedEncoding};
+use halo2curves::{
+    group::{Curve, Group, UncompressedEncoding, ff::PrimeField},
+    CurveAffine,
+};
 use itertools::Itertools;
+use num_bigint::BigUint;
 use std::marker::PhantomData;
 
 use self::witness_gen::{aggregate_pubkeys, AggregationRow};
+
+pub type FpChip<'range, F> = halo2_ecc::fields::fp::FpChip<'range, F, halo2curves::bn256::Fq>;
 
 const G1_FQ_BYTES: usize = 32; // TODO: 48 for BLS12-381.
 const G1_BYTES_UNCOMPRESSED: usize = G1_FQ_BYTES * 2;
@@ -58,7 +74,7 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuitConfig<F>
         let two = F::from(2);
         let f256 = two.pow_const(8);
 
-        meta.create_gate("uncompressed to g1", |meta|{
+        meta.create_gate("uncompressed to g1", |meta| {
             let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
             let q_enabled = meta.query_fixed(q_enabled, Rotation::cur());
 
@@ -124,11 +140,7 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> AggregationCircuitCon
                     let _pk_compressed = validator.pubkey[..G1_FQ_BYTES].to_vec();
                     let pk_affine = C::random(&mut rand::thread_rng()).to_affine();
                     let pk_uncompressed = pk_affine.to_uncompressed();
-                    self.assign_row(
-                        region,
-                        i,
-                        aggregate_pubkeys::<F>(pk_uncompressed.as_ref()),
-                    )?;
+                    self.assign_row(region, i, aggregate_pubkeys::<F>(pk_uncompressed.as_ref()))?;
                 }
                 CasperEntity::Committee(_) => {}
             }
@@ -155,23 +167,23 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> AggregationCircuitCon
             )?;
         }
 
-        let x_cells = self.x_limbs.iter().zip(&row.x_limbs).map(|(&col, &limb)| {
-            region.assign_advice(
-                || "assign pk_x limb",
-                col,
-                offset,
-                || Value::known(limb),
-            )
-        }).collect::<Result<Vec<_>, _>>()?;
+        let x_cells = self
+            .x_limbs
+            .iter()
+            .zip(&row.x_limbs)
+            .map(|(&col, &limb)| {
+                region.assign_advice(|| "assign pk_x limb", col, offset, || Value::known(limb))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let y_cells = self.y_limbs.iter().zip(&row.y_limbs).map(|(&col, &limb)| {
-            region.assign_advice(
-                || "assign pk_y limb",
-                col,
-                offset,
-                || Value::known(limb),
-            )
-        }).collect::<Result<Vec<_>, _>>()?;
+        let y_cells = self
+            .y_limbs
+            .iter()
+            .zip(&row.y_limbs)
+            .map(|(&col, &limb)| {
+                region.assign_advice(|| "assign pk_y limb", col, offset, || Value::known(limb))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
     }
@@ -196,7 +208,7 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> AggregationCircuitCon
 }
 
 #[derive(Clone, Debug)]
-pub struct AggregationCircuit<'a, F: Field, C: Curve> {
+pub struct AggregationCircuit<'a, F: Field, C> {
     validators: &'a [Validator],
     committees: &'a [Committee],
     range: &'a RangeChip<F>,
@@ -204,8 +216,14 @@ pub struct AggregationCircuit<'a, F: Field, C: Curve> {
     _field: PhantomData<F>,
 }
 
-impl<'a, F: Field, C: Curve> AggregationCircuit<'a, F, C> {
-    pub fn new(validators: &'a [Validator], committees: &'a [Committee], range: &'a RangeChip<F>) -> Self {
+impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding + CurveAffine +halo2_base::utils::CurveAffineExt>>
+    AggregationCircuit<'a, F, C>
+{
+    pub fn new(
+        validators: &'a [Validator],
+        committees: &'a [Committee],
+        range: &'a RangeChip<F>,
+    ) -> Self {
         Self {
             validators,
             committees,
@@ -213,6 +231,84 @@ impl<'a, F: Field, C: Curve> AggregationCircuit<'a, F, C> {
             _field: PhantomData,
             _curve: PhantomData,
         }
+    }
+
+    fn process_validators(&self, ctx: &mut Context<F>) {
+        let range = self.range();
+        let gate = range.gate();
+
+        let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
+        let g1_chip = EccChip::new(&fp_chip);
+        
+        for (committee, validators) in self.validators.into_iter().group_by(|v| v.committee).into_iter() {
+            let committee_pubkeys = validators.map(|v| {
+                let pk_compressed = v.pubkey[..G1_FQ_BYTES].to_vec();
+                self.compressed_to_g1affine(&pk_compressed, ctx)
+            });
+            
+            // let agg_pubkey = g1_chip.sum::<C::AffineRepr>(ctx, committee_pubkeys);
+        }
+
+    }
+
+    pub fn compressed_to_g1affine(
+        &self,
+        _bytes: &[u8],
+        ctx: &mut Context<F>,
+    ) -> EcPoint<F, FpPoint<F>> {
+        let range = self.range();
+        let gate = range.gate();
+
+        let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
+        let g1_chip = EccChip::new(&fp_chip);
+
+        // let pk_affine = C::from_bytes(&bytes.try_into().unwrap()).unwrap();
+        let pk_affine = C::random(&mut rand::thread_rng()).to_affine();
+        let pk_coords = pk_affine.coordinates().unwrap();
+        let bytes = pk_affine.to_uncompressed();
+
+        let two = F::from(2);
+        let f256 = ctx.load_constant(two.pow_const(8));
+
+        let pubkey_uncompressed: [_; G1_BYTES_UNCOMPRESSED] = ctx
+            .assign_witnesses(bytes.as_ref().iter().map(|&b| F::from(b as u64)))
+            .try_into()
+            .unwrap();
+
+        let bytes_per_limb = LIMB_BITS / 8;
+
+        let field_limbs: Vec<[_; NUM_LIMBS]> = pubkey_uncompressed
+            .chunks(G1_FQ_BYTES)
+            .map(|fq_bytes| {
+                fq_bytes
+                    .chunks(bytes_per_limb)
+                    .map(|chunk| {
+                        chunk.iter().rev().fold(ctx.load_zero(), |acc, &byte| {
+                            gate.mul_add(ctx, acc, f256, byte)
+                        })
+                    })
+                    .collect_vec()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect_vec();
+
+        let x = {
+            let assigned_uint = ProperUint::new(field_limbs[0].to_vec());
+            let value = BigUint::from_bytes_le(pk_coords.x().to_repr().as_ref());
+            assigned_uint.into_crt(ctx, gate, value, &fp_chip.limb_bases, LIMB_BITS)
+        };
+        let y = {
+            let assigned_uint = ProperUint::new(field_limbs[1].to_vec());
+            let value = BigUint::from_bytes_le(pk_coords.y().to_repr().as_ref());
+            assigned_uint.into_crt(ctx, gate, value, &fp_chip.limb_bases, LIMB_BITS)
+        };
+
+        EcPoint::new(x, y)
+    }
+
+    fn range(&self) -> &RangeChip<F> {
+        self.range
     }
 }
 
@@ -239,9 +335,6 @@ impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuit<F>
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {
-        let fp_chip = FpChip::new(self.range, LIMB_BITS, NUM_LIMBS);
-        let g1_chip = EccChip::new(&fp_chip);
-
         layouter.assign_region(
             || "aggregation circuit",
             |mut region| {
@@ -272,17 +365,20 @@ mod tests {
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
     use halo2curves::{
-        bn256::G1,
-        group::{Curve, Group, UncompressedEncoding},
+        bn256::{G1Affine, G1Compressed, G1},
+        group::{Curve, Group, GroupEncoding, UncompressedEncoding},
+        serde::SerdeObject,
+        CurveAffine,
     };
+    use serde::Serialize;
 
-    #[derive(Default, Debug, Clone)]
-    struct TestCircuit<'a, F: Field, C: Curve> {
+    #[derive(Debug, Clone)]
+    struct TestCircuit<'a, F: Field, C> {
         inner: AggregationCircuit<'a, F, C>,
         _f: PhantomData<F>,
     }
 
-    impl<'a, F: Field, C: Curve> TestCircuit<'a, F, C> {
+    impl<'a, F: Field, C> TestCircuit<'a, F, C> {
         const NUM_ADVICE: usize = 50;
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 4;
@@ -349,14 +445,15 @@ mod tests {
         let committees: Vec<Committee> =
             serde_json::from_slice(&fs::read("../test_data/committees.json").unwrap()).unwrap();
 
+        let range = RangeChip::default(TestCircuit::<Fr, G1>::LOOKUP_BITS);
         let circuit = TestCircuit::<'_, Fr, G1> {
-            inner: AggregationCircuit::new(&validators, &committees),
+            inner: AggregationCircuit::new(&validators, &committees, &range),
             _f: PhantomData,
         };
-        // let g1 = G1::random(&mut rand::thread_rng());
-        // let g1_affine = g1.to_affine();
-        // let b = g1_affine.to_uncompressed();
-        // println!("b: {:?}", b);
+
+        // let a = G1::random(&mut rand::thread_rng()).to_affine();
+        // println!("{:?}", a.to_uncompressed());
+
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }

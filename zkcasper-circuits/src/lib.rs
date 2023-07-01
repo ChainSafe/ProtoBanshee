@@ -1,4 +1,5 @@
 #![feature(associated_type_bounds)]
+#![feature(inherent_associated_types)]
 pub(crate) mod gadget;
 pub mod table;
 pub(crate) mod util;

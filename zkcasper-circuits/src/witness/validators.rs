@@ -139,13 +139,11 @@ pub fn into_casper_entities<'a>(
 
     let mut committees: Vec<&Committee> = committees.collect();
 
-    let groups = validators.group_by(|v| v.committee);
-    let validators_per_committees = {
-        groups
-            .into_iter()
-            .sorted_by_key(|(committee, _vs)| *committee)
-            .map(|(_, vs)| vs.collect_vec())
-    };
+    let binding = validators.into_iter().group_by(|v| v.committee);
+    let validators_per_committees = binding
+        .into_iter()
+        .sorted_by_key(|(committee, _vs)| *committee)
+        .map(|(committee, vs)| (committee, vs));
 
     assert_eq!(
         validators_per_committees.len(),
@@ -155,8 +153,8 @@ pub fn into_casper_entities<'a>(
 
     committees.sort_by_key(|v| v.id);
 
-    for (comm_idx, validators) in validators_per_committees.enumerate() {
-        casper_entity.extend(validators.into_iter().map(CasperEntity::Validator));
+    for (comm_idx, validators) in validators_per_committees {
+        casper_entity.extend(validators.map(CasperEntity::Validator));
         casper_entity.push(CasperEntity::Committee(committees[comm_idx]));
     }
 
