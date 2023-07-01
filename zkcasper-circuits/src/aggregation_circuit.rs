@@ -6,13 +6,15 @@ use crate::{
     witness::{self, into_casper_entities, CasperEntity, Committee, Validator},
 };
 use eth_types::*;
-use halo2_base::gates::range::RangeConfig;
-use halo2_base::utils::CurveAffineExt;
+use gadgets::util::Expr;
+use halo2_base::{gates::range::RangeConfig, safe_types::RangeChip, AssignedValue};
+use halo2_ecc::{ecc::EccChip, bn254::FpChip, bigint::{ProperCrtUint, CRTInteger, OverflowInteger}};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{Advice, Any, Column, ConstraintSystem, Error, Fixed}, poly::Rotation,
 };
 use halo2curves::group::{Curve, Group, UncompressedEncoding};
+use itertools::Itertools;
 use std::marker::PhantomData;
 
 use self::witness_gen::{aggregate_pubkeys, AggregationRow};
@@ -52,13 +54,32 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuitConfig<F>
         let x_limbs = array_init::array_init(|_| meta.advice_column());
         let y_limbs = array_init::array_init(|_| meta.advice_column());
 
+        // constants
+        let two = F::from(2);
+        let f256 = two.pow_const(8);
+
         meta.create_gate("uncompressed to g1", |meta|{
             let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
             let q_enabled = meta.query_fixed(q_enabled, Rotation::cur());
-            
-            
+
+            let bytes_per_limb = LIMB_BITS / 8;
+
+            let fields = [x_limbs, y_limbs];
+            for (fq_bytes, limbs) in pubkey_bytes.chunks(G1_FQ_BYTES).zip(fields) {
+                for (bytes, limb) in fq_bytes.chunks(bytes_per_limb).zip(limbs) {
+                    let limb = meta.query_advice(limb, Rotation::cur());
+                    let mut acc = 0.expr();
+                    for &byte in bytes.iter().rev() {
+                        let byte = meta.query_advice(byte, Rotation::cur());
+                        acc = acc.clone() * f256 + byte;
+                    }
+                    cb.require_equal("limb", acc, limb)
+                }
+            }
             cb.gate(q_enabled)
         });
+
+        println!("aggregation circuit degree: {}", meta.degree());
 
         Self {
             q_enabled,
@@ -134,45 +155,61 @@ impl<F: Field, C: Curve<AffineRepr: UncompressedEncoding>> AggregationCircuitCon
             )?;
         }
 
-        for (&col, &limb) in self.x_limbs.iter().zip(&row.x_limbs) {
+        let x_cells = self.x_limbs.iter().zip(&row.x_limbs).map(|(&col, &limb)| {
             region.assign_advice(
                 || "assign pk_x limb",
                 col,
                 offset,
                 || Value::known(limb),
-            )?;
-        }
+            )
+        }).collect::<Result<Vec<_>, _>>()?;
 
-        for (&col, &limb) in self.y_limbs.iter().zip(&row.y_limbs) {
+        let y_cells = self.y_limbs.iter().zip(&row.y_limbs).map(|(&col, &limb)| {
             region.assign_advice(
                 || "assign pk_y limb",
                 col,
                 offset,
                 || Value::known(limb),
-            )?;
-        }
+            )
+        }).collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
     }
 
     pub fn annotations(&self) -> Vec<(Column<Any>, String)> {
-        vec![(self.q_enabled.into(), "q_enabled".to_string())]
+        let mut annots = vec![(self.q_enabled.into(), "q_enabled".to_string())];
+
+        for (i, &col) in self.pubkey_bytes.iter().enumerate() {
+            annots.push((col.into(), format!("pk_byte_{}", i)));
+        }
+
+        for (i, &col) in self.x_limbs.iter().enumerate() {
+            annots.push((col.into(), format!("pk_x_{}", i)));
+        }
+
+        for (i, &col) in self.y_limbs.iter().enumerate() {
+            annots.push((col.into(), format!("pk_y_{}", i)));
+        }
+
+        annots
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct AggregationCircuit<'a, F: Field, C: Curve> {
     validators: &'a [Validator],
     committees: &'a [Committee],
+    range: &'a RangeChip<F>,
     _curve: PhantomData<C>,
     _field: PhantomData<F>,
 }
 
 impl<'a, F: Field, C: Curve> AggregationCircuit<'a, F, C> {
-    pub fn new(validators: &'a [Validator], committees: &'a [Committee]) -> Self {
+    pub fn new(validators: &'a [Validator], committees: &'a [Committee], range: &'a RangeChip<F>) -> Self {
         Self {
             validators,
             committees,
+            range,
             _field: PhantomData,
             _curve: PhantomData,
         }
@@ -202,6 +239,9 @@ impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuit<F>
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {
+        let fp_chip = FpChip::new(self.range, LIMB_BITS, NUM_LIMBS);
+        let g1_chip = EccChip::new(&fp_chip);
+
         layouter.assign_region(
             || "aggregation circuit",
             |mut region| {
@@ -211,6 +251,7 @@ impl<'a, F: Field, C: Curve<AffineRepr: UncompressedEncoding>> SubCircuit<F>
                     self.committees,
                     challenges.sha256_input(),
                 )?;
+
                 Ok(())
             },
         )

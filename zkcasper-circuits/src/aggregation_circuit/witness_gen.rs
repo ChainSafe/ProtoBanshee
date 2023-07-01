@@ -24,26 +24,21 @@ pub fn aggregate_pubkeys<F: Field>(bytes: &[u8]) -> AggregationRow<F> {
 
     let bytes_per_limb = LIMB_BITS / 8;
 
-    let to_bigint = |bytes: &[F]| -> [F; NUM_LIMBS] {
-        bytes
-            .chunks(bytes_per_limb)
-            .map(|chunk| {
-                chunk
-                    .iter()
-                    .rev()
-                    .fold(F::zero(), |acc, &byte| acc * f256 + byte)
-            })
-            .collect_vec()
-            .try_into()
-            .unwrap()
-    };
-
-    let x_limbs = to_bigint(&pubkey_uncompressed[..G1_FQ_BYTES]);
-    let y_limbs = to_bigint(&pubkey_uncompressed[G1_FQ_BYTES..]);
+    let field_limbs = pubkey_uncompressed.chunks(G1_FQ_BYTES).map(|fq_bytes| {
+        fq_bytes.chunks(bytes_per_limb).map(|chunk| {
+            chunk
+                .iter()
+                .rev()
+                .fold(F::zero(), |acc, &byte| acc * f256 + byte)
+        })
+        .collect_vec()
+        .try_into()
+        .unwrap()
+    }).collect_vec();
 
     AggregationRow {
         pk_uncompressed: pubkey_uncompressed,
-        x_limbs,
-        y_limbs,
+        x_limbs: field_limbs[0],
+        y_limbs: field_limbs[1],
     }
 }
