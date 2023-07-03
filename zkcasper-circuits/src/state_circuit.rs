@@ -42,12 +42,18 @@ use std::{
     vec,
 };
 
+// remove
 pub const CHUNKS_PER_VALIDATOR: usize = 8;
+// remove
 pub const USED_CHUNKS_PER_VALIDATOR: usize = 5;
-pub const TREE_DEPTH: usize = 10; // ceil(log2(TREE_MAX_LEAVES))
+// remove
+pub const TREE_DEPTH: usize = 46; // ceil(log2(TREE_MAX_LEAVES))
+
 pub const TREE_LEVEL_AUX_COLUMNS: usize = 1;
 
+// remove
 pub const PUBKEYS_LEVEL: usize = 10;
+// remove
 pub const VALIDATORS_LEVEL: usize = PUBKEYS_LEVEL - 1;
 
 #[derive(Clone, Debug)]
