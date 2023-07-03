@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use gadgets::impl_expr;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use strum_macros::EnumIter;
 
 use super::HashInput;
 
@@ -20,23 +18,28 @@ pub struct MerkleTraceStep {
     pub into_left: bool,
     pub is_left: bool,
     pub is_right: bool,
+    pub is_rlc: [bool; 2],
     pub parent: Vec<u8>,
     pub parent_index: u64,
     pub depth: usize,
 }
 
 impl MerkleTrace {
-    pub fn trace_by_levels<'a>(&'a self) -> Vec<Vec<&'a MerkleTraceStep>> {
+    pub fn empty() -> Self {
+        Self(vec![])
+    }
+
+    pub fn trace_by_levels(&self) -> Vec<Vec<&MerkleTraceStep>> {
         self.0
             .iter()
             .group_by(|step| step.depth)
             .into_iter()
-            .sorted_by_key(|(depth, steps)| depth.clone())
-            .map(|(depth, steps)| steps.collect_vec())
+            .sorted_by_key(|(depth, _steps)| *depth)
+            .map(|(_depth, steps)| steps.collect_vec())
             .collect_vec()
     }
 
-    pub fn trace_by_level_map<'a>(&'a self) -> HashMap<usize, Vec<&'a MerkleTraceStep>> {
+    pub fn trace_by_level_map(&self) -> HashMap<usize, Vec<&MerkleTraceStep>> {
         self.0.iter().into_group_map_by(|step| step.depth)
     }
 
@@ -48,6 +51,8 @@ impl MerkleTrace {
             .sorted_by_key(|e| e.depth)
             .rev()
             .collect_vec();
+
+        // filter out the first (root) level as it require no hashing.
         if steps_sorted.last().unwrap().depth == 1 {
             steps_sorted.pop();
         }
@@ -55,11 +60,15 @@ impl MerkleTrace {
             .into_iter()
             .map(|step| {
                 assert_eq!(
-                    sha2::Sha256::digest(&vec![step.node.clone(), step.sibling.clone()].concat())
+                    sha2::Sha256::digest(vec![step.node.clone(), step.sibling.clone()].concat())
                         .to_vec(),
                     step.parent
                 );
-                HashInput::MerklePair(step.node, step.sibling)
+                HashInput::TwoToOne {
+                    left: step.node,
+                    right: step.sibling,
+                    is_rlc: step.is_rlc,
+                }
             })
             .collect_vec()
     }

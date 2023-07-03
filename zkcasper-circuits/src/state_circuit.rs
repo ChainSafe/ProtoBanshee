@@ -1,42 +1,27 @@
-use crate::{
-    table::{state_table::StateTable, validators_table},
-    util::ConstrainBuilderCommon,
-    MAX_VALIDATORS,
-};
+use crate::{table::state_table::StateTable, util::ConstrainBuilderCommon};
 
 pub mod cell_manager;
-use cell_manager::CellManager;
 
 pub mod constraint_builder;
 use constraint_builder::ConstraintBuilder;
 
 pub mod merkle_tree;
+use log::info;
 use merkle_tree::TreeLevel;
 
 use crate::{
-    gadget::IsEqualGadget,
-    table::{sha256_table, LookupTable, SHA256Table},
+    table::{LookupTable, SHA256Table},
     util::{Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, MerkleTrace},
 };
 use eth_types::*;
-use gadgets::{
-    batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
-    binary_number::{BinaryNumberChip, BinaryNumberConfig},
-    util::{not, Expr},
-};
+use gadgets::util::not;
 use halo2_proofs::{
-    circuit::{Chip, Layouter, Region, Value},
-    plonk::{
-        Advice, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed, Instance,
-        SecondPhase, Selector, VirtualCells,
-    },
-    poly::Rotation,
+    circuit::{Layouter, Region, Value},
+    plonk::{ConstraintSystem, Error, Expression},
 };
 use itertools::Itertools;
 use std::{
-    fmt::format,
-    iter,
     marker::PhantomData,
     ops::{Add, Mul},
     vec,
@@ -74,8 +59,8 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
     fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let sha256_table = args.sha256_table;
 
-        let pubkeys_level = TreeLevel::configure(meta, PUBKEYS_LEVEL, 0, 3);
-        let validators_level = TreeLevel::configure(meta, VALIDATORS_LEVEL, 0, 0);
+        let pubkeys_level = TreeLevel::configure(meta, PUBKEYS_LEVEL, 0, 3, true);
+        let validators_level = TreeLevel::configure(meta, VALIDATORS_LEVEL, 0, 0, true);
 
         let state_table: [StateTable; 2] = [
             pubkeys_level.clone().into(),
@@ -87,12 +72,11 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
         let mut padding = 0;
         for i in (2..=TREE_DEPTH - 2).rev() {
             padding = padding * 2 + 1;
-            let level = TreeLevel::configure(meta, i, 0, padding);
+            let level = TreeLevel::configure(meta, i, 0, padding, false);
             tree.push(level);
         }
 
-        let mut tree: [_; TREE_DEPTH - 1] =
-            tree.into_iter().rev().collect_vec().try_into().unwrap();
+        let tree: [_; TREE_DEPTH - 1] = tree.into_iter().rev().collect_vec().try_into().unwrap();
 
         // Annotate circuit
         sha256_table.annotate_columns(meta);
@@ -107,7 +91,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
 
             meta.create_gate("tree_level boolean checks", |meta| {
                 let selector = level.selector(meta);
-                let mut cb = ConstraintBuilder::new();
+                let mut cb = ConstraintBuilder::default();
                 cb.require_boolean("into_left is boolean", level.into_left(meta));
                 cb.gate(selector)
             });
@@ -130,6 +114,8 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
                 sha256_table.build_lookup(meta, selector * into_sibling, node, sibling, parent)
             });
         }
+
+        println!("state circuit degree={}", meta.degree());
 
         StateSSZCircuitConfig {
             tree,
@@ -181,7 +167,7 @@ impl<F: Field> StateSSZCircuitConfig<F> {
 
                 Ok(())
             },
-        );
+        )?;
 
         Ok(max_rows)
     }
@@ -214,7 +200,7 @@ impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
         todo!()
     }
 
-    fn min_num_rows_block(block: &witness::Block<F>) -> (usize, usize) {
+    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
         todo!()
     }
 
@@ -226,7 +212,7 @@ impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
     ) -> Result<(), Error> {
         let num_rows = config.assign(layouter, &self.trace, challenges.sha256_input())?;
 
-        println!("state ssz circuit rows: {}", num_rows);
+        info!("state ssz circuit rows: {}", num_rows);
 
         Ok(())
     }
@@ -235,22 +221,14 @@ impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        sha256_circuit::{Sha256Circuit, Sha256CircuitConfig},
-        witness::{MerkleTrace, Validator},
-    };
+    use crate::witness::MerkleTrace;
     use halo2_proofs::{
-        circuit::{SimpleFloorPlanner, Value},
-        dev::MockProver,
-        halo2curves::bn256::Fr,
-        plonk::Circuit,
+        circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
-    use itertools::Itertools;
     use std::{fs, marker::PhantomData};
 
     #[derive(Debug, Clone)]
     struct TestStateSSZ<F: Field> {
-        validators: Vec<Validator>,
         state_circuit: StateSSZCircuit<F>,
         _f: PhantomData<F>,
     }
@@ -294,13 +272,10 @@ mod tests {
     #[test]
     fn test_state_ssz_circuit() {
         let k = 10;
-        let validators: Vec<Validator> =
-            serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
         let merkle_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
         let circuit = TestStateSSZ::<Fr> {
-            validators,
             state_circuit: StateSSZCircuit::new(merkle_trace),
             _f: PhantomData,
         };

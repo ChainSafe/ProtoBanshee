@@ -5,33 +5,23 @@ use crate::{
     gadget::LtGadget,
     table::{
         state_table::{StateTables, StateTreeLevel},
-        validators_table::ValidatorTableQueries,
         LookupTable, ValidatorsTable,
     },
-    util::{Cell, Challenges, ConstrainBuilderCommon, SubCircuit, SubCircuitConfig},
-    witness::{
-        self, into_casper_entities, CasperEntity, CasperEntityRow, Committee, StateTag, Validator,
-    },
-    MAX_VALIDATORS, N_BYTES_U64, VALIDATOR0_GINDEX,
+    util::{Challenges, ConstrainBuilderCommon, SubCircuit, SubCircuitConfig},
+    witness::{self, into_casper_entities, CasperEntity, Committee, Validator},
+    MAX_VALIDATORS, N_BYTES_U64,
 };
 use cell_manager::CellManager;
 use constraint_builder::*;
 use eth_types::*;
-use gadgets::{
-    batched_is_zero::{BatchedIsZeroChip, BatchedIsZeroConfig},
-    binary_number::{BinaryNumberChip, BinaryNumberConfig},
-    util::{not, Expr},
-};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
-    plonk::{
-        Advice, Any, Column, ConstraintSystem, Error, Expression, FirstPhase, Fixed, Instance,
-        SecondPhase, Selector, VirtualCells,
-    },
+    plonk::{Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells},
     poly::Rotation,
 };
 use itertools::Itertools;
-use lazy_static::lazy::Lazy;
+use log::info;
+
 use std::{iter, marker::PhantomData};
 
 pub(crate) const N_BYTE_LOOKUPS: usize = 16; // 8 per lt gadget (target_gte_activation, target_lt_exit)
@@ -110,7 +100,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_boolean("is_active is boolean", q.table.is_active());
             cb.require_boolean("is_attested is boolean", q.table.is_attested());
-            cb.require_boolean("slashed is boolean", q.table.slashed.value());
+            cb.require_boolean("slashed is boolean", q.table.slashed());
 
             cb.condition(q.table.is_attested(), |cb| {
                 cb.require_true(
@@ -121,20 +111,17 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
             let target_gte_activation = LtGadget::<_, N_BYTES_U64>::construct(
                 &mut cb,
-                q.table.activation_epoch.value(),
+                q.table.activation_epoch(),
                 q.next_epoch(),
             );
             let target_lt_exit = LtGadget::<_, N_BYTES_U64>::construct(
                 &mut cb,
                 q.target_epoch(),
-                q.table.exit_epoch.value(),
+                q.table.exit_epoch(),
             );
 
             cb.condition(q.table.is_active(), |cb| {
-                cb.require_zero(
-                    "slashed is false for active validators",
-                    q.table.slashed.value(),
-                );
+                cb.require_zero("slashed is false for active validators", q.table.slashed());
 
                 cb.require_true(
                     "activation_epoch <= target_epoch > exit_epoch for active validators",
@@ -142,8 +129,8 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                 )
             });
 
-            config.target_gte_activation.insert(target_gte_activation);
-            config.target_lt_exit.insert(target_lt_exit);
+            config.target_gte_activation = Some(target_gte_activation);
+            config.target_lt_exit = Some(target_lt_exit);
 
             cb.add_lookup(
                 "validator.balance in state table",
@@ -153,7 +140,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     true,
                     q.table.is_validator(),
                     q.table.balance_gindex(),
-                    q.table.balance.rlc(),
+                    q.table.balance(),
                 ),
             );
 
@@ -165,7 +152,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     false,
                     q.table.is_validator(),
                     q.table.slashed_gindex(),
-                    q.table.slashed.rlc(),
+                    q.table.slashed(),
                 ),
             );
 
@@ -177,7 +164,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     false,
                     q.table.is_validator(),
                     q.table.activation_epoch_gindex(),
-                    q.table.activation_epoch.rlc(),
+                    q.table.activation_epoch(),
                 ),
             );
 
@@ -189,7 +176,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     true,
                     q.table.is_validator(),
                     q.table.exit_epoch_gindex(),
-                    q.table.exit_epoch.rlc(),
+                    q.table.exit_epoch(),
                 ),
             );
 
@@ -232,22 +219,20 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_zero("is_active is 0 for committees", q.table.is_active());
             cb.require_zero("is_attested is 0 for committees", q.table.is_attested());
-            cb.require_zero("slashed is 0 for committees", q.table.slashed.value());
-            cb.require_zero(
-                "activation epoch is 0 for committees",
-                q.table.exit_epoch.value(),
-            );
-            cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch.value());
+            cb.require_zero("slashed is 0 for committees", q.table.slashed());
+            cb.require_zero("activation epoch is 0 for committees", q.table.exit_epoch());
+            cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch());
 
             cb.gate(q.selector() * q.table.is_committee())
         });
+
+        println!("validators circuit degree={}", meta.degree());
 
         config
     }
 
     fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-        // self.state_table.annotate_columns_in_region(region);
-        // self.tag.annotate_columns_in_region(region, "tag");
+        self.state_tables.annotate_columns_in_region(region);
         self.annotations()
             .into_iter()
             .for_each(|(col, ann)| region.name_column(|| &ann, col));
@@ -274,9 +259,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     challange,
                 )
             },
-        );
-
-        Ok(())
+        )
     }
 
     fn assign_with_region(
@@ -322,13 +305,13 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                         offset,
                         F::from(validator.activation_epoch),
                         F::from(target_epoch + 1),
-                    );
+                    )?;
                     target_lt_exit.assign(
                         region,
                         offset,
                         F::from(target_epoch),
                         F::from(validator.exit_epoch),
-                    );
+                    )?;
 
                     let validator_rows = validator.table_assignment(randomness);
 
@@ -410,7 +393,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
     }
 
     /// Return the minimum number of rows required to prove the block
-    fn min_num_rows_block(block: &witness::Block<F>) -> (usize, usize) {
+    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
         todo!()
     }
 
@@ -432,9 +415,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
                     challenges.sha256_input(),
                 )
             },
-        );
-
-        Ok(())
+        )
     }
 
     /// powers of randomness for instance columns
@@ -454,20 +435,16 @@ fn queries<F: Field>(
     }
 }
 
+#[cfg(test)]
+
 mod tests {
     use super::*;
-    use crate::{
-        table::state_table::StateTables,
-        witness::{Committee, MerkleTrace, Validator},
-    };
+    use crate::{table::state_table::StateTables, witness::MerkleTrace};
     use halo2_proofs::{
-        circuit::{SimpleFloorPlanner, Value},
-        dev::MockProver,
-        halo2curves::bn256::Fr,
-        plonk::Circuit,
+        circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
-    use itertools::Itertools;
-    use std::{fs, marker::PhantomData, vec};
+
+    use std::{fs, marker::PhantomData};
 
     #[derive(Debug, Clone)]
     struct TestValidators<F: Field> {

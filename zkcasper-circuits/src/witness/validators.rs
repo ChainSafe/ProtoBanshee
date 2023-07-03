@@ -2,17 +2,15 @@ use std::vec;
 
 use banshee_preprocessor::util::pad_to_ssz_chunk;
 use eth_types::Field;
+use ethereum_consensus::phase0::is_active_validator;
 use gadgets::impl_expr;
 use gadgets::util::rlc;
-use halo2_base::utils::decompose_bigint_option;
-use halo2_proofs::halo2curves::bn256::G1Affine;
+
+use halo2_proofs::circuit::Value;
 use halo2_proofs::plonk::Expression;
-use halo2_proofs::{circuit::Value, halo2curves::bn256::Fr};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
-
-use super::ValueRLC;
 
 /// Beacon validator
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,35 +44,55 @@ impl Validator {
             tag: Value::known(F::one()),
             is_active: Value::known(F::from(self.is_active as u64)),
             is_attested: Value::known(F::from(self.is_attested as u64)),
-            balance: ValueRLC::new(
-                Value::known(F::from(self.effective_balance as u64)),
-                randomness.map(|rnd| {
-                    rlc::value(
-                        &pad_to_ssz_chunk(&self.effective_balance.to_le_bytes()),
-                        rnd,
-                    )
-                }),
-            ),
-            slashed: ValueRLC::new(
-                Value::known(F::from(self.slashed as u64)),
-                randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&[self.slashed as u8]), rnd)),
-            ),
-            activation_epoch: ValueRLC::new(
-                Value::known(F::from(self.activation_epoch as u64)),
-                randomness.map(|rnd| {
-                    rlc::value(&pad_to_ssz_chunk(&self.activation_epoch.to_le_bytes()), rnd)
-                }),
-            ),
-            exit_epoch: ValueRLC::new(
-                Value::known(F::from(self.exit_epoch as u64)),
-                randomness
-                    .map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.exit_epoch.to_le_bytes()), rnd)),
-            ),
+            balance: Value::known(F::from(self.effective_balance)),
+            slashed: Value::known(F::from(self.slashed as u64)),
+            activation_epoch: Value::known(F::from(self.activation_epoch)),
+            exit_epoch: Value::known(F::from(self.exit_epoch)),
             pubkey: [
                 randomness.map(|rnd| rlc::value(&self.pubkey[0..32], rnd)),
                 randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.pubkey[32..48]), rnd)),
             ],
         }]
+    }
+
+    /// method to build a vector of `banshee::Validator` from the
+    /// `ethereum_consensus::phase0::Validator` struct.
+    /// TODO: Perhaps there is more "rustacean" way to implement this,
+    /// but we cannot implement `From<Vec<ethereum_consensus::phase0::Validator`>>` for
+    /// `Vec<Validator>`, because that would be trying to implement an external trait on
+    /// an external type.
+    pub fn build_from_validators<'a>(
+        validators: impl Iterator<Item = &'a ethereum_consensus::phase0::Validator>,
+    ) -> Vec<Validator> {
+        let mut banshee_validators = vec![];
+
+        // the `id` is the *order* in which the validator appears in
+        // the BeaconState. This should be preserved, and not mutated
+        // anywhere. This method is not designed to provide any filtering
+        // and users should rely on `filter` to perform any filtering
+        // they require.
+        for (id, eth_validator) in validators.enumerate() {
+            let exit_epoch = eth_validator.exit_epoch;
+            let is_active = is_active_validator(&eth_validator, exit_epoch);
+            // TODO: figure out how to set this. This needs to be determined from
+            // https://eth2book.info/capella/annotated-spec/#beaconblockbody
+            let is_attested = true;
+            // TODO: how do I set this?
+            let committee = 0;
+            let banshee_validator = Validator {
+                id,
+                committee,
+                is_active,
+                is_attested,
+                effective_balance: eth_validator.effective_balance,
+                activation_epoch: eth_validator.activation_epoch,
+                exit_epoch,
+                slashed: eth_validator.slashed,
+                pubkey: eth_validator.public_key.as_ref().to_vec(),
+            };
+            banshee_validators.push(banshee_validator);
+        }
+        banshee_validators
     }
 }
 
@@ -88,18 +106,10 @@ impl Committee {
             tag: Value::known(F::zero()),
             is_active: Value::known(F::zero()),
             is_attested: Value::known(F::zero()),
-            balance: ValueRLC::new(
-                Value::known(F::from(self.accumulated_balance as u64)),
-                randomness.map(|rnd| {
-                    rlc::value(
-                        &pad_to_ssz_chunk(&self.accumulated_balance.to_le_bytes()),
-                        rnd,
-                    )
-                }),
-            ),
-            slashed: ValueRLC::empty(),
-            activation_epoch: ValueRLC::empty(),
-            exit_epoch: ValueRLC::empty(),
+            balance: Value::known(F::from(self.accumulated_balance)),
+            slashed: Value::known(F::zero()),
+            activation_epoch: Value::known(F::zero()),
+            exit_epoch: Value::known(F::zero()),
             pubkey: [Value::known(F::zero()), Value::known(F::zero())], // TODO:
                                                                         // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.x), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
                                                                         // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.y), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
@@ -133,7 +143,7 @@ pub fn into_casper_entities<'a>(
     let validators_per_committees = {
         groups
             .into_iter()
-            .sorted_by_key(|(committee, vs)| *committee)
+            .sorted_by_key(|(committee, _vs)| *committee)
             .map(|(_, vs)| vs.collect_vec())
     };
 
@@ -146,7 +156,7 @@ pub fn into_casper_entities<'a>(
     committees.sort_by_key(|v| v.id);
 
     for (comm_idx, validators) in validators_per_committees.enumerate() {
-        casper_entity.extend(validators.into_iter().map(|v| CasperEntity::Validator(v)));
+        casper_entity.extend(validators.into_iter().map(CasperEntity::Validator));
         casper_entity.push(CasperEntity::Committee(committees[comm_idx]));
     }
 
@@ -185,9 +195,9 @@ pub struct CasperEntityRow<F: Field> {
     pub(crate) tag: Value<F>,
     pub(crate) is_active: Value<F>,
     pub(crate) is_attested: Value<F>,
-    pub(crate) balance: ValueRLC<F>,
-    pub(crate) slashed: ValueRLC<F>,
-    pub(crate) activation_epoch: ValueRLC<F>,
-    pub(crate) exit_epoch: ValueRLC<F>,
+    pub(crate) balance: Value<F>,
+    pub(crate) slashed: Value<F>,
+    pub(crate) activation_epoch: Value<F>,
+    pub(crate) exit_epoch: Value<F>,
     pub(crate) pubkey: [Value<F>; 2],
 }
