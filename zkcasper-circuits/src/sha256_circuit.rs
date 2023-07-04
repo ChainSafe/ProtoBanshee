@@ -1072,7 +1072,7 @@ impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
     /// Make the assignments to the KeccakCircuit
     fn synthesize_sub(
         &self,
-        config: &Self::Config,
+        config: &mut Self::Config,
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {

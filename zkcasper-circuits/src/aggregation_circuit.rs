@@ -16,9 +16,10 @@ use halo2_ecc::{
     bigint::ProperUint,
     bn254::FpPoint,
     ecc::{EcPoint, EccChip},
+    fields::FieldChip,
 };
 use halo2_proofs::{
-    circuit::{Layouter, Region, Value},
+    circuit::{Cell, Layouter, Region, Value},
     plonk::{ConstraintSystem, Error},
 };
 use halo2curves::{
@@ -117,29 +118,75 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
 
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(PHASE);
-                    self.process_validators(challenges, ctx);
+                    let (_aggregated_pubkeys, pubkeys_compressed) = self.process_validators(ctx);
 
-                    let threads = mem::take(&mut builder.threads[PHASE]);
+                    let ctx = builder.main(PHASE + 1);
 
-                    halo2_base::gates::builder::assign_threads_in(
-                        PHASE,
-                        threads,
-                        &config.range.gate,
-                        &config.range.lookup_advice[PHASE],
-                        &mut region,
-                        vec![],
+                    let randomness = QuantumCell::Constant(
+                        halo2_base::utils::value_to_option(challenges.sha256_input().clone())
+                            .unwrap(),
                     );
+                    let pubkey_rlcs = pubkeys_compressed
+                        .into_iter()
+                        .map(|assigned_bytes| {
+                            self.get_rlc(&assigned_bytes[..G1_FQ_BYTES], &randomness, ctx)
+                        })
+                        .collect_vec();
+
+                    let halo2_base::gates::builder::KeygenAssignments::<F> {
+                        assigned_advices, ..
+                    } = builder.assign_all(
+                        &config.range.gate,
+                        &config.range.lookup_advice,
+                        &config.range.q_lookup,
+                        &mut region,
+                        Default::default(),
+                    );
+                    for (validator_id, assigned_rlc) in pubkey_rlcs.into_iter().enumerate() {
+                        let cells = assigned_rlc
+                            .into_iter()
+                            .filter_map(|c| c.cell)
+                            .filter_map(|ctx_cell| {
+                                assigned_advices.get(&(ctx_cell.context_id, ctx_cell.offset))
+                            })
+                            .map(|&(cell, _)| cell);
+
+                        let vs_table_cells = config
+                            .validators_table
+                            .pubkey_cells
+                            .get(validator_id)
+                            .expect("pubkey cells for validator id");
+
+                        for (left, &right) in cells.zip_eq(vs_table_cells) {
+                            region.constrain_equal(left, right).map_err(|e| {
+                                format!(
+                                    "error constraining pubkey rlc for validator {}: {}",
+                                    validator_id, e
+                                )
+                            }).unwrap();
+                        }
+                    }
+
                     Ok(())
                 },
             )
             .unwrap();
     }
 
-    fn process_validators(&self, _challenges: &Challenges<F, Value<F>>, ctx: &mut Context<F>) {
+    fn process_validators(
+        &self,
+        ctx: &mut Context<F>,
+    ) -> (
+        Vec<EcPoint<F, FpPoint<F>>>,
+        Vec<[AssignedValue<F>; G1_FQ_BYTES]>,
+    ) {
         let range = self.range();
 
         let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
         let g1_chip = EccChip::new(&fp_chip);
+
+        let mut pubkeys_compressed = vec![];
+        let mut aggregated_pubkeys = vec![];
 
         for (_committee, validators) in self
             .validators
@@ -147,13 +194,14 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
             .group_by(|v| v.committee)
             .into_iter()
         {
-            let mut committee_pubkeys = Vec::new();
+            let mut in_committee_pubkeys = vec![];
+
             for validator in validators {
                 let pk_compressed = validator.pubkey[..G1_FQ_BYTES].to_vec();
                 let pk_affine =
                     G1Affine::from_bytes(&pk_compressed.as_slice().try_into().unwrap()).unwrap();
 
-                let assigned_bytes = ctx
+                let assigned_bytes: [AssignedValue<F>; G1_BYTES_UNCOMPRESSED] = ctx
                     .assign_witnesses(
                         pk_affine
                             .to_uncompressed()
@@ -164,7 +212,9 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                     .try_into()
                     .unwrap();
 
-                committee_pubkeys.push(self.uncompressed_to_g1affine(
+                pubkeys_compressed.push(assigned_bytes[..G1_FQ_BYTES].try_into().unwrap());
+
+                in_committee_pubkeys.push(self.uncompressed_to_g1affine(
                     assigned_bytes,
                     &pk_affine,
                     ctx,
@@ -172,25 +222,36 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
             }
 
             // let pk_affine = G1Affine::random(&mut rand::thread_rng());
-            let _agg_pubkey = g1_chip.sum::<G1Affine>(ctx, committee_pubkeys);
+            aggregated_pubkeys.push(g1_chip.sum::<G1Affine>(ctx, in_committee_pubkeys));
         }
+
+        (aggregated_pubkeys, pubkeys_compressed)
     }
 
-    pub fn get_rlc<I: IntoIterator<Item = AssignedValue<F>>>(
+    pub fn get_rlc(
         &self,
-        assigned_bytes: I,
-        randomness: Value<F>,
+        assigned_bytes: &[AssignedValue<F>],
+        gamma: &QuantumCell<F>,
         ctx: &mut Context<F>,
-    ) -> AssignedValue<F> {
+    ) -> [AssignedValue<F>; 2] {
+        assert_eq!(assigned_bytes.len(), G1_FQ_BYTES);
         let gate = self.range().gate();
 
-        let r = QuantumCell::Constant(halo2_base::utils::value_to_option(randomness).unwrap());
+        // TODO: remove next 2 lines after switching to bls12-381
+        let mut assigned_bytes = assigned_bytes.to_vec();
+        assigned_bytes.resize(48, ctx.load_zero());
 
         assigned_bytes
+            .chunks(32)
             .into_iter()
-            .fold(ctx.load_zero(), |acc, value| {
-                gate.mul_add(ctx, acc, r, value)
+            .map(|chunk| {
+                chunk.iter().fold(ctx.load_zero(), |acc, &value| {
+                    gate.mul_add(ctx, acc, *gamma, value)
+                })
             })
+            .collect_vec()
+            .try_into()
+            .unwrap()
     }
 
     pub fn uncompressed_to_g1affine(
@@ -263,7 +324,7 @@ impl<'a, F: Field> SubCircuit<F> for AggregationCircuitBuilder<'a, F> {
 
     fn synthesize_sub(
         &self,
-        config: &Self::Config,
+        config: &mut Self::Config,
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {
@@ -284,7 +345,10 @@ mod tests {
     use super::*;
     use halo2_base::gates::range::RangeStrategy;
     use halo2_proofs::{
-        circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
+        circuit::SimpleFloorPlanner,
+        dev::MockProver,
+        halo2curves::bn256::{Fq, Fr},
+        plonk::Circuit,
     };
 
     #[derive(Debug, Clone)]
@@ -293,7 +357,7 @@ mod tests {
     }
 
     impl<'a, F: Field> TestCircuit<'a, F> {
-        const NUM_ADVICE: usize = 6;
+        const NUM_ADVICE: &[usize] = &[6, 1];
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 1;
         const LOOKUP_BITS: usize = 8;
@@ -313,7 +377,7 @@ mod tests {
             let range = RangeConfig::configure(
                 meta,
                 RangeStrategy::Vertical,
-                &[Self::NUM_ADVICE],
+                Self::NUM_ADVICE,
                 &[Self::NUM_LOOKUP_ADVICE],
                 Self::NUM_FIXED,
                 Self::LOOKUP_BITS,
@@ -332,7 +396,7 @@ mod tests {
 
         fn synthesize(
             &self,
-            config: Self::Config,
+            mut config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let challenge = config.1.sha256_input();
@@ -342,8 +406,11 @@ mod tests {
                 self.inner._committees,
                 challenge,
             )?;
-            self.inner
-                .synthesize_sub(&config.0, &config.1.values(&mut layouter), &mut layouter)?;
+            self.inner.synthesize_sub(
+                &mut config.0,
+                &config.1.values(&mut layouter),
+                &mut layouter,
+            )?;
             Ok(())
         }
     }

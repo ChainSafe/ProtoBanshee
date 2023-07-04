@@ -234,7 +234,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
 impl<F: Field> ValidatorsCircuitConfig<F> {
     fn assign(
-        &self,
+        &mut self,
         layouter: &mut impl Layouter<F>,
         validators: &[Validator],
         committees: &[Committee],
@@ -256,7 +256,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
     }
 
     fn assign_with_region(
-        &self,
+        &mut self,
         region: &mut Region<'_, F>,
         validators: &[Validator],
         committees: &[Committee],
@@ -390,7 +390,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
     /// Make the assignments to the ValidatorsCircuit
     fn synthesize_sub(
         &self,
-        config: &Self::Config,
+        config: &mut Self::Config,
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {
@@ -463,7 +463,7 @@ mod tests {
 
         fn synthesize(
             &self,
-            config: Self::Config,
+            mut config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let challenge = config.1.sha256_input();
@@ -472,7 +472,7 @@ mod tests {
                 .state_tables
                 .dev_load(&mut layouter, &self.state_tree_trace, challenge)?;
             self.inner.synthesize_sub(
-                &config.0,
+                &mut config.0,
                 &config.1.values(&mut layouter),
                 &mut layouter,
             )?;
