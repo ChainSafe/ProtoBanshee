@@ -2,7 +2,7 @@ use gadgets::util::{not, Expr};
 use halo2_proofs::circuit::Cell;
 
 use crate::{
-    witness::{into_casper_entities, CasperEntityRow, Committee, Validator},
+    witness::{into_casper_entities, CasperEntityRow, CasperTag, Committee, Validator},
     VALIDATOR0_GINDEX,
 };
 
@@ -88,7 +88,6 @@ impl ValidatorsTable {
             meta.enable_equality(col)
         }
 
-
         config
     }
 
@@ -116,23 +115,25 @@ impl ValidatorsTable {
             )?;
         }
 
-        self.pubkey_cells.push(
-            [
-                (self.pubkey[0], row.pubkey[0]),
-                (self.pubkey[1], row.pubkey[1]),
-            ]
-            .map(|(column, value)| {
-                region
-                    .assign_advice(
-                        || "assign state row on state table",
-                        column,
-                        offset,
-                        || value,
-                    )
-                    .expect("pubkey assign")
-                    .cell()
-            }),
-        );
+        let assigned_cells = [
+            (self.pubkey[0], row.pubkey[0]),
+            (self.pubkey[1], row.pubkey[1]),
+        ]
+        .map(|(column, value)| {
+            region
+                .assign_advice(
+                    || "assign state row on state table",
+                    column,
+                    offset,
+                    || value,
+                )
+                .expect("pubkey assign")
+                .cell()
+        });
+
+        if row.row_type == CasperTag::Validator {
+            self.pubkey_cells.push(assigned_cells);
+        }
 
         Ok(())
     }
@@ -148,7 +149,7 @@ impl ValidatorsTable {
         let casper_entities = into_casper_entities(validators.iter(), committees.iter());
 
         layouter.assign_region(
-            || "dev load state table",
+            || "dev load validators table",
             |mut region| {
                 self.annotate_columns_in_region(&mut region);
                 for (offset, row) in casper_entities

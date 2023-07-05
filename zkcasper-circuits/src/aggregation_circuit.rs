@@ -4,6 +4,7 @@ use crate::{
     witness::{self, Committee, Validator},
 };
 use eth_types::*;
+use gadgets::util::rlc;
 use halo2_base::{
     gates::{
         builder::GateThreadBuilder,
@@ -128,8 +129,8 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                     );
                     let pubkey_rlcs = pubkeys_compressed
                         .into_iter()
-                        .map(|assigned_bytes| {
-                            self.get_rlc(&assigned_bytes[..G1_FQ_BYTES], &randomness, ctx)
+                        .map(|compressed| {
+                            self.get_rlc(&compressed[..G1_FQ_BYTES], &randomness, ctx)
                         })
                         .collect_vec();
 
@@ -142,7 +143,11 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                         &mut region,
                         Default::default(),
                     );
+                    
+                    // check that the assigned compressed encoding of pubkey used for constructiong affine point
+                    // is consistent with bytes used in validators table
                     for (validator_id, assigned_rlc) in pubkey_rlcs.into_iter().enumerate() {
+                        // convert halo2lib `AssignedValue` into vanilla Halo2 `Cell`
                         let cells = assigned_rlc
                             .into_iter()
                             .filter_map(|c| c.cell)
@@ -151,19 +156,16 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                             })
                             .map(|&(cell, _)| cell);
 
+                        // get the corresponding cached cells from the validators table
                         let vs_table_cells = config
                             .validators_table
                             .pubkey_cells
                             .get(validator_id)
                             .expect("pubkey cells for validator id");
 
+                        // enforce equality
                         for (left, &right) in cells.zip_eq(vs_table_cells) {
-                            region.constrain_equal(left, right).map_err(|e| {
-                                format!(
-                                    "error constraining pubkey rlc for validator {}: {}",
-                                    validator_id, e
-                                )
-                            }).unwrap();
+                            region.constrain_equal(left, right)?;
                         }
                     }
 
@@ -212,7 +214,18 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                     .try_into()
                     .unwrap();
 
-                pubkeys_compressed.push(assigned_bytes[..G1_FQ_BYTES].try_into().unwrap());
+                // load masked bit from compressed representation 
+                let masked_byte = ctx.load_witness(F::from(pk_compressed[G1_FQ_BYTES - 1] as u64));
+                let cleared_byte = self.clear_ysign_mask(&masked_byte, ctx); // clear "sign mask".
+                // constraint the loaded masked byte is consistent with the assigned bytes used to construct the point.
+                ctx.constrain_equal(&cleared_byte, &assigned_bytes[G1_FQ_BYTES - 1]);
+
+                // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
+                pubkeys_compressed.push({
+                    let mut compressed_bytes = assigned_bytes[..G1_FQ_BYTES-1].to_vec();
+                    compressed_bytes.push(masked_byte);
+                    compressed_bytes.try_into().unwrap()
+                });
 
                 in_committee_pubkeys.push(self.uncompressed_to_g1affine(
                     assigned_bytes,
@@ -231,7 +244,7 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
     pub fn get_rlc(
         &self,
         assigned_bytes: &[AssignedValue<F>],
-        gamma: &QuantumCell<F>,
+        randomness: &QuantumCell<F>,
         ctx: &mut Context<F>,
     ) -> [AssignedValue<F>; 2] {
         assert_eq!(assigned_bytes.len(), G1_FQ_BYTES);
@@ -244,14 +257,29 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         assigned_bytes
             .chunks(32)
             .into_iter()
-            .map(|chunk| {
-                chunk.iter().fold(ctx.load_zero(), |acc, &value| {
-                    gate.mul_add(ctx, acc, *gamma, value)
-                })
-            })
+            .map(|values| rlc::assigned_value(values, randomness, gate, ctx))
             .collect_vec()
             .try_into()
             .unwrap()
+    }
+
+    /// Clears the sign mask bit (MSB) of a last byte of compressed pubkey.
+    /// This function emulates bitwise and on 01111111 (decimal=127): `b & 127` = c
+    fn clear_ysign_mask(&self, b: &AssignedValue<F>, ctx: &mut Context<F>) -> AssignedValue<F> {
+        let range = self.range();
+        let gate = range.gate();
+
+        // Decomposing only the first bit (MSB): b_shift_msb = b * 2 mod 256 which is equivalent to b <<= 1
+        let b_shift_msb = gate.mul(ctx, *b, QuantumCell::Constant(F::from(2)));
+        let b_shift_msb = range.div_mod(ctx, b_shift_msb, BigUint::from(256u64), 8).1;
+
+        // Note: to get "sign" bit:
+        // let bit = b / 128; // equivalent to (a & 128) >> 7;
+        // gate.assert_bit(ctx, bit)
+
+        // Composing back to the original number but zeroing the first bit (MSB)
+        // c = b_shift_msb / 2 + bit * 128 = b_shift_msb / 2 (since bit := 0)
+        range.div_mod(ctx, b_shift_msb, BigUint::from(2u64), 8).0
     }
 
     pub fn uncompressed_to_g1affine(
@@ -269,7 +297,6 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         let f256 = ctx.load_constant(two.pow_const(8));
 
         let bytes_per_limb = G1_FQ_BYTES / NUM_LIMBS + 1;
-
         let field_limbs: Vec<[_; NUM_LIMBS]> = assigned_bytes
             .chunks(G1_FQ_BYTES)
             .map(|fq_bytes| {
@@ -340,7 +367,7 @@ impl<'a, F: Field> SubCircuit<F> for AggregationCircuitBuilder<'a, F> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs};
 
     use super::*;
     use halo2_base::gates::range::RangeStrategy;
@@ -433,4 +460,5 @@ mod tests {
         let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }
+
 }

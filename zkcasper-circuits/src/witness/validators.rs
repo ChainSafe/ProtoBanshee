@@ -52,6 +52,7 @@ impl Validator {
                 randomness.map(|rnd| rlc::value(&self.pubkey[0..32], rnd)),
                 randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.pubkey[32..48]), rnd)),
             ],
+            row_type: CasperTag::Validator,
         }]
     }
 
@@ -113,6 +114,7 @@ impl Committee {
             pubkey: [Value::known(F::zero()), Value::known(F::zero())], // TODO:
                                                                         // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.x), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
                                                                         // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.y), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
+            row_type: CasperTag::Committee,
         }]
     }
 }
@@ -162,33 +164,15 @@ pub fn into_casper_entities<'a>(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, EnumIter, Hash)]
-pub enum StateTag {
+pub enum CasperTag {
     Validator = 0,
     Committee,
 }
-impl_expr!(StateTag);
-
-impl From<StateTag> for usize {
-    fn from(value: StateTag) -> usize {
-        value as usize
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FieldTag {
-    EffectiveBalance = 0,
-    ActivationEpoch,
-    ExitEpoch,
-    Slashed,
-    PubKeyRLC,
-    PubKeyAffineX,
-    PubKeyAffineY,
-}
-impl_expr!(FieldTag);
 
 /// State table row assignment
 #[derive(Clone, Debug)]
 pub struct CasperEntityRow<F: Field> {
+    pub(crate) row_type: CasperTag,
     pub(crate) id: Value<F>,
     pub(crate) tag: Value<F>,
     pub(crate) is_active: Value<F>,
