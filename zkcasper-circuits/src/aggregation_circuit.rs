@@ -36,10 +36,10 @@ use std::cell::RefCell;
 pub type FpChip<'range, F> = halo2_ecc::fields::fp::FpChip<'range, F, halo2curves::bn256::Fq>;
 
 // TODO: move this into Spec trait
-const G1_FQ_BYTES: usize = 32; // TODO: 48 for BLS12-381.
-const G1_BYTES_UNCOMPRESSED: usize = G1_FQ_BYTES * 2;
-const LIMB_BITS: usize = 88;
-const NUM_LIMBS: usize = 3;
+pub const G1_FQ_BYTES: usize = 32; // TODO: 48 for BLS12-381.
+pub const G1_BYTES_UNCOMPRESSED: usize = G1_FQ_BYTES * 2;
+pub const LIMB_BITS: usize = 88;
+pub const NUM_LIMBS: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct AggregationCircuitConfig<F: Field> {
@@ -74,6 +74,8 @@ impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
 pub struct AggregationCircuitBuilder<'a, F: Field> {
     builder: RefCell<GateThreadBuilder<F>>,
     range: &'a RangeChip<F>,
+    fp_chip: FpChip<'a, F>,
+    // Witness
     validators: &'a [Validator],
     _committees: &'a [Committee],
 }
@@ -85,9 +87,11 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         committees: &'a [Committee],
         range: &'a RangeChip<F>,
     ) -> Self {
+        let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
         Self {
             builder: RefCell::new(builder),
             range,
+            fp_chip,
             validators,
             _committees: committees,
         }
@@ -183,8 +187,8 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
     ) {
         let range = self.range();
 
-        let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
-        let g1_chip = EccChip::new(&fp_chip);
+        let fp_chip = self.fp_chip();
+        let g1_chip = self.g1_chip();
 
         let mut pubkeys_compressed = vec![];
         let mut aggregated_pubkeys = vec![];
@@ -295,8 +299,7 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
     ) -> EcPoint<F, FpPoint<F>> {
         let range = self.range();
         let gate = range.gate();
-
-        let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
+        let fp_chip = self.fp_chip();
 
         let two = F::from(2);
         let f256 = ctx.load_constant(two.pow_const(8));
@@ -334,6 +337,14 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         };
 
         EcPoint::new(x, y)
+    }
+
+    fn g1_chip(&'a self) -> EccChip<'a, F, FpChip<'a, F>> {
+        EccChip::new(self.fp_chip())
+    }
+
+    fn fp_chip(&self) -> &FpChip<'a, F> {
+        &self.fp_chip
     }
 
     fn range(&self) -> &RangeChip<F> {
