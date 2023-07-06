@@ -118,10 +118,7 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
 
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
-                    let (
-                        _aggregated_pubkeys,
-                        pubkeys_compressed
-                    ) = self.process_validators(ctx);
+                    let (_aggregated_pubkeys, pubkeys_compressed) = self.process_validators(ctx);
 
                     let ctx = builder.main(1);
 
@@ -305,7 +302,7 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         let f256 = ctx.load_constant(two.pow_const(8));
 
         // TODO: try optimized solution if LIMB_BITS i a multiple of 8:
-        // https://github.com/axiom-crypto/axiom-eth/blob/6d2a4acf559a8716b867a715f3acfab745fbad3f/src/util/mod.rs#L419 
+        // https://github.com/axiom-crypto/axiom-eth/blob/6d2a4acf559a8716b867a715f3acfab745fbad3f/src/util/mod.rs#L419
         let bytes_per_limb = G1_FQ_BYTES / NUM_LIMBS + 1;
         let field_limbs: Vec<[_; NUM_LIMBS]> = assigned_bytes
             .chunks(G1_FQ_BYTES)
