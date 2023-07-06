@@ -17,10 +17,9 @@ use halo2_ecc::{
     bigint::ProperUint,
     bn254::FpPoint,
     ecc::{EcPoint, EccChip},
-    fields::FieldChip,
 };
 use halo2_proofs::{
-    circuit::{Cell, Layouter, Region, Value},
+    circuit::{Layouter, Region, Value},
     plonk::{ConstraintSystem, Error},
 };
 use halo2curves::{
@@ -30,17 +29,17 @@ use halo2curves::{
 };
 use itertools::Itertools;
 use num_bigint::BigUint;
-use std::{cell::RefCell, mem};
+use std::cell::RefCell;
 
-// pub type FpChip<'range, F> = halo2_ecc::bls12_381::FpChip<'range, F>;
+// TODO: Use halo2_ccc::bls12_381::FpChip after carry mod issue is resolved in halo2-lib.
+// for details see: https://github.com/flyingnobita/halo2-lib-no-fork/blob/bls12-381/halo2-ecc/src/bls12_381/notes.md
 pub type FpChip<'range, F> = halo2_ecc::fields::fp::FpChip<'range, F, halo2curves::bn256::Fq>;
 
+// TODO: move this into Spec trait
 const G1_FQ_BYTES: usize = 32; // TODO: 48 for BLS12-381.
 const G1_BYTES_UNCOMPRESSED: usize = G1_FQ_BYTES * 2;
 const LIMB_BITS: usize = 88;
 const NUM_LIMBS: usize = 3;
-
-const PHASE: usize = 0;
 
 #[derive(Clone, Debug)]
 pub struct AggregationCircuitConfig<F: Field> {
@@ -118,10 +117,13 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                     }
 
                     let builder = &mut self.builder.borrow_mut();
-                    let ctx = builder.main(PHASE);
-                    let (_aggregated_pubkeys, pubkeys_compressed) = self.process_validators(ctx);
+                    let ctx = builder.main(0);
+                    let (
+                        _aggregated_pubkeys,
+                        pubkeys_compressed
+                    ) = self.process_validators(ctx);
 
-                    let ctx = builder.main(PHASE + 1);
+                    let ctx = builder.main(1);
 
                     let randomness = QuantumCell::Constant(
                         halo2_base::utils::value_to_option(challenges.sha256_input().clone())
@@ -143,7 +145,7 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                         &mut region,
                         Default::default(),
                     );
-                    
+
                     // check that the assigned compressed encoding of pubkey used for constructiong affine point
                     // is consistent with bytes used in validators table
                     for (validator_id, assigned_rlc) in pubkey_rlcs.into_iter().enumerate() {
@@ -200,10 +202,13 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
 
             for validator in validators {
                 let pk_compressed = validator.pubkey[..G1_FQ_BYTES].to_vec();
+
+                // FIXME: replace with retriving y coordinate from cached map.
                 let pk_affine =
                     G1Affine::from_bytes(&pk_compressed.as_slice().try_into().unwrap()).unwrap();
 
-                let assigned_bytes: [AssignedValue<F>; G1_BYTES_UNCOMPRESSED] = ctx
+                // FIXME: constraint y coordinate bytes.
+                let assigned_uncompressed: [AssignedValue<F>; G1_BYTES_UNCOMPRESSED] = ctx
                     .assign_witnesses(
                         pk_affine
                             .to_uncompressed()
@@ -214,21 +219,21 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                     .try_into()
                     .unwrap();
 
-                // load masked bit from compressed representation 
+                // load masked bit from compressed representation
                 let masked_byte = ctx.load_witness(F::from(pk_compressed[G1_FQ_BYTES - 1] as u64));
-                let cleared_byte = self.clear_ysign_mask(&masked_byte, ctx); // clear "sign mask".
-                // constraint the loaded masked byte is consistent with the assigned bytes used to construct the point.
-                ctx.constrain_equal(&cleared_byte, &assigned_bytes[G1_FQ_BYTES - 1]);
+                let cleared_byte = self.clear_ysign_mask(&masked_byte, ctx);
+                // constraint that the loaded masked byte is consistent with the assigned bytes used to construct the point.
+                ctx.constrain_equal(&cleared_byte, &assigned_uncompressed[G1_FQ_BYTES - 1]);
 
                 // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                 pubkeys_compressed.push({
-                    let mut compressed_bytes = assigned_bytes[..G1_FQ_BYTES-1].to_vec();
+                    let mut compressed_bytes = assigned_uncompressed[..G1_FQ_BYTES - 1].to_vec();
                     compressed_bytes.push(masked_byte);
                     compressed_bytes.try_into().unwrap()
                 });
 
                 in_committee_pubkeys.push(self.uncompressed_to_g1affine(
-                    assigned_bytes,
+                    assigned_uncompressed,
                     &pk_affine,
                     ctx,
                 ));
@@ -241,6 +246,8 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         (aggregated_pubkeys, pubkeys_compressed)
     }
 
+    /// Calculates RLCs (1 for each of two chacks of BLS12-381) for compresed bytes of pubkey.
+    /// The resulted bigints should be equal to one used validators table.
     pub fn get_rlc(
         &self,
         assigned_bytes: &[AssignedValue<F>],
@@ -282,6 +289,7 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         range.div_mod(ctx, b_shift_msb, BigUint::from(2u64), 8).0
     }
 
+    /// Converts uncompressed pubkey bytes to G1Affine point.
     pub fn uncompressed_to_g1affine(
         &self,
         assigned_bytes: [AssignedValue<F>; G1_BYTES_UNCOMPRESSED],
@@ -296,6 +304,8 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         let two = F::from(2);
         let f256 = ctx.load_constant(two.pow_const(8));
 
+        // TODO: try optimized solution if LIMB_BITS i a multiple of 8:
+        // https://github.com/axiom-crypto/axiom-eth/blob/6d2a4acf559a8716b867a715f3acfab745fbad3f/src/util/mod.rs#L419 
         let bytes_per_limb = G1_FQ_BYTES / NUM_LIMBS + 1;
         let field_limbs: Vec<[_; NUM_LIMBS]> = assigned_bytes
             .chunks(G1_FQ_BYTES)
@@ -367,15 +377,12 @@ impl<'a, F: Field> SubCircuit<F> for AggregationCircuitBuilder<'a, F> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs};
+    use std::fs;
 
     use super::*;
     use halo2_base::gates::range::RangeStrategy;
     use halo2_proofs::{
-        circuit::SimpleFloorPlanner,
-        dev::MockProver,
-        halo2curves::bn256::{Fq, Fr},
-        plonk::Circuit,
+        circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
 
     #[derive(Debug, Clone)]
@@ -460,5 +467,4 @@ mod tests {
         let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }
-
 }
