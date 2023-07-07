@@ -4,6 +4,8 @@
 //! - https://github.com/SoraSuegami/zkevm-circuits/blob/main/zkevm-circuits/src/sha256_circuit/sha256_bit.rs
 
 mod sha256_bit;
+mod sha256_chip;
+mod sha256_compression;
 mod util;
 
 use std::marker::PhantomData;
@@ -1139,13 +1141,32 @@ mod tests {
     }
 
     #[test]
-    fn test_bit_sha256_simple() {
+    fn test_sha256_two2one_simple() {
+        let k = 11;
+        let inputs = vec![
+            HashInput::TwoToOne {
+                left: vec![0u8; 32],
+                right: vec![0u8; 32],
+                is_rlc: [false, false]
+            };
+            10
+        ];
+        let circuit = TestSha256 {
+            inputs,
+            _f: PhantomData,
+        };
+
+        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+        prover.assert_satisfied();
+    }
+
+    fn test_sha256_two2one_val_and_rlc() {
         let k = 10;
         let inputs = vec![
             HashInput::TwoToOne {
                 left: vec![vec![2u8; 4], vec![0u8; 28]].concat(),
                 right: vec![vec![3u8; 4], vec![0u8; 28]].concat(),
-                is_rlc: [false, false]
+                is_rlc: [false, true]
             };
             1
         ];
