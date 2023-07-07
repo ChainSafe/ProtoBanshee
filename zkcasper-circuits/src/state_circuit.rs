@@ -26,24 +26,13 @@ use std::{
     ops::{Add, Mul},
     vec,
 };
-
-// remove
-pub const CHUNKS_PER_VALIDATOR: usize = 8;
-// remove
-pub const USED_CHUNKS_PER_VALIDATOR: usize = 5;
-// remove
-pub const TREE_DEPTH: usize = 46; // ceil(log2(TREE_MAX_LEAVES))
+use types::{Spec};
 
 pub const TREE_LEVEL_AUX_COLUMNS: usize = 1;
 
-// remove
-pub const PUBKEYS_LEVEL: usize = 10;
-// remove
-pub const VALIDATORS_LEVEL: usize = PUBKEYS_LEVEL - 1;
-
 #[derive(Clone, Debug)]
-pub struct StateSSZCircuitConfig<F: Field> {
-    tree: [TreeLevel<F>; TREE_DEPTH - 1],
+pub struct StateSSZCircuitConfig<F: Field> { // const T: usize = {S::TREE_DEPTH};
+    tree: Vec<TreeLevel<F>>,
     sha256_table: SHA256Table,
     pub state_table: [StateTable; 2],
     // state_root: Column<Instance>
@@ -56,11 +45,11 @@ pub struct StateSSZCircuitArgs {
 impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
     type ConfigArgs = StateSSZCircuitArgs;
 
-    fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
+    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, _spec: S) -> Self {
         let sha256_table = args.sha256_table;
 
-        let pubkeys_level = TreeLevel::configure(meta, PUBKEYS_LEVEL, 0, 3, true);
-        let validators_level = TreeLevel::configure(meta, VALIDATORS_LEVEL, 0, 0, true);
+        let pubkeys_level = TreeLevel::configure(meta, S::PUBKEYS_LEVEL, 0, 3, true);
+        let validators_level = TreeLevel::configure(meta, S::VALIDATORS_LEVEL, 0, 0, true);
 
         let state_table: [StateTable; 2] = [
             pubkeys_level.clone().into(),
@@ -70,13 +59,13 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
         let mut tree = vec![pubkeys_level, validators_level];
 
         let mut padding = 0;
-        for i in (2..=TREE_DEPTH - 2).rev() {
+        for i in (2..=S::TREE_DEPTH - 2).rev() {
             padding = padding * 2 + 1;
             let level = TreeLevel::configure(meta, i, 0, padding, false);
             tree.push(level);
         }
 
-        let tree: [_; TREE_DEPTH - 1] = tree.into_iter().rev().collect_vec().try_into().unwrap();
+        let tree = tree.into_iter().rev().collect_vec();
 
         // Annotate circuit
         sha256_table.annotate_columns(meta);
@@ -84,7 +73,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
             .iter()
             .for_each(|table| table.annotate_columns(meta));
 
-        for depth in (2..TREE_DEPTH).rev() {
+        for depth in (2..S::TREE_DEPTH).rev() {
             let depth = depth - 1;
             let level = &tree[depth];
             let next_level = &tree[depth - 1];
@@ -178,6 +167,7 @@ impl<F: Field> StateSSZCircuitConfig<F> {
 pub struct StateSSZCircuit<F: Field> {
     trace: MerkleTrace,
     _f: PhantomData<F>,
+    // _spec: PhantomData<S>,
 }
 
 impl<F: Field> StateSSZCircuit<F> {
@@ -185,6 +175,7 @@ impl<F: Field> StateSSZCircuit<F> {
         Self {
             trace,
             _f: PhantomData,
+            // _spec: PhantomData,
         }
     }
 }
@@ -226,6 +217,7 @@ mod tests {
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
     use std::{fs, marker::PhantomData};
+    use types::Test as S;
 
     #[derive(Debug, Clone)]
     struct TestStateSSZ<F: Field> {
@@ -244,7 +236,7 @@ mod tests {
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let sha256_table = SHA256Table::construct(meta);
 
-            let config = { StateSSZCircuitConfig::new(meta, StateSSZCircuitArgs { sha256_table }) };
+            let config = { StateSSZCircuitConfig::new(meta, StateSSZCircuitArgs { sha256_table }, S) };
 
             (config, Challenges::construct(meta))
         }

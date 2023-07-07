@@ -5,9 +5,11 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 use crate::{
-    state_circuit::{PUBKEYS_LEVEL, VALIDATORS_LEVEL},
+    // state_circuit::{PUBKEYS_LEVEL, VALIDATORS_LEVEL},
     witness::{MerkleTrace, MerkleTraceStep},
 };
+
+use types::{Test as S, Spec};
 
 use super::*;
 
@@ -137,8 +139,8 @@ impl StateTables {
     ) -> Result<(), Error> {
         let mut trace_by_depth = trace.trace_by_level_map();
 
-        let pubkey_level_trace = trace_by_depth.remove(&PUBKEYS_LEVEL).unwrap();
-        let validators_level_trace = trace_by_depth.remove(&VALIDATORS_LEVEL).unwrap();
+        let pubkey_level_trace = trace_by_depth.remove(&S::PUBKEYS_LEVEL).unwrap();
+        let validators_level_trace = trace_by_depth.remove(&S::VALIDATORS_LEVEL).unwrap();
 
         let pubkey_table = self.0.get(&StateTreeLevel::PubKeys).unwrap();
         let validators_table = self.0.get(&StateTreeLevel::Validators).unwrap();

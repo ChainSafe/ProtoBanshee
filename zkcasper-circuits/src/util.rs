@@ -13,6 +13,7 @@ use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{Challenge, ConstraintSystem, Error, Expression, SecondPhase, VirtualCells},
 };
+use types::Spec;
 
 pub(crate) fn query_expression<F: Field, T>(
     meta: &mut ConstraintSystem<F>,
@@ -119,7 +120,7 @@ pub trait SubCircuitConfig<F: Field> {
     type ConfigArgs;
 
     /// Type constructor
-    fn new(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self;
+    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, spec: S) -> Self;
 
     /// Annotates columns of a circuit embedded within a circuit region.
     fn annotate_columns_in_region(&self, region: &mut Region<F>);
