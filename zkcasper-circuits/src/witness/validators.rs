@@ -3,11 +3,9 @@ use std::vec;
 use banshee_preprocessor::util::pad_to_ssz_chunk;
 use eth_types::Field;
 use ethereum_consensus::phase0::is_active_validator;
-use gadgets::impl_expr;
 use gadgets::util::rlc;
 
 use halo2_proofs::circuit::Value;
-use halo2_proofs::plonk::Expression;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
@@ -100,7 +98,7 @@ impl Validator {
 impl Committee {
     pub(crate) fn table_assignment<F: Field>(
         &self,
-        randomness: Value<F>,
+        _randomness: Value<F>,
     ) -> Vec<CasperEntityRow<F>> {
         vec![CasperEntityRow {
             id: Value::known(F::from(self.id as u64)),

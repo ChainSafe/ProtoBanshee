@@ -108,7 +108,6 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
             .load_lookup_table(layouter)
             .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
-        let _witness_gen_only = self.builder.borrow().witness_gen_only();
 
         layouter
             .assign_region(
@@ -186,9 +185,6 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
         Vec<EcPoint<F, FpPoint<F>>>,
         Vec<[AssignedValue<F>; G1_FQ_BYTES]>,
     ) {
-        let range = self.range();
-
-        let fp_chip = self.fp_chip();
         let g1_chip = self.g1_chip();
 
         let mut pubkeys_compressed = vec![];

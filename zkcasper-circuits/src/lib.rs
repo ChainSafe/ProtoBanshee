@@ -1,11 +1,11 @@
 #![feature(associated_type_bounds)]
-#![feature(inherent_associated_types)]
 pub(crate) mod gadget;
 pub mod table;
 pub(crate) mod util;
 pub mod witness;
 
 pub mod aggregation_circuit;
+pub mod attestations_circuit;
 pub mod sha256_circuit;
 pub mod state_circuit;
 pub mod super_circuit;
