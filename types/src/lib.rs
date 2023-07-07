@@ -21,9 +21,9 @@ impl Spec for Test {
 
     const MAX_VALIDATORS: usize = 100;
     const VALIDATOR_0_G_INDEX: usize = 32;
-    const CHUNKS_PER_VALIDATOR: usize = 100;
-    const USED_CHUNKS_PER_VALIDATOR: usize = 8;
-    const TREE_DEPTH: usize = 46;
+    const CHUNKS_PER_VALIDATOR: usize = 8;
+    const USED_CHUNKS_PER_VALIDATOR: usize = 5;
+    const TREE_DEPTH: usize = 10;
     const PUBKEYS_LEVEL: usize = 10;
     const VALIDATORS_LEVEL: usize = Self::PUBKEYS_LEVEL - 1;
 }
@@ -34,9 +34,9 @@ pub struct Mainnet;
 impl Spec for Mainnet {
     const MAX_VALIDATORS: usize = 1099511627776;
     const VALIDATOR_0_G_INDEX: usize = 94557999988736;
-    const CHUNKS_PER_VALIDATOR: usize = 100;
-    const USED_CHUNKS_PER_VALIDATOR: usize = 8;
-    const TREE_DEPTH: usize = 50;
+    const CHUNKS_PER_VALIDATOR: usize = 9;
+    const USED_CHUNKS_PER_VALIDATOR: usize = 5;
+    const TREE_DEPTH: usize = 47;
     // TODO: calculate and verify the pubkeys level for mainnet
     const PUBKEYS_LEVEL: usize = 40;
     const VALIDATORS_LEVEL: usize = Self::PUBKEYS_LEVEL - 1;
