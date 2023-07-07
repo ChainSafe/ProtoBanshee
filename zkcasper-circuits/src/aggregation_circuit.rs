@@ -30,6 +30,7 @@ use halo2curves::{
 use itertools::Itertools;
 use num_bigint::BigUint;
 use std::cell::RefCell;
+use types::Spec;
 
 // TODO: Use halo2_ccc::bls12_381::FpChip after carry mod issue is resolved in halo2-lib.
 // for details see: https://github.com/flyingnobita/halo2-lib-no-fork/blob/bls12-381/halo2-ecc/src/bls12_381/notes.md
@@ -55,7 +56,7 @@ pub struct AggregationCircuitArgs<F: Field> {
 impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
     type ConfigArgs = AggregationCircuitArgs<F>;
 
-    fn new(_meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
+    fn new<S: Spec>(_meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, spec: S) -> Self {
         let validators_table = args.validators_table;
         let range = args.range;
 
@@ -393,6 +394,7 @@ mod tests {
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
+    use types::Test as S;
 
     #[derive(Debug, Clone)]
     struct TestCircuit<'a, F: Field> {
@@ -432,6 +434,7 @@ mod tests {
                     validators_table,
                     range,
                 },
+                S,
             );
 
             (config, Challenges::construct(meta))
