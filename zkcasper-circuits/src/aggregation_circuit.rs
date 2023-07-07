@@ -149,7 +149,8 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
 
                     // check that the assigned compressed encoding of pubkey used for constructiong affine point
                     // is consistent with bytes used in validators table
-                    for (validator_id, assigned_rlc) in pubkey_rlcs.into_iter().enumerate() {
+                    // assumption: order of self.validators is same as in BeaconState.validators so we treat iterator index as validator id
+                    for (i, assigned_rlc) in pubkey_rlcs.into_iter().enumerate() {
                         // convert halo2lib `AssignedValue` into vanilla Halo2 `Cell`
                         let cells = assigned_rlc
                             .into_iter()
@@ -163,7 +164,7 @@ impl<'a, F: Field> AggregationCircuitBuilder<'a, F> {
                         let vs_table_cells = config
                             .validators_table
                             .pubkey_cells
-                            .get(validator_id)
+                            .get(i)
                             .expect("pubkey cells for validator id");
 
                         // enforce equality
