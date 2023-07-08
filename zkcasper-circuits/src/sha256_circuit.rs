@@ -5,7 +5,6 @@
 
 mod sha256_bit;
 mod sha256_chip;
-mod sha256_compression;
 mod util;
 
 use std::marker::PhantomData;

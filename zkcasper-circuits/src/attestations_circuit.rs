@@ -6,7 +6,7 @@ use crate::{
 };
 use eth_types::Field;
 use halo2_base::{
-    gates::{builder::GateThreadBuilder, range::RangeConfig, GateInstructions, RangeInstructions},
+    gates::{builder::GateThreadBuilder, range::RangeConfig, RangeInstructions},
     safe_types::RangeChip,
 };
 use halo2_ecc::{bn254::{Fp2Chip, FpChip}, ecc::EccChip, fields::fp2};

@@ -1,38 +1,20 @@
-use std::collections::HashMap;
-
 use eth_types::Field;
 use gadgets::util::rlc;
 use itertools::Itertools;
-// //! Gadget and chips for the [SHA-256] hash function.
-// //!
-// //! [SHA-256]: https://tools.ietf.org/html/rfc6234
-use crate::{
-    sha256_circuit::{
-        sha256_bit::{sha256, ShaRow},
-        util::Sha256AssignedRows,
-    },
-    witness::HashInput,
-};
+use std::collections::HashMap;
+
+use crate::{sha256_circuit::util::Sha256AssignedRows, witness::HashInput};
+use halo2_base::safe_types::RangeChip;
 use halo2_base::QuantumCell;
 use halo2_base::{
-    gates::{flex_gate::FlexGateConfig, range::RangeConfig, GateInstructions, RangeInstructions},
-    utils::{bigint_to_fe, biguint_to_fe, fe_to_biguint, modulus},
+    gates::{GateInstructions, RangeInstructions},
     AssignedValue, Context,
 };
-use halo2_base::{safe_types::RangeChip, utils::ScalarField};
-use halo2_base::{
-    utils::{fe_to_bigint, value_to_option},
-    ContextCell,
-};
+use halo2_base::{utils::value_to_option, ContextCell};
 use halo2_proofs::{
-    circuit::{self, AssignedCell, Cell, Layouter, Region, SimpleFloorPlanner, Value},
-    plonk::{
-        Advice, Assigned, Circuit, Column, ConstraintSystem, Error, Expression, Fixed, Selector,
-        TableColumn, VirtualCells,
-    },
-    poly::Rotation,
+    circuit::{self, AssignedCell, Region},
+    plonk::{Assigned, Error},
 };
-use sha2::{Digest, Sha256};
 
 use super::Sha256CircuitConfig;
 
@@ -78,18 +60,42 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         assigned_advices: &mut HashMap<(usize, usize), (circuit::Cell, usize)>,
         witness_gen_only: bool,
     ) -> Result<AssignedHashResult<F>, Error> {
+        let mut assign_byte = |byte: u8| ctx.load_witness(F::from(byte as u64));
+        let assigned_input = input.iter().map(|&byte| assign_byte(byte)).collect_vec();
+        self.digest_assigned(
+            assigned_input,
+            ctx,
+            region,
+            assigned_advices,
+            witness_gen_only,
+        )
+    }
+
+    pub fn digest_assigned(
+        &self,
+        assigned_input: impl IntoIterator<Item = AssignedValue<F>>,
+        ctx: &mut Context<F>,
+        region: &mut Region<'_, F>,
+        assigned_advices: &mut HashMap<(usize, usize), (circuit::Cell, usize)>,
+        witness_gen_only: bool,
+    ) -> Result<AssignedHashResult<F>, Error> {
+        let mut assigned_input = assigned_input.into_iter().collect_vec();
+        let input_bytes = assigned_input
+            .iter()
+            .map(|e| e.value().get_lower_32() as u8)
+            .collect_vec();
         let rnd = QuantumCell::Constant(self.rnd.clone());
-        let input_byte_size = input.len();
+        let input_byte_size = assigned_input.len();
         let max_byte_size = self.max_input_size;
         assert!(input_byte_size <= max_byte_size);
         let range = &self.range;
         let gate = &range.gate;
 
-        assert!(input.len() <= self.max_input_size);
+        assert!(assigned_input.len() <= self.max_input_size);
         let mut assigned_rows = Sha256AssignedRows::default();
         let assigned_hash_bytes = self.sha256_bit_config.digest_with_region(
             region,
-            HashInput::Single(input.to_vec()),
+            HashInput::Single(input_bytes),
             &mut assigned_rows,
         )?;
         let assigned_output =
@@ -112,11 +118,6 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         );
 
         let mut assign_byte = |byte: u8| ctx.load_witness(F::from(byte as u64));
-        let mut assigned_input = vec![];
-        for byte in input.iter() {
-            //range.range_check(ctx, &assigned, 8);
-            assigned_input.push(assign_byte(*byte));
-        }
         assigned_input.push(assign_byte(0x80));
         for _ in 0..zero_padding_byte_size {
             assigned_input.push(assign_byte(0u8));
@@ -124,6 +125,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         let mut input_len_bytes = [0; 8];
         let le_size_bytes = (8 * input_byte_size).to_le_bytes();
         input_len_bytes[0..le_size_bytes.len()].copy_from_slice(&le_size_bytes);
+
         for byte in input_len_bytes.iter().rev() {
             assigned_input.push(assign_byte(*byte));
         }
@@ -274,23 +276,23 @@ mod test {
     use crate::util::SubCircuitConfig;
 
     use super::*;
-    use halo2_base::{gates::range::RangeStrategy::Vertical, SKIP_FIRST_PASS};
+    use halo2_base::gates::range::RangeConfig;
+    use halo2_base::SKIP_FIRST_PASS;
     use halo2_base::{
         gates::{
             builder::{GateThreadBuilder, KeygenAssignments},
             range::RangeStrategy,
         },
         halo2_proofs::{
-            circuit::{Cell, Layouter, Region, SimpleFloorPlanner},
+            circuit::{Layouter, SimpleFloorPlanner},
             dev::MockProver,
             halo2curves::bn256::Fr,
             plonk::{Circuit, ConstraintSystem, Instance},
         },
     };
 
-    use num_bigint::RandomBits;
-    use rand::rngs::OsRng;
-    use rand::{thread_rng, Rng};
+    use halo2_proofs::plonk::Column;
+    use sha2::{Digest, Sha256};
 
     #[derive(Debug, Clone)]
     struct TestConfig<F: Field> {
@@ -407,6 +409,7 @@ mod test {
         let k = 12;
 
         let test_input = vec![1; 32];
+        let test_output: [u8; 32] = Sha256::digest(&test_input).into();
 
         let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
         let builder = GateThreadBuilder::new(false);
@@ -416,13 +419,6 @@ mod test {
             test_input,
             _f: PhantomData,
         };
-        let test_output: [u8; 32] = [
-            0b10111010, 0b01111000, 0b00010110, 0b10111111, 0b10001111, 0b00000001, 0b11001111,
-            0b11101010, 0b01000001, 0b01000001, 0b01000000, 0b11011110, 0b01011101, 0b10101110,
-            0b00100010, 0b00100011, 0b10110000, 0b00000011, 0b01100001, 0b10100011, 0b10010110,
-            0b00010111, 0b01111010, 0b10011100, 0b10110100, 0b00010000, 0b11111111, 0b01100001,
-            0b11110010, 0b00000000, 0b00010101, 0b10101101,
-        ];
         let test_output = test_output.map(|val| Fr::from(val as u64)).to_vec();
         let public_inputs = vec![test_output];
 
