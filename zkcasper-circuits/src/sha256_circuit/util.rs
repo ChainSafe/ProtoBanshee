@@ -1,3 +1,6 @@
+use eth_types::Field;
+use halo2_proofs::circuit::AssignedCell;
+
 pub(crate) const NUM_BITS_PER_BYTE: usize = 8;
 pub(crate) const NUM_BYTES_PER_WORD: usize = 4;
 pub(crate) const NUM_BITS_PER_WORD: usize = NUM_BYTES_PER_WORD * NUM_BITS_PER_BYTE;
@@ -29,6 +32,39 @@ pub(crate) const ROUND_CST: [u32; NUM_ROUNDS] = [
 pub const H: [u64; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
+
+
+/// Assigned values for each row.
+#[derive(Clone, Debug, Default)]
+pub struct Sha256AssignedRows<F: Field> {
+    /// Offset of the row.
+    pub offset: usize,
+    /// Input length at the row.
+    pub input_len: Vec<AssignedCell<F, F>>,
+    /// Input words at the row.
+    pub input_words: Vec<AssignedCell<F, F>>,
+    /// Whether the output word is enabled at the row.
+    pub is_final: Vec<AssignedCell<F, F>>,
+    /// Whether the row is padding.
+    pub padding_selectors: Vec<[AssignedCell<F, F>; 4]>,
+    /// Output words at the row.
+    pub output_words: Vec<AssignedCell<F, F>>,
+    /// Whether the round is dummy at the row.
+    pub is_dummy: Vec<AssignedCell<F, F>>,
+    /// Assigned h_a,h_b,h_c,h_d.
+    pub assigned_ha: Vec<AssignedCell<F, F>>,
+    /// Assigned h_e,h_f,h_g,h_h.
+    pub assigned_he: Vec<AssignedCell<F, F>>,
+}
+
+impl <F: Field> Sha256AssignedRows<F> {
+    pub fn new(offset: usize) -> Self {
+        Self {
+            offset,
+            ..Default::default()
+        }
+    }
+}
 
 /// Encodes the data using rlc
 pub(crate) mod compose_rlc {

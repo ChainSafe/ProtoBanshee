@@ -1,5 +1,6 @@
 use super::*;
 use crate::{util::rlc, witness::HashInput};
+use halo2_proofs::circuit::AssignedCell;
 use itertools::Itertools;
 use sha2::Digest;
 
@@ -63,14 +64,14 @@ impl SHA256Table {
         region: &mut Region<F>,
         offset: usize,
         values: [Value<F>; 6],
-    ) -> Result<(), Error> {
-        for (&column, value) in <SHA256Table as LookupTable<F>>::advice_columns(self)
+    ) -> Result<[AssignedCell<F, F>; 6], Error> {
+        <SHA256Table as LookupTable<F>>::advice_columns(self)
             .iter()
             .zip(values.iter())
+            .map(|(&column, value)|
         {
-            region.assign_advice(|| format!("assign {}", offset), column, offset, || *value)?;
-        }
-        Ok(())
+            region.assign_advice(|| format!("assign {}", offset), column, offset, || *value)
+        }).collect::<Result<Vec<_>, _>>().map(|res| res.try_into().unwrap())
     }
 
     /// Generate the sha256 table assignments from a byte array input.

@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 
 use eth_types::Field;
+use gadgets::util::rlc;
 use itertools::Itertools;
 // //! Gadget and chips for the [SHA-256] hash function.
 // //!
 // //! [SHA-256]: https://tools.ietf.org/html/rfc6234
-use crate::sha256_circuit::{
-    sha256_compression::{Sha256AssignedRows, Sha256CompressionConfig},
-    util::H,
+use crate::{
+    sha256_circuit::{
+        sha256_bit::{sha256, ShaRow},
+        util::Sha256AssignedRows,
+    },
+    witness::HashInput,
 };
 use halo2_base::QuantumCell;
 use halo2_base::{
@@ -30,6 +34,8 @@ use halo2_proofs::{
 };
 use sha2::{Digest, Sha256};
 
+use super::Sha256CircuitConfig;
+
 const Sha256BitChipRowPerRound: usize = 72;
 const BLOCK_BYTE: usize = 64;
 const DIGEST_BYTE: usize = 32;
@@ -39,27 +45,30 @@ const SHA256_CONTEXT_ID: usize = usize::MAX;
 pub struct AssignedHashResult<F: Field> {
     pub input_len: AssignedValue<F>,
     pub input_bytes: Vec<AssignedValue<F>>,
-    pub output_bytes: Vec<AssignedValue<F>>,
+    pub output_bytes: [AssignedValue<F>; 32],
 }
 
 pub struct Sha256Chip<'a, F: Field> {
-    sha256_comp_configs: Vec<Sha256CompressionConfig<F>>,
-    pub max_byte_size: usize,
+    sha256_bit_config: Sha256CircuitConfig<F>,
+    pub max_input_size: usize,
     range: &'a RangeChip<F>,
+    rnd: F,
 }
 
 impl<'a, F: Field> Sha256Chip<'a, F> {
     const ONE_ROUND_INPUT_BYTES: usize = 64;
 
     pub fn new(
-        sha256_comp_configs: Vec<Sha256CompressionConfig<F>>,
+        sha256_bit_config: Sha256CircuitConfig<F>,
         range: &'a RangeChip<F>,
         max_byte_size: usize,
+        rnd: F,
     ) -> Self {
         Self {
-            sha256_comp_configs,
-            max_byte_size,
+            sha256_bit_config,
+            max_input_size: max_byte_size,
             range,
+            rnd,
         }
     }
 
@@ -71,186 +80,137 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         assigned_advices: &mut HashMap<(usize, usize), (circuit::Cell, usize)>,
         witness_gen_only: bool,
     ) -> Result<AssignedHashResult<F>, Error> {
+        let rnd = QuantumCell::Constant(self.rnd.clone());
         let input_byte_size = input.len();
+        let max_byte_size = self.max_input_size;
+        assert!(input_byte_size <= max_byte_size);
+        let range = &self.range;
+        let gate = &range.gate;
+
+        assert!(input.len() <= self.max_input_size);
+        let mut assigned_rows = Sha256AssignedRows::default();
+        let assigned_hash_bytes = self.sha256_bit_config.digest_with_region(
+            region,
+            HashInput::Single(input.to_vec()),
+            &mut assigned_rows,
+        )?;
+        let assigned_hash_bytes =
+            assigned_hash_bytes.map(|b| ctx.load_witness(*value_to_option(b.value()).unwrap()));
+
         let input_byte_size_with_9 = input_byte_size + 9;
-        let one_round_size = Self::ONE_ROUND_INPUT_BYTES;
+        let one_round_size = BLOCK_BYTE;
         let num_round = if input_byte_size_with_9 % one_round_size == 0 {
             input_byte_size_with_9 / one_round_size
         } else {
             input_byte_size_with_9 / one_round_size + 1
         };
         let padded_size = one_round_size * num_round;
-        let max_byte_size = self.max_byte_size;
+        let zero_padding_byte_size = padded_size - input_byte_size - 9;
         let max_round = max_byte_size / one_round_size;
-        debug_assert!(padded_size <= max_byte_size);
-        let zero_padding_byte_size = padded_size - input_byte_size_with_9;
         let remaining_byte_size = max_byte_size - padded_size;
-        debug_assert_eq!(
+        assert_eq!(
             remaining_byte_size,
             one_round_size * (max_round - num_round)
         );
-        let mut padded_inputs = input.to_vec();
-        padded_inputs.push(0x80);
+
+        let mut assign_byte = |byte: u8| ctx.load_witness(F::from(byte as u64));
+        let mut assigned_input = vec![];
+        for byte in input.iter() {
+            //range.range_check(ctx, &assigned, 8);
+            assigned_input.push(assign_byte(*byte));
+        }
+        assigned_input.push(assign_byte(0x80));
         for _ in 0..zero_padding_byte_size {
-            padded_inputs.push(0);
+            assigned_input.push(assign_byte(0u8));
         }
         let mut input_len_bytes = [0; 8];
         let le_size_bytes = (8 * input_byte_size).to_le_bytes();
         input_len_bytes[0..le_size_bytes.len()].copy_from_slice(&le_size_bytes);
         for byte in input_len_bytes.iter().rev() {
-            padded_inputs.push(*byte);
+            assigned_input.push(assign_byte(*byte));
         }
-
-        assert_eq!(padded_inputs.len(), num_round * one_round_size);
+        assert_eq!(assigned_input.len(), num_round * one_round_size);
         for _ in 0..remaining_byte_size {
-            padded_inputs.push(0);
+            assigned_input.push(assign_byte(0u8));
         }
-        assert_eq!(padded_inputs.len(), max_byte_size);
-
-        let range = self.range();
-        let gate = range.gate();
-
-        let assigned_input_byte_size = ctx.load_witness(F::from(input_byte_size as u64));
-        let assigned_num_round = ctx.load_witness(F::from(num_round as u64));
-        let padded_size = gate.mul(
-            ctx,
-            QuantumCell::Existing(assigned_num_round.clone()),
-            QuantumCell::Constant(F::from(one_round_size as u64)),
-        );
-        let assigned_input_with_9_size = gate.add(
-            ctx,
-            QuantumCell::Existing(assigned_input_byte_size.clone()),
-            QuantumCell::Constant(F::from(9u64)),
-        );
-        let padding_size = gate.sub(
-            ctx,
-            QuantumCell::Existing(padded_size.clone()),
-            QuantumCell::Existing(assigned_input_with_9_size.clone()),
-        );
-        let padding_is_less_than_round =
-            range.is_less_than_safe(ctx, padding_size, one_round_size as u64);
-        gate.assert_is_const(ctx, &padding_is_less_than_round, &F::one());
-
-        let num_column = self.sha256_comp_configs.len();
-        let num_round_per_column = max_round / num_column;
-
-        let mut last_hs = H;
-        let mut assigned_last_hs_vec = vec![H
-            .iter()
-            .map(|h| ctx.load_constant(F::from(*h)))
-            .collect::<Vec<AssignedValue<F>>>()];
-        let assigned_input_bytes = padded_inputs
-            .iter()
-            .map(|byte| ctx.load_witness(F::from(*byte as u64)))
-            .collect::<Vec<AssignedValue<F>>>();
-        for &assigned_byte in assigned_input_bytes.iter() {
-            range.range_check(ctx, assigned_byte, 8);
-        }
-
-        for n_column in 0..num_column {
-            let sha2_comp_config = &self.sha256_comp_configs[n_column];
-            for n_round in 0..num_round_per_column {
-                let round_idx = n_column * num_round_per_column + n_round;
-                let (witness, next_hs) = sha2_comp_config.compute_witness(
-                    &padded_inputs[round_idx * one_round_size..(round_idx + 1) * one_round_size],
-                    last_hs,
-                );
-                last_hs = next_hs;
-                let mut assigned_rows = Sha256AssignedRows::<F>::new(
-                    n_round * Sha256CompressionConfig::<F>::ROWS_PER_BLOCK,
-                );
-                sha2_comp_config.assign_witness(region, &witness, &mut assigned_rows)?;
-                let assigned_h_ins = assigned_rows.get_h_ins();
-                debug_assert_eq!(assigned_h_ins.len(), 1);
-                let assigned_h_outs = assigned_rows.get_h_outs();
-                debug_assert_eq!(assigned_h_outs.len(), 1);
-                let assigned_input_words = assigned_rows.get_input_words();
-                debug_assert_eq!(assigned_input_words.len(), 1);
-                let assigned_input_word_at_round = &assigned_input_bytes
-                    [round_idx * one_round_size..(round_idx + 1) * one_round_size];
-                // 1. Constrain input bytes.
-                for word_idx in 0..16 {
-                    let assigned_input_u32 =
-                        &assigned_input_word_at_round[4 * word_idx..4 * (word_idx + 1)];
-                    let mut sum = ctx.load_zero();
-                    for (idx, assigned_byte) in assigned_input_u32.iter().enumerate() {
-                        sum = gate.mul_add(
-                            ctx,
-                            QuantumCell::Existing(assigned_byte.clone()),
-                            QuantumCell::Constant(F::from(1u64 << (8 * idx))),
-                            QuantumCell::Existing(sum.clone()),
-                        );
-                    }
-                    // ctx.constrain_equal(&sum, &assigned_input_words[0][word_idx]);
-                }
-                // 2. Constrain the previous h_out == current h_in.
-                for (h_out, h_in) in assigned_last_hs_vec[assigned_last_hs_vec.len() - 1]
-                    .iter()
-                    .zip(assigned_h_ins[0].iter())
-                {
-                    // ctx.constrain_equal(h_out, h_in);
-                }
-                // 3. Push the current h_out to assigned_last_hs_vec.
-                assigned_last_hs_vec.push(self.upload_assigned_cells(
-                    assigned_h_outs[0].iter(),
-                    assigned_advices,
-                    0,
-                    witness_gen_only,
-                ));
-            }
+        assert_eq!(assigned_input.len(), max_byte_size);
+        for &assigned in assigned_input.iter() {
+            range.range_check(ctx, assigned, 8);
         }
 
         let zero = ctx.load_zero();
-        let mut output_h_out = vec![zero; 8];
-        for (n_round, assigned_h_out) in assigned_last_hs_vec.into_iter().enumerate() {
-            let selector = gate.is_equal(
-                ctx,
-                QuantumCell::Constant(F::from(n_round as u64)),
-                QuantumCell::Existing(assigned_num_round),
-            );
-            for i in 0..8 {
-                output_h_out[i] = gate.select(
-                    ctx,
-                    QuantumCell::Existing(assigned_h_out[i].clone()),
-                    QuantumCell::Existing(output_h_out[i].clone()),
-                    QuantumCell::Existing(selector.clone()),
-                )
-            }
-        }
-        let output_digest_bytes = output_h_out
-            .into_iter()
-            .flat_map(|assigned_word| {
-                let be_bytes = assigned_word.value().get_lower_32().to_be_bytes().to_vec();
-                let assigned_bytes = (0..4)
-                    .map(|idx| {
-                        let assigned = ctx.load_witness(F::from(be_bytes[idx] as u64));
-                        range.range_check(ctx, assigned.clone(), 8);
-                        assigned
-                    })
-                    .collect::<Vec<AssignedValue<F>>>();
-                let mut sum = ctx.load_zero();
-                for (idx, assigned_byte) in assigned_bytes.iter().enumerate() {
-                    sum = gate.mul_add(
-                        ctx,
-                        QuantumCell::Existing(assigned_byte.clone()),
-                        QuantumCell::Constant(F::from(1u64 << (24 - 8 * idx))),
-                        QuantumCell::Existing(sum.clone()),
-                    );
+        let mut sum_input_len = zero.clone();
+        println!(
+            "max_round {} assigned_rows.input_len {}",
+            max_round,
+            assigned_rows.input_len.len()
+        );
+        for round_idx in 0..max_round {
+            let input_len = self.assigned_cell2value(ctx, &assigned_rows.input_len[round_idx]);
+            let input_words = assigned_rows.input_words[16 * round_idx..16 * (round_idx + 1)]
+                .into_iter()
+                .map(|v| self.assigned_cell2value(ctx, v))
+                .collect_vec();
+            let is_output_enabled =
+                self.assigned_cell2value(ctx, &assigned_rows.is_final[round_idx]);
+            let padding_selectors = assigned_rows.padding_selectors
+                [16 * round_idx..16 * (round_idx + 1)]
+                .into_iter()
+                .map(|vs| vs.clone().map(|s| self.assigned_cell2value(ctx, &s)))
+                .collect_vec();
+            let output_rlc = self.assigned_cell2value(ctx, &assigned_rows.output_words[round_idx]);
+
+            sum_input_len = {
+                let muled = gate.mul(ctx, is_output_enabled, input_len);
+                gate.add(ctx, sum_input_len, muled)
+            };
+
+            // println!(
+            //     "assigned_input {:?}",
+            //     assigned_input
+            //         .iter()
+            //         .map(|e| e.value().get_lower_128())
+            //         .collect_vec()
+            // );
+            for word_idx in 0..16 {
+                let offset_in = 64 * round_idx + 4 * word_idx;
+                let assigned_input_u32 = &assigned_input[offset_in + 0..offset_in + 4];
+                let mut sum = zero.clone();
+
+                for (idx, &assigned_byte) in assigned_input_u32.iter().enumerate() {
+                    let tmp = gate.mul_add(ctx, sum, rnd, assigned_byte);
+                    sum = gate.select(ctx, sum, tmp, padding_selectors[word_idx][idx]);
                 }
-                ctx.constrain_equal(&assigned_word, &sum);
-                assigned_bytes
-            })
-            .collect::<Vec<AssignedValue<F>>>();
+                ctx.constrain_equal(&sum, &input_words[word_idx]);
+            }
+
+            let hash_rlc = rlc::assigned_value(&assigned_hash_bytes, &rnd, gate, ctx);
+            ctx.constrain_equal(&hash_rlc, &output_rlc);
+        }
+        for &byte in assigned_hash_bytes.iter() {
+            range.range_check(ctx, byte, 8);
+        }
         let result = AssignedHashResult {
-            input_len: assigned_input_byte_size,
-            input_bytes: assigned_input_bytes,
-            output_bytes: output_digest_bytes,
+            input_len: sum_input_len,
+            input_bytes: assigned_input,
+            output_bytes: assigned_hash_bytes,
         };
         Ok(result)
     }
 
     pub fn range(&self) -> &RangeChip<F> {
         &self.range
+    }
+
+    fn assigned_cell2value(
+        &self,
+        ctx: &mut Context<F>,
+        assigned_cell: &AssignedCell<F, F>,
+    ) -> AssignedValue<F> {
+        let assigned_value = ctx.load_witness(*value_to_option(assigned_cell.value()).unwrap());
+        // ctx.region
+        //     .constrain_equal(assigned_cell.cell(), assigned_value.cell())?;
+        assigned_value
     }
 
     fn upload_assigned_cells(
@@ -292,6 +252,9 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
 mod test {
     use std::{cell::RefCell, marker::PhantomData};
 
+    use crate::table::SHA256Table;
+    use crate::util::SubCircuitConfig;
+
     use super::*;
     use halo2_base::{gates::range::RangeStrategy::Vertical, SKIP_FIRST_PASS};
     use halo2_base::{
@@ -313,7 +276,7 @@ mod test {
 
     #[derive(Debug, Clone)]
     struct TestConfig<F: Field> {
-        sha256_comp_configs: Vec<Sha256CompressionConfig<F>>,
+        sha256_config: Sha256CircuitConfig<F>,
         pub max_byte_size: usize,
         range: RangeConfig<F>,
         hash_column: Column<Instance>,
@@ -335,9 +298,8 @@ mod test {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let sha256_comp_configs = (0..Self::NUM_COMP)
-                .map(|_| Sha256CompressionConfig::configure(meta))
-                .collect();
+            let sha_table = SHA256Table::construct(meta);
+            let sha256_configs = Sha256CircuitConfig::<F>::new(meta, sha_table);
             let range = RangeConfig::configure(
                 meta,
                 RangeStrategy::Vertical,
@@ -350,7 +312,7 @@ mod test {
             let hash_column = meta.instance_column();
             meta.enable_equality(hash_column);
             Self::Config {
-                sha256_comp_configs,
+                sha256_config: sha256_configs,
                 max_byte_size: Self::MAX_BYTE_SIZE,
                 range,
                 hash_column,
@@ -365,9 +327,10 @@ mod test {
             config.range.load_lookup_table(&mut layouter)?;
             let mut first_pass = SKIP_FIRST_PASS;
             let sha256 = Sha256Chip::new(
-                config.sha256_comp_configs,
+                config.sha256_config,
                 &self.range,
                 config.max_byte_size,
+                Sha256CircuitConfig::fixed_challenge(),
             );
 
             let assigned_hash_cells = layouter.assign_region(
@@ -413,21 +376,20 @@ mod test {
     }
 
     impl<F: Field> TestCircuit<F> {
-        const MAX_BYTE_SIZE: usize = 10240;
-        const NUM_ADVICE: usize = 50;
+        const MAX_BYTE_SIZE: usize = 64;
+        const NUM_ADVICE: usize = 5;
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 4;
-        const LOOKUP_BITS: usize = 12;
-        const NUM_COMP: usize = 10;
+        const LOOKUP_BITS: usize = 8;
         const K: usize = 13;
     }
 
     #[test]
     fn test_sha256_correct1() {
-        let k = 13;
+        let k = 12;
 
         // Test vector: "abc"
-        let test_input = vec!['a' as u8, 'b' as u8, 'c' as u8];
+        let test_input = vec![0; 32];
 
         let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
         let builder = GateThreadBuilder::new(false);
@@ -448,51 +410,6 @@ mod test {
         let public_inputs = vec![test_output];
 
         let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
-        assert_eq!(prover.verify(), Ok(()));
+        prover.assert_satisfied();
     }
-
-    // #[test]
-    // fn test_sha256_correct2() {
-    //     let k = 13;
-
-    //     // Test vector: "0x0"
-    //     let test_input = vec![0u8];
-
-    //     let circuit = TestCircuit::<Fr> {
-    //         test_input,
-    //         _f: PhantomData,
-    //     };
-    //     let test_output: [u8; 32] = [
-    //         0x6e, 0x34, 0x0b, 0x9c, 0xff, 0xb3, 0x7a, 0x98, 0x9c, 0xa5, 0x44, 0xe6, 0xbb, 0x78,
-    //         0x0a, 0x2c, 0x78, 0x90, 0x1d, 0x3f, 0xb3, 0x37, 0x38, 0x76, 0x85, 0x11, 0xa3, 0x06,
-    //         0x17, 0xaf, 0xa0, 0x1d,
-    //     ];
-    //     let test_output = test_output.map(|val| Fr::from_u128(val as u128)).to_vec();
-    //     let public_inputs = vec![test_output];
-
-    //     let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
-    //     assert_eq!(prover.verify(), Ok(()));
-    // }
-
-    // #[test]
-    // fn test_sha256_correct3() {
-    //     let k = 13;
-
-    //     let test_input = vec![0x1; 56];
-
-    //     let circuit = TestCircuit::<Fr> {
-    //         test_input,
-    //         _f: PhantomData,
-    //     };
-    //     let test_output: [u8; 32] = [
-    //         0x51, 0xe1, 0x4a, 0x91, 0x36, 0x80, 0xf2, 0x4c, 0x85, 0xfe, 0x3b, 0x0e, 0x2e, 0x5b,
-    //         0x57, 0xf7, 0x20, 0x2f, 0x11, 0x7b, 0xb2, 0x14, 0xf8, 0xff, 0xdd, 0x4e, 0xa0, 0xf4,
-    //         0xe9, 0x21, 0xfd, 0x52,
-    //     ];
-    //     let test_output = test_output.map(|val| Fr::from_u128(val as u128)).to_vec();
-    //     let public_inputs = vec![test_output];
-
-    //     let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
-    //     assert_eq!(prover.verify(), Ok(()));
-    // }
 }

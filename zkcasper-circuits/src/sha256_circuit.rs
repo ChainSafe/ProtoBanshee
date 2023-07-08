@@ -97,14 +97,20 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
 
         let round_cst = meta.fixed_column();
         let h_a = meta.fixed_column();
+        meta.enable_equality(h_a);
         let h_e = meta.fixed_column();
+        meta.enable_equality(h_e);
 
         let hash_table = args;
         let is_enabled = hash_table.is_enabled;
+        meta.enable_equality(is_enabled);
         let length = hash_table.input_len;
+        meta.enable_equality(length);
         let input_chunks = hash_table.input_chunks;
         let data_rlc = hash_table.input_rlc;
+        meta.enable_equality(data_rlc);
         let hash_rlc = hash_table.hash_rlc;
+        meta.enable_equality(hash_rlc);
         // feature: [multi input lookups]
         let rnd_pow = meta.advice_column();
         let input_rlcs = array_init::array_init(|_| meta.advice_column());
@@ -561,10 +567,12 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             let is_enabled = meta.query_advice(is_enabled, Rotation::cur());
             let input_rlcs = input_rlcs
                 .iter()
-                .map(|col| meta.query_advice(*col, Rotation::cur())).collect_vec();
+                .map(|col| meta.query_advice(*col, Rotation::cur()))
+                .collect_vec();
             let input_chunks = input_chunks
                 .iter()
-                .map(|col| meta.query_advice(*col, Rotation::cur())).collect_vec();
+                .map(|col| meta.query_advice(*col, Rotation::cur()))
+                .collect_vec();
             let data_rlc = meta.query_advice(data_rlc, Rotation::cur());
             let base_pow = meta.query_advice(rnd_pow, Rotation::cur());
             let is_rlc = [
@@ -572,10 +580,7 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                 meta.query_advice(is_rlc[1], Rotation::cur()),
             ];
 
-            for (i, (input_rlc, input_chunk)) in input_rlcs.iter()
-                .zip(input_chunks)
-                .enumerate()
-            {
+            for (i, (input_rlc, input_chunk)) in input_rlcs.iter().zip(input_chunks).enumerate() {
                 cb.condition(is_rlc[i].clone(), |cb| {
                     cb.require_equal(
                         "input_rlc == input_hunk when is_rlc",
@@ -737,10 +742,24 @@ impl<F: Field> Sha256CircuitConfig<F> {
     pub fn digest(
         &self,
         layouter: &mut impl Layouter<F>,
-        inputs: &[HashInput],
-    ) -> Result<Vec<Vec<AssignedCell<F, F>>>, Error> {
-        let witness = multi_sha256(inputs, Sha256CircuitConfig::fixed_challenge());
-        self.assign(layouter, &witness)
+        input: HashInput,
+    ) -> Result<[AssignedCell<F, F>; NUM_BYTES_FINAL_HASH], Error> {
+        let witness = multi_sha256(&[input], Sha256CircuitConfig::fixed_challenge());
+        let mut hashes = self.assign(layouter, &witness)?;
+        assert_eq!(hashes.len(), 1);
+        Ok(hashes.pop().unwrap().try_into().unwrap())
+    }
+
+    pub fn digest_with_region(
+        &self,
+        region: &mut Region<'_, F>,
+        input: HashInput,
+        assigned_rows: &mut Sha256AssignedRows<F>,
+    ) -> Result<[AssignedCell<F, F>; NUM_BYTES_FINAL_HASH], Error> {
+        let witness = multi_sha256(&[input], Sha256CircuitConfig::fixed_challenge());
+        let mut hashes = self.assign_with_region(region, &witness, assigned_rows)?;
+        assert_eq!(hashes.len(), 1);
+        Ok(hashes.pop().unwrap().try_into().unwrap())
     }
 
     fn assign(
@@ -751,27 +770,38 @@ impl<F: Field> Sha256CircuitConfig<F> {
         layouter.assign_region(
             || "assign sha256 data",
             |mut region| {
-                self.annotate_columns_in_region(&mut region);
-                let vec_vecs = witness
-                    .iter()
-                    .enumerate()
-                    .map(|(offset, sha256_row)| self.set_row(&mut region, offset, sha256_row))
-                    .collect::<Result<Vec<Vec<AssignedCell<F, F>>>, Error>>()?;
-                let filtered = vec_vecs
-                    .into_iter()
-                    .filter(|vec| !vec.is_empty())
-                    .collect::<Vec<Vec<AssignedCell<F, F>>>>();
-                Ok(filtered)
+                let mut assigned_rows = Sha256AssignedRows::new(0);
+                self.assign_with_region(&mut region, witness, &mut assigned_rows, )
             },
         )
+    }
+
+    fn assign_with_region(
+        &self,
+        region: &mut Region<'_, F>,
+        witness: &[ShaRow<F>],
+        assigned_rows: &mut Sha256AssignedRows<F>,
+    ) -> Result<Vec<Vec<AssignedCell<F, F>>>, Error> {
+        self.annotate_columns_in_region(region);
+        let vec_vecs = witness
+            .iter()
+            .map(|sha256_row| self.set_row(region, sha256_row, assigned_rows))
+            .collect::<Result<Vec<Vec<AssignedCell<F, F>>>, Error>>()?;
+        let filtered = vec_vecs
+            .into_iter()
+            .filter(|vec| !vec.is_empty())
+            .collect::<Vec<Vec<AssignedCell<F, F>>>>();
+        Ok(filtered)
     }
 
     fn set_row(
         &self,
         region: &mut Region<'_, F>,
-        offset: usize,
         row: &ShaRow<F>,
+        assigned_rows: &mut Sha256AssignedRows<F>,
     ) -> Result<Vec<AssignedCell<F, F>>, Error> {
+        let offset = assigned_rows.offset;
+        assigned_rows.offset += 1;
         let round = offset % (NUM_ROUNDS + 8);
         // Fixed values
         for (name, column, value) in &[
@@ -814,16 +844,6 @@ impl<F: Field> Sha256CircuitConfig<F> {
                     0
                 }),
             ),
-            (
-                "Ha",
-                self.h_a,
-                F::from(if round < 4 { H[3 - round] } else { 0 }),
-            ),
-            (
-                "He",
-                self.h_e,
-                F::from(if round < 4 { H[7 - round] } else { 0 }),
-            ),
         ] {
             region.assign_fixed(
                 || format!("assign {} {}", name, offset),
@@ -833,16 +853,24 @@ impl<F: Field> Sha256CircuitConfig<F> {
             )?;
         }
 
+        let assigned_ha = region.assign_fixed(
+            || format!("assign {} {}", "Ha", offset),
+            self.h_a,
+            offset,
+            || Value::known(F::from(if round < 4 { H[3 - round] } else { 0 })),
+        )?;
+        let assigned_he = region.assign_fixed(
+            || format!("assign {} {}", "He", offset),
+            self.h_e,
+            offset,
+            || Value::known(F::from(if round < 4 { H[7 - round] } else { 0 })),
+        )?;
+
         // Advice values
         for (name, columns, values) in [
             ("w bits", self.word_w.as_slice(), row.w.as_slice()),
             ("a bits", self.word_a.as_slice(), row.a.as_slice()),
             ("e bits", self.word_e.as_slice(), row.e.as_slice()),
-            (
-                "padding selectors",
-                self.is_paddings.as_slice(),
-                row.is_paddings.as_slice(),
-            ),
             (
                 "is_final",
                 [self.is_final].as_slice(),
@@ -865,6 +893,23 @@ impl<F: Field> Sha256CircuitConfig<F> {
                 )?;
             }
         }
+
+        let padding_selectors = self
+            .is_paddings
+            .iter()
+            .zip(row.is_paddings.iter())
+            .enumerate()
+            .map(|(idx, (&col, &val))| {
+                region.assign_advice(
+                    || format!("assign {} {} {}", "padding selector", idx, offset),
+                    col,
+                    offset,
+                    || Value::known(F::from(val)),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .unwrap();
 
         // Intermediary data rlcs
         for (idx, (data_rlc, column)) in row
@@ -927,7 +972,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
         // end
 
         // Hash data
-        self.hash_table.assign_row(
+        let [is_final, _, _, input_word, input_len, output_word] = self.hash_table.assign_row(
             region,
             offset,
             [
@@ -948,6 +993,26 @@ impl<F: Field> Sha256CircuitConfig<F> {
             ],
         )?;
 
+        if round < 4 {
+            assigned_rows.assigned_ha.push(assigned_ha);
+            assigned_rows.assigned_he.push(assigned_he);
+        }
+
+        if (4..20).contains(&round) {
+            assigned_rows.padding_selectors.push(padding_selectors);
+            assigned_rows.input_words.push(input_word);
+            // assigned_rows.is_dummy.push(is_dummy);
+        }
+
+        if row.is_final && round == NUM_ROUNDS + 7 {
+            assigned_rows.output_words.push(output_word);
+        }
+
+        if round == NUM_ROUNDS + 7 {
+            assigned_rows.is_final.push(is_final);
+            assigned_rows.input_len.push(input_len);
+        }
+
         let mut hash_cells = Vec::with_capacity(NUM_BYTES_FINAL_HASH);
         if !row.is_final || round != NUM_ROUNDS + 7 {
             for idx in 0..(NUM_BYTES_FINAL_HASH) {
@@ -957,7 +1022,6 @@ impl<F: Field> Sha256CircuitConfig<F> {
                     offset,
                     || Value::known(F::from(0u64)),
                 )?;
-                //hash_cells.push(cell);
             }
         } else {
             for (idx, byte) in row.final_hash_bytes.iter().enumerate() {
@@ -1035,7 +1099,6 @@ impl<F: Field> Sha256CircuitConfig<F> {
 #[derive(Default, Clone, Debug)]
 pub struct Sha256Circuit<F: Field> {
     inputs: Vec<HashInput>,
-    num_rows: usize,
     _marker: PhantomData<F>,
 }
 
@@ -1086,10 +1149,9 @@ impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
 
 impl<F: Field> Sha256Circuit<F> {
     /// Creates a new circuit instance
-    pub fn new(num_rows: usize, inputs: Vec<HashInput>) -> Self {
+    pub fn new(inputs: Vec<HashInput>) -> Self {
         Sha256Circuit {
             inputs,
-            num_rows,
             _marker: PhantomData,
         }
     }
@@ -1113,12 +1175,11 @@ mod tests {
 
     #[derive(Default, Debug, Clone)]
     struct TestSha256<F: Field> {
-        inputs: Vec<HashInput>,
-        _f: PhantomData<F>,
+        inner: Sha256Circuit<F>,
     }
 
     impl<F: Field> Circuit<F> for TestSha256<F> {
-        type Config = Sha256CircuitConfig<F>;
+        type Config = (Sha256CircuitConfig<F>, Challenges<F>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -1127,17 +1188,35 @@ mod tests {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let hash_table = SHA256Table::construct(meta);
-            Sha256CircuitConfig::new(meta, hash_table)
+            (
+                Sha256CircuitConfig::new(meta, hash_table),
+                Challenges::construct(meta),
+            )
         }
 
         fn synthesize(
             &self,
-            config: Self::Config,
+            mut config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            let _ = config.digest(&mut layouter, &self.inputs)?;
-            Ok(())
+            self.inner.synthesize_sub(
+                &mut config.0,
+                &config.1.values(&mut layouter),
+                &mut layouter,
+            )
         }
+    }
+
+    #[test]
+    fn test_sha256_single() {
+        let k = 11;
+        let inputs = vec![HashInput::Single(vec![0u8; 32]); 1];
+        let circuit = TestSha256 {
+            inner: Sha256Circuit::new(inputs),
+        };
+
+        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+        prover.assert_satisfied();
     }
 
     #[test]
@@ -1152,14 +1231,14 @@ mod tests {
             10
         ];
         let circuit = TestSha256 {
-            inputs,
-            _f: PhantomData,
+            inner: Sha256Circuit::new(inputs),
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }
 
+    #[test]
     fn test_sha256_two2one_val_and_rlc() {
         let k = 10;
         let inputs = vec![
@@ -1171,8 +1250,7 @@ mod tests {
             1
         ];
         let circuit = TestSha256 {
-            inputs,
-            _f: PhantomData,
+            inner: Sha256Circuit::new(inputs),
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
@@ -1187,8 +1265,7 @@ mod tests {
         let inputs = merkle_trace.sha256_inputs();
         println!("inputs: {:?}", inputs.len());
         let circuit = TestSha256 {
-            inputs,
-            _f: PhantomData,
+            inner: Sha256Circuit::new(inputs),
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();

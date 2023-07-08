@@ -32,8 +32,8 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
     // Prepare inputs RLCs in advance
     let mut inputs_rlc = [F::zero(), F::zero()];
     for (idx, _) in inputs.iter().enumerate() {
-        for byte in inputs[idx].iter() {
-            inputs_rlc[idx] = inputs_rlc[idx] * rnd + F::from(*byte as u64);
+        for &byte in inputs[idx].iter() {
+            inputs_rlc[idx] = inputs_rlc[idx] * rnd + F::from(byte as u64);
         }
     }
     // end
@@ -43,8 +43,8 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
     let f256 = two.pow_const(8);
     let mut inputs_vals = [F::zero(), F::zero()];
     for (idx, _) in inputs.iter().enumerate() {
-        for i in 0..32 {
-            inputs_vals[idx] += F::from(inputs[idx][i] as u64) * two.pow_const(i * 8);
+        for (i, &byte) in inputs[idx].iter().take(32).enumerate() {
+            inputs_vals[idx] += F::from(byte as u64) * two.pow_const(i * 8);
         }
     }
     // end
@@ -176,7 +176,6 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
                 // data rlc
                 let input_bytes = to_le_bytes::value(&chunk[round * 32..(round + 1) * 32]);
                 inter_data_rlcs[0] = data_rlc;
-
                 for (idx, (byte, padding)) in input_bytes.iter().zip(is_paddings.iter()).enumerate()
                 {
                     if !*padding {
@@ -371,7 +370,7 @@ pub fn multi_sha256<F: Field>(inputs: &[HashInput], rnd: F) -> Vec<ShaRow<F>> {
     let inputs = inputs
         .iter()
         .map(|input| match input {
-            HashInput::Single(bytes) => ([bytes.as_slice(), &[]], [false; 2]),
+            HashInput::Single(bytes) => ([bytes.as_slice(), &[]], [true; 2]),
             HashInput::TwoToOne{
                 left,
                 right,
