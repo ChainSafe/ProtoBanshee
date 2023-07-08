@@ -31,7 +31,7 @@ use types::{Spec};
 pub const TREE_LEVEL_AUX_COLUMNS: usize = 1;
 
 #[derive(Clone, Debug)]
-pub struct StateSSZCircuitConfig<F: Field> { // const T: usize = {S::TREE_DEPTH};
+pub struct StateSSZCircuitConfig<F: Field> {
     tree: Vec<TreeLevel<F>>,
     sha256_table: SHA256Table,
     pub state_table: [StateTable; 2],
@@ -167,7 +167,6 @@ impl<F: Field> StateSSZCircuitConfig<F> {
 pub struct StateSSZCircuit<F: Field> {
     trace: MerkleTrace,
     _f: PhantomData<F>,
-    // _spec: PhantomData<S>,
 }
 
 impl<F: Field> StateSSZCircuit<F> {
@@ -175,7 +174,6 @@ impl<F: Field> StateSSZCircuit<F> {
         Self {
             trace,
             _f: PhantomData,
-            // _spec: PhantomData,
         }
     }
 }
