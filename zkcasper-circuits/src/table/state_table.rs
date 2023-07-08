@@ -5,11 +5,10 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 use crate::{
-    // state_circuit::{PUBKEYS_LEVEL, VALIDATORS_LEVEL},
     witness::{MerkleTrace, MerkleTraceStep},
 };
 
-use types::{Test as S, Spec};
+use types::Spec;
 
 use super::*;
 
@@ -131,11 +130,12 @@ impl StateTables {
     }
 
     /// Load state tables without running the full [`StateTable`].
-    pub fn dev_load<F: Field>(
+    pub fn dev_load<S: Spec, F: Field>(
         &self,
         layouter: &mut impl Layouter<F>,
         trace: &MerkleTrace,
         challenge: Value<F>,
+        _spec: S,
     ) -> Result<(), Error> {
         let mut trace_by_depth = trace.trace_by_level_map();
 
