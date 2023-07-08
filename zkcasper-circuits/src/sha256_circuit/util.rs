@@ -42,7 +42,7 @@ pub struct Sha256AssignedRows<F: Field> {
     /// Input length at the row.
     pub input_len: Vec<AssignedCell<F, F>>,
     /// Input words at the row.
-    pub input_words: Vec<AssignedCell<F, F>>,
+    pub input_rlc: Vec<AssignedCell<F, F>>,
     /// Whether the output word is enabled at the row.
     pub is_final: Vec<AssignedCell<F, F>>,
     /// Whether the row is padding.

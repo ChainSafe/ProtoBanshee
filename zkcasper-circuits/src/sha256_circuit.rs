@@ -93,6 +93,7 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let is_right = meta.advice_column();
 
         let is_paddings = array_init::array_init(|_| meta.advice_column());
+        is_paddings.iter().for_each(|&col| meta.enable_equality(col));
         let data_rlcs: [Column<Advice>; 4] = array_init::array_init(|_| meta.advice_column());
 
         let round_cst = meta.fixed_column();
@@ -1000,7 +1001,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
 
         if (4..20).contains(&round) {
             assigned_rows.padding_selectors.push(padding_selectors);
-            assigned_rows.input_words.push(input_word);
+            assigned_rows.input_rlc.push(input_word);
             // assigned_rows.is_dummy.push(is_dummy);
         }
 

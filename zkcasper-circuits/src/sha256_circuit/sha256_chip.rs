@@ -56,8 +56,6 @@ pub struct Sha256Chip<'a, F: Field> {
 }
 
 impl<'a, F: Field> Sha256Chip<'a, F> {
-    const ONE_ROUND_INPUT_BYTES: usize = 64;
-
     pub fn new(
         sha256_bit_config: Sha256CircuitConfig<F>,
         range: &'a RangeChip<F>,
@@ -94,7 +92,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
             HashInput::Single(input.to_vec()),
             &mut assigned_rows,
         )?;
-        let assigned_hash_bytes =
+        let assigned_output =
             assigned_hash_bytes.map(|b| ctx.load_witness(*value_to_option(b.value()).unwrap()));
 
         let input_byte_size_with_9 = input_byte_size + 9;
@@ -139,63 +137,81 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         }
 
         let zero = ctx.load_zero();
-        let mut sum_input_len = zero.clone();
-        println!(
-            "max_round {} assigned_rows.input_len {}",
-            max_round,
-            assigned_rows.input_len.len()
-        );
+        let mut full_input_len = zero.clone();
+
+        let mut offset = 0;
         for round_idx in 0..max_round {
             let input_len = self.assigned_cell2value(ctx, &assigned_rows.input_len[round_idx]);
-            let input_words = assigned_rows.input_words[16 * round_idx..16 * (round_idx + 1)]
-                .into_iter()
-                .map(|v| self.assigned_cell2value(ctx, v))
-                .collect_vec();
-            let is_output_enabled =
-                self.assigned_cell2value(ctx, &assigned_rows.is_final[round_idx]);
+
+            let input_rlcs = {
+                let input_rlc_cells =
+                    assigned_rows.input_rlc[16 * round_idx..16 * (round_idx + 1)].iter();
+                self.upload_assigned_cells(
+                    input_rlc_cells,
+                    &mut offset,
+                    assigned_advices,
+                    witness_gen_only,
+                )
+            };
+
             let padding_selectors = assigned_rows.padding_selectors
                 [16 * round_idx..16 * (round_idx + 1)]
                 .into_iter()
-                .map(|vs| vs.clone().map(|s| self.assigned_cell2value(ctx, &s)))
-                .collect_vec();
-            let output_rlc = self.assigned_cell2value(ctx, &assigned_rows.output_words[round_idx]);
+                .map(|cells| {
+                    self.upload_assigned_cells(
+                        cells,
+                        &mut offset,
+                        assigned_advices,
+                        witness_gen_only,
+                    )
+                    .try_into()
+                    .unwrap()
+                })
+                .collect::<Vec<[_; 4]>>();
 
-            sum_input_len = {
+            let [is_output_enabled, output_rlc]: [_; 2] = self
+                .upload_assigned_cells(
+                    [
+                        &assigned_rows.is_final[round_idx],
+                        &assigned_rows.output_words[round_idx],
+                    ],
+                    &mut offset,
+                    assigned_advices,
+                    witness_gen_only,
+                )
+                .try_into()
+                .unwrap();
+
+            full_input_len = {
                 let muled = gate.mul(ctx, is_output_enabled, input_len);
-                gate.add(ctx, sum_input_len, muled)
+                gate.add(ctx, full_input_len, muled)
             };
 
-            // println!(
-            //     "assigned_input {:?}",
-            //     assigned_input
-            //         .iter()
-            //         .map(|e| e.value().get_lower_128())
-            //         .collect_vec()
-            // );
+            let mut sum = zero.clone();
             for word_idx in 0..16 {
                 let offset_in = 64 * round_idx + 4 * word_idx;
                 let assigned_input_u32 = &assigned_input[offset_in + 0..offset_in + 4];
-                let mut sum = zero.clone();
 
                 for (idx, &assigned_byte) in assigned_input_u32.iter().enumerate() {
                     let tmp = gate.mul_add(ctx, sum, rnd, assigned_byte);
+
                     sum = gate.select(ctx, sum, tmp, padding_selectors[word_idx][idx]);
                 }
-                ctx.constrain_equal(&sum, &input_words[word_idx]);
+                ctx.constrain_equal(&sum, &input_rlcs[word_idx]);
             }
 
-            let hash_rlc = rlc::assigned_value(&assigned_hash_bytes, &rnd, gate, ctx);
+            let hash_rlc = rlc::assigned_value(&assigned_output, &rnd, gate, ctx);
             ctx.constrain_equal(&hash_rlc, &output_rlc);
         }
-        for &byte in assigned_hash_bytes.iter() {
+        for &byte in assigned_output.iter() {
             range.range_check(ctx, byte, 8);
         }
-        let result = AssignedHashResult {
-            input_len: sum_input_len,
+
+        Ok(AssignedHashResult {
+            input_len: full_input_len,
             input_bytes: assigned_input,
-            output_bytes: assigned_hash_bytes,
-        };
-        Ok(result)
+            output_bytes: assigned_output,
+        })
     }
 
     pub fn range(&self) -> &RangeChip<F> {
@@ -216,11 +232,11 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
     fn upload_assigned_cells(
         &self,
         assigned_cells: impl IntoIterator<Item = &'a AssignedCell<F, F>>,
+        offset: &mut usize,
         assigned_advices: &mut HashMap<(usize, usize), (circuit::Cell, usize)>,
-        offset: usize,
         witness_gen_only: bool,
     ) -> Vec<AssignedValue<F>> {
-        assigned_cells
+        let assigned_values = assigned_cells
             .into_iter()
             .enumerate()
             .map(|(i, assigned_cell)| {
@@ -232,19 +248,21 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
                     value,
                     cell: (!witness_gen_only).then_some(ContextCell {
                         context_id: SHA256_CONTEXT_ID,
-                        offset: offset + i,
+                        offset: *offset + i,
                     }),
                 };
                 if !witness_gen_only {
                     // we set row_offset = usize::MAX because you should never be directly using lookup on such a cell
                     assigned_advices.insert(
-                        (SHA256_CONTEXT_ID, offset + i),
+                        (SHA256_CONTEXT_ID, *offset + i),
                         (assigned_cell.cell(), usize::MAX),
                     );
                 }
                 aval
             })
-            .collect_vec()
+            .collect_vec();
+        *offset += assigned_values.len();
+        assigned_values
     }
 }
 
@@ -388,8 +406,7 @@ mod test {
     fn test_sha256_correct1() {
         let k = 12;
 
-        // Test vector: "abc"
-        let test_input = vec![0; 32];
+        let test_input = vec![1; 32];
 
         let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
         let builder = GateThreadBuilder::new(false);
