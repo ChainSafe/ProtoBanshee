@@ -139,8 +139,8 @@ impl StateTables {
     ) -> Result<(), Error> {
         let mut trace_by_depth = trace.trace_by_level_map();
 
-        let pubkey_level_trace = trace_by_depth.remove(&S::PUBKEYS_LEVEL).unwrap();
-        let validators_level_trace = trace_by_depth.remove(&S::VALIDATORS_LEVEL).unwrap();
+        let pubkey_level_trace = trace_by_depth.remove(&S::STATE_TREE_LEVEL_PUBKEYS).unwrap();
+        let validators_level_trace = trace_by_depth.remove(&S::STATE_TREE_LEVEL_VALIDATORS).unwrap();
 
         let pubkey_table = self.0.get(&StateTreeLevel::PubKeys).unwrap();
         let validators_table = self.0.get(&StateTreeLevel::Validators).unwrap();

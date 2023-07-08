@@ -7,6 +7,7 @@ pub(crate) mod util;
 pub mod witness;
 
 pub mod aggregation_circuit;
+pub mod aggregation_circuit_copy;
 pub mod sha256_circuit;
 pub mod state_circuit;
 pub mod super_circuit;
@@ -20,11 +21,11 @@ pub(crate) const MAX_N_BYTES_INTEGER: usize = 31;
 pub(crate) const N_BYTES_U64: usize = 8;
 
 pub trait Spec {
-    const MAX_VALIDATORS: usize;
+    const VALIDATOR_REGISTRY_LIMIT: usize;
 }
 
 struct MainnetSpec;
 
 impl Spec for MainnetSpec {
-    const MAX_VALIDATORS: usize = 100;
+    const VALIDATOR_REGISTRY_LIMIT: usize = 100;
 }

@@ -48,8 +48,8 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
     fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, _spec: S) -> Self {
         let sha256_table = args.sha256_table;
 
-        let pubkeys_level = TreeLevel::configure(meta, S::PUBKEYS_LEVEL, 0, 3, true);
-        let validators_level = TreeLevel::configure(meta, S::VALIDATORS_LEVEL, 0, 0, true);
+        let pubkeys_level = TreeLevel::configure(meta, S::STATE_TREE_LEVEL_PUBKEYS, 0, 3, true);
+        let validators_level = TreeLevel::configure(meta, S::STATE_TREE_LEVEL_VALIDATORS, 0, 0, true);
 
         let state_table: [StateTable; 2] = [
             pubkeys_level.clone().into(),
@@ -59,7 +59,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
         let mut tree = vec![pubkeys_level, validators_level];
 
         let mut padding = 0;
-        for i in (2..=S::TREE_DEPTH - 2).rev() {
+        for i in (2..=S::STATE_TREE_DEPTH - 2).rev() {
             padding = padding * 2 + 1;
             let level = TreeLevel::configure(meta, i, 0, padding, false);
             tree.push(level);
@@ -73,7 +73,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
             .iter()
             .for_each(|table| table.annotate_columns(meta));
 
-        for depth in (2..S::TREE_DEPTH).rev() {
+        for depth in (2..S::STATE_TREE_DEPTH).rev() {
             let depth = depth - 1;
             let level = &tree[depth];
             let next_level = &tree[depth - 1];
