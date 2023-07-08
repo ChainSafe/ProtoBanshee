@@ -11,6 +11,10 @@ pub trait Spec: 'static + Default + Debug {
     const TREE_DEPTH: usize; 
     const PUBKEYS_LEVEL: usize;
     const VALIDATORS_LEVEL: usize;
+    const G1_FQ_BYTES: usize;
+    const G1_BYTES_UNCOMPRESSED: usize;
+    const LIMB_BITS: usize;
+    const NUM_LIMBS: usize;
 }
 
 /// Ethereum Foundation specifications.
@@ -26,6 +30,10 @@ impl Spec for Test {
     const TREE_DEPTH: usize = 10;
     const PUBKEYS_LEVEL: usize = 10;
     const VALIDATORS_LEVEL: usize = Self::PUBKEYS_LEVEL - 1;
+    const G1_FQ_BYTES: usize = 32; // TODO: 48 for BLS12-381.
+    const G1_BYTES_UNCOMPRESSED: usize = Self::G1_FQ_BYTES * 2;
+    const LIMB_BITS: usize = 88;
+    const NUM_LIMBS: usize = 3;
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -38,6 +46,10 @@ impl Spec for Mainnet {
     const USED_CHUNKS_PER_VALIDATOR: usize = 5;
     const TREE_DEPTH: usize = 47;
     // TODO: calculate and verify the pubkeys level for mainnet
-    const PUBKEYS_LEVEL: usize = 40;
+    const PUBKEYS_LEVEL: usize = 49;
     const VALIDATORS_LEVEL: usize = Self::PUBKEYS_LEVEL - 1;
+    const G1_FQ_BYTES: usize = 48; // TODO: 48 for BLS12-381.
+    const G1_BYTES_UNCOMPRESSED: usize = Self:: G1_FQ_BYTES * 2;
+    const LIMB_BITS: usize = 112;
+    const NUM_LIMBS: usize = 5;
 }
