@@ -66,7 +66,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             .chain(byte_lookup.iter().copied())
             .collect_vec();
 
-        let cell_manager = CellManager::new(meta, S::MAX_VALIDATORS, &cm_advices);
+        let cell_manager = CellManager::new(meta, S::VALIDATOR_REGISTRY_LIMIT, &cm_advices);
 
         let mut config = Self {
             q_enabled,
@@ -474,7 +474,7 @@ mod tests {
             config
                 .0
                 .state_tables
-                .dev_load(&mut layouter, &self.state_tree_trace, challenge)?;
+                .dev_load(&mut layouter, &self.state_tree_trace, challenge, S)?;
             self.inner.synthesize_sub(
                 &mut config.0,
                 &config.1.values(&mut layouter),

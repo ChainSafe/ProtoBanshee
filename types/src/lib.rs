@@ -4,7 +4,7 @@ use typenum::{
 use core::fmt::Debug;
 
 pub trait Spec: 'static + Default + Debug {
-    const MAX_VALIDATORS: usize;
+    const VALIDATOR_REGISTRY_LIMIT: usize;
     const VALIDATOR_0_G_INDEX: usize;
     const CHUNKS_PER_VALIDATOR: usize;
     const USED_CHUNKS_PER_VALIDATOR: usize;
@@ -23,7 +23,7 @@ pub struct Test;
 
 impl Spec for Test {
 
-    const MAX_VALIDATORS: usize = 100;
+    const VALIDATOR_REGISTRY_LIMIT: usize = 100;
     const VALIDATOR_0_G_INDEX: usize = 32;
     const CHUNKS_PER_VALIDATOR: usize = 8;
     const USED_CHUNKS_PER_VALIDATOR: usize = 5;
@@ -40,7 +40,7 @@ impl Spec for Test {
 pub struct Mainnet;
 
 impl Spec for Mainnet {
-    const MAX_VALIDATORS: usize = 1099511627776;
+    const VALIDATOR_REGISTRY_LIMIT: usize = 1099511627776;
     const VALIDATOR_0_G_INDEX: usize = 94557999988736;
     const CHUNKS_PER_VALIDATOR: usize = 9;
     const USED_CHUNKS_PER_VALIDATOR: usize = 5;
