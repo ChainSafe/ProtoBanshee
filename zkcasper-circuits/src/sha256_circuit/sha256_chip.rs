@@ -1,6 +1,9 @@
 use eth_types::Field;
 use gadgets::util::rlc;
+use halo2_base::gates::builder::KeygenAssignments;
+use halo2_proofs::circuit::Value;
 use itertools::Itertools;
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::{sha256_circuit::util::Sha256AssignedRows, witness::HashInput};
@@ -30,25 +33,29 @@ pub struct AssignedHashResult<F: Field> {
     pub output_bytes: [AssignedValue<F>; 32],
 }
 
+#[derive(Debug)]
 pub struct Sha256Chip<'a, F: Field> {
-    sha256_bit_config: Sha256CircuitConfig<F>,
+    config: &'a Sha256CircuitConfig<F>,
     pub max_input_size: usize,
     range: &'a RangeChip<F>,
-    rnd: F,
+    randomness: F,
+    extra_assignments: RefCell<KeygenAssignments<F>>,
 }
 
 impl<'a, F: Field> Sha256Chip<'a, F> {
     pub fn new(
-        sha256_bit_config: Sha256CircuitConfig<F>,
+        config: &'a Sha256CircuitConfig<F>,
         range: &'a RangeChip<F>,
-        max_byte_size: usize,
-        rnd: F,
+        max_input_size: usize,
+        randomness: Value<F>,
+        extra_assignments: Option<KeygenAssignments<F>>,
     ) -> Self {
         Self {
-            sha256_bit_config,
-            max_input_size: max_byte_size,
+            config,
+            max_input_size,
             range,
-            rnd,
+            randomness: value_to_option(randomness).expect("randomness is not assigned"),
+            extra_assignments: RefCell::new(extra_assignments.unwrap_or_default()),
         }
     }
 
@@ -57,19 +64,10 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         input: HashInput<u8>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
-        assigned_advices: &mut HashMap<(usize, usize), (circuit::Cell, usize)>,
-        witness_gen_only: bool,
     ) -> Result<AssignedHashResult<F>, Error> {
         let assign_byte = |byte: u8| ctx.load_witness(F::from(byte as u64));
         let assigned_input = input.clone().map(assign_byte);
-        self.digest_inner(
-            assigned_input,
-            input,
-            ctx,
-            region,
-            assigned_advices,
-            witness_gen_only,
-        )
+        self.digest_inner(assigned_input, input, ctx, region)
     }
 
     pub fn digest_assigned(
@@ -77,21 +75,12 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         assigned_input: HashInput<AssignedValue<F>>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
-        assigned_advices: &mut HashMap<(usize, usize), (circuit::Cell, usize)>,
-        witness_gen_only: bool,
     ) -> Result<AssignedHashResult<F>, Error> {
         let unassigned_input = assigned_input
             .clone()
             .map(|byte| byte.value().get_lower_32() as u8);
 
-        self.digest_inner(
-            assigned_input,
-            unassigned_input,
-            ctx,
-            region,
-            assigned_advices,
-            witness_gen_only,
-        )
+        self.digest_inner(assigned_input, unassigned_input, ctx, region)
     }
 
     fn digest_inner(
@@ -100,11 +89,11 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         unassigned_input: HashInput<u8>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
-        assigned_advices: &mut HashMap<(usize, usize), (circuit::Cell, usize)>,
-        witness_gen_only: bool,
     ) -> Result<AssignedHashResult<F>, Error> {
+        let mut extra_assignment = self.extra_assignments.borrow_mut();
+        let assigned_advices = &mut extra_assignment.assigned_advices;
         let mut assigned_input_bytes = assigned_input.to_vec();
-        let rnd = QuantumCell::Constant(self.rnd.clone());
+        let rnd = QuantumCell::Constant(self.randomness.clone());
         let input_byte_size = assigned_input_bytes.len();
         let max_byte_size = self.max_input_size;
         assert!(input_byte_size <= max_byte_size);
@@ -113,11 +102,9 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
 
         assert!(assigned_input_bytes.len() <= self.max_input_size);
         let mut assigned_rows = Sha256AssignedRows::default();
-        let assigned_hash_bytes = self.sha256_bit_config.digest_with_region(
-            region,
-            unassigned_input,
-            &mut assigned_rows,
-        )?;
+        let assigned_hash_bytes =
+            self.config
+                .digest_with_region(region, unassigned_input, &mut assigned_rows)?;
         let assigned_output =
             assigned_hash_bytes.map(|b| ctx.load_witness(*value_to_option(b.value()).unwrap()));
 
@@ -172,7 +159,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
                     input_rlc_cells,
                     &mut offset,
                     assigned_advices,
-                    witness_gen_only,
+                    ctx.witness_gen_only(),
                 )
             };
 
@@ -184,7 +171,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
                         cells,
                         &mut offset,
                         assigned_advices,
-                        witness_gen_only,
+                        ctx.witness_gen_only(),
                     )
                     .try_into()
                     .unwrap()
@@ -199,7 +186,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
                     ],
                     &mut offset,
                     assigned_advices,
-                    witness_gen_only,
+                    ctx.witness_gen_only(),
                 )
                 .try_into()
                 .unwrap();
@@ -236,7 +223,19 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         })
     }
 
-    pub fn range(&self) -> &RangeChip<F> {
+    /// Takes internal `KeygenAssignments` instance, leaving `Default::default()` in its place.
+    /// **Warning**: In case `extra_assignments` wasn't default at the time of chip initialization,
+    /// use `set_extra_assignments` to restore at the start of region declartion.
+    /// Otherwise at the second synthesis run, the setted `extra_assignments` will be erased.
+    pub fn take_extra_assignments(&self) -> KeygenAssignments<F> {
+        self.extra_assignments.take()
+    }
+
+    pub fn set_extra_assignments(&mut self, extra_assignments: KeygenAssignments<F>) {
+        self.extra_assignments = RefCell::new(extra_assignments);
+    }
+
+    fn range(&self) -> &RangeChip<F> {
         &self.range
     }
 
@@ -290,7 +289,7 @@ mod test {
     use std::{cell::RefCell, marker::PhantomData};
 
     use crate::table::SHA256Table;
-    use crate::util::SubCircuitConfig;
+    use crate::util::{Challenges, SubCircuitConfig};
 
     use super::*;
     use halo2_base::gates::range::RangeConfig;
@@ -317,6 +316,7 @@ mod test {
         pub max_byte_size: usize,
         range: RangeConfig<F>,
         hash_column: Column<Instance>,
+        challenges: Challenges<F>,
     }
 
     struct TestCircuit<F: Field> {
@@ -348,11 +348,13 @@ mod test {
             );
             let hash_column = meta.instance_column();
             meta.enable_equality(hash_column);
+            let challenges = Challenges::construct(meta);
             Self::Config {
                 sha256_config: sha256_configs,
                 max_byte_size: Self::MAX_BYTE_SIZE,
                 range,
                 hash_column,
+                challenges,
             }
         }
 
@@ -364,10 +366,11 @@ mod test {
             config.range.load_lookup_table(&mut layouter)?;
             let mut first_pass = SKIP_FIRST_PASS;
             let sha256 = Sha256Chip::new(
-                config.sha256_config,
+                &config.sha256_config,
                 &self.range,
                 config.max_byte_size,
-                Sha256CircuitConfig::fixed_challenge(),
+                config.challenges.sha256_input(),
+                None,
             );
 
             let assigned_hash_cells = layouter.assign_region(
@@ -381,25 +384,17 @@ mod test {
                     let witness_gen_only = builder.witness_gen_only();
                     let ctx = builder.main(0);
 
-                    let mut assigned_advices = HashMap::new();
-                    let result = sha256.digest(
-                        self.test_input.clone(),
-                        ctx,
-                        &mut region,
-                        &mut assigned_advices,
-                        witness_gen_only,
-                    )?;
+                    let result = sha256.digest(self.test_input.clone(), ctx, &mut region)?;
                     let assigned_hash = result.output_bytes;
+
+                    let extra_assignments = sha256.take_extra_assignments();
 
                     let _ = builder.assign_all(
                         &config.range.gate,
                         &config.range.lookup_advice,
                         &config.range.q_lookup,
                         &mut region,
-                        KeygenAssignments {
-                            assigned_advices: assigned_advices.clone(),
-                            ..Default::default()
-                        },
+                        extra_assignments,
                     );
 
                     Ok(assigned_hash.into_iter().map(|v| v.cell).collect())
@@ -425,7 +420,7 @@ mod test {
     fn test_sha256_correct1() {
         let k = 12;
 
-        let test_input = vec![1; 32];
+        let test_input = vec![1u8; 32];
         let test_output: [u8; 32] = Sha256::digest(&test_input).into();
 
         let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
@@ -433,7 +428,7 @@ mod test {
         let circuit = TestCircuit::<Fr> {
             builder: RefCell::new(builder),
             range,
-            test_input: HashInput::Single(test_input),
+            test_input: test_input.into(),
             _f: PhantomData,
         };
         let test_output = test_output.map(|val| Fr::from(val as u64)).to_vec();

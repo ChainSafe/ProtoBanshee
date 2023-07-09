@@ -139,8 +139,12 @@ impl SHA256Table {
     /// Generate the sha256 table assignments from a byte array input.
     fn assignments_dev<F: Field>(input: &HashInput<u8>, challenge: Value<F>) -> [Value<F>; 6] {
         let (input_chunks, input_rlc, preimage) = match input {
-            HashInput::Single(input) => {
-                let input_rlc = challenge.map(|randomness| rlc::value(input, randomness));
+            HashInput::Single(input, is_rlc) => {
+                let input_rlc = if *is_rlc {
+                    challenge.map(|randomness| rlc::value(input, randomness))
+                } else {
+                    Value::known(F::from_bytes_le_unsecure(input))
+                };
 
                 (
                     [input_rlc, Value::known(F::zero())],

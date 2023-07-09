@@ -8,6 +8,12 @@ mod sha256_chip;
 mod cached_chip;
 mod util;
 
+
+pub mod chips {
+    pub use super::sha256_chip::{Sha256Chip, AssignedHashResult};
+    pub use super::cached_chip::CachedSha256Chip;
+}
+
 use std::marker::PhantomData;
 
 use crate::{
@@ -1211,7 +1217,7 @@ mod tests {
     #[test]
     fn test_sha256_single() {
         let k = 11;
-        let inputs = vec![HashInput::Single(vec![0u8; 32]); 1];
+        let inputs = vec![HashInput::Single(vec![0u8; 32], true); 1];
         let circuit = TestSha256 {
             inner: Sha256Circuit::new(inputs),
         };

@@ -370,7 +370,7 @@ pub fn multi_sha256<F: Field>(inputs: &[HashInput<u8>], rnd: F) -> Vec<ShaRow<F>
     let inputs = inputs
         .iter()
         .map(|input| match input {
-            HashInput::Single(bytes) => ([bytes.as_slice(), &[]], [true; 2]),
+            HashInput::Single(bytes, is_rlc) => ([bytes.as_slice(), &[]], [*is_rlc, false]),
             HashInput::TwoToOne{
                 left,
                 right,
