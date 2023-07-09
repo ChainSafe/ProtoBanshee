@@ -1,47 +1,30 @@
+use std::hash::Hash;
+
 use banshee_preprocessor::util::pad_to_ssz_chunk;
+use eth_types::Field;
+use halo2_base::{AssignedValue, Context};
 use itertools::Itertools;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum HashInput<T> {
-    Single(Vec<T>, bool),
-    TwoToOne {
-        left: Vec<T>,
-        right: Vec<T>,
-        is_rlc: [bool; 2],
-    },
+pub enum HashInput<T, U = T> {
+    Single(HashInputRaw<T>),
+    TwoToOne(HashInputRaw<T>, HashInputRaw<U>),
 }
 
 impl<T: Clone> HashInput<T> {
-    pub fn is_rlc(&mut self, val: bool) {
-        match self {
-            HashInput::Single(_, ref mut rlc) => *rlc = val,
-            HashInput::TwoToOne { .. } => unimplemented!("use is_two_rlc for HashInput::TwoToOne"),
-        }
-    }
-
-    pub fn is_two_rlc(&mut self, left: bool, right: bool) {
-        match self {
-            HashInput::TwoToOne { is_rlc: rlc, .. } => {
-                rlc[0] = left;
-                rlc[1] = right;
-            }
-            HashInput::Single(_, ref mut rlc) => unimplemented!("use is_rlc for HashInput::Single"),
-        }
-    }
-
     pub fn len(&self) -> usize {
         match self {
-            HashInput::Single(input, _) => input.len(),
-            HashInput::TwoToOne { left, right, .. } => left.len() + right.len(),
+            HashInput::Single(inner) => inner.bytes.len(),
+            HashInput::TwoToOne(left, right) => left.bytes.len() + right.bytes.len(),
         }
     }
 
     pub fn to_vec(self) -> Vec<T> {
         match self {
-            HashInput::Single(input, _) => input,
-            HashInput::TwoToOne { left, right, .. } => {
-                let mut result = left;
-                result.extend(right);
+            HashInput::Single(inner) => inner.bytes,
+            HashInput::TwoToOne(left, right) => {
+                let mut result = left.bytes;
+                result.extend(right.bytes);
                 result
             }
         }
@@ -49,63 +32,140 @@ impl<T: Clone> HashInput<T> {
 
     pub fn map<B, F: FnMut(T) -> B>(self, f: F) -> HashInput<B> {
         match self {
-            HashInput::Single(input, is_rlc) => {
-                HashInput::Single(input.into_iter().map(f).collect(), is_rlc)
-            }
-            HashInput::TwoToOne {
-                left,
-                right,
-                is_rlc,
-            } => {
-                let left_size = left.len();
+            HashInput::Single(inner) => HashInput::Single(HashInputRaw {
+                bytes: inner.bytes.into_iter().map(f).collect(),
+                is_rlc: inner.is_rlc,
+            }),
+            HashInput::TwoToOne(left, right) => {
+                let left_size = left.bytes.len();
                 let mut all = left
+                    .bytes
                     .into_iter()
-                    .chain(right.into_iter())
+                    .chain(right.bytes.into_iter())
                     .map(f)
                     .collect_vec();
-                let right = all.split_off(left_size);
+                let remainer = all.split_off(left_size);
+                let left = HashInputRaw {
+                    bytes: all,
+                    is_rlc: left.is_rlc,
+                };
+                let right = HashInputRaw {
+                    bytes: remainer,
+                    is_rlc: right.is_rlc,
+                };
 
-                HashInput::TwoToOne {
-                    left: all,
-                    right,
-                    is_rlc,
-                }
+                HashInput::TwoToOne(left, right)
             }
         }
     }
-}
 
-impl From<&[u8]> for HashInput<u8> {
-    fn from(input: &[u8]) -> Self {
-        HashInput::Single(input.to_vec(), input.len() >= 32)
+    pub fn with_is_rlc(mut self, val: bool) -> Self {
+        match self {
+            HashInput::Single(ref mut inner) => inner.is_rlc = val,
+            HashInput::TwoToOne { .. } => unimplemented!("use is_two_rlc for HashInput::TwoToOne"),
+        }
+
+        self
+    }
+
+    pub fn with_two_is_rlc(mut self, left: bool, right: bool) -> Self {
+        match self {
+            HashInput::TwoToOne(ref mut l, ref mut r) => {
+                l.is_rlc = left;
+                r.is_rlc = right;
+            }
+            HashInput::Single(_) => unimplemented!("use HashInput::is_rlc for HashInput::Single"),
+        }
+
+        self
     }
 }
 
-impl From<Vec<u8>> for HashInput<u8> {
-    fn from(input: Vec<u8>) -> Self {
-        let is_rlc = input.len() >= 32;
-        HashInput::Single(input, is_rlc)
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct HashInputRaw<T> {
+    pub bytes: Vec<T>,
+    pub is_rlc: bool,
+}
+
+impl<T> HashInputRaw<T> {
+    pub fn new(bytes: Vec<T>, is_rlc: bool) -> Self {
+        Self { bytes, is_rlc }
     }
 }
 
-impl From<(&[u8], &[u8])> for HashInput<u8> {
-    fn from((left, right): (&[u8], &[u8])) -> Self {
-        HashInput::TwoToOne {
-            left: left.to_vec(),
-            right: right.to_vec(),
-            is_rlc: [left.len() >= 32, right.len() >= 32],
+impl HashInputRaw<u8> {
+    pub fn assign_with_ctx<F: Field>(&self, ctx: &mut Context<F>) -> HashInputRaw<AssignedValue<F>> {
+        let bytes = self
+            .bytes
+            .into_iter()
+            .map(|b| ctx.load_witness(F::from(b as u64)))
+            .collect();
+        HashInputRaw {
+            bytes,
+            is_rlc: self.is_rlc,
         }
     }
 }
 
-impl From<u64> for HashInput<u8> {
-    fn from(input: u64) -> Self {
-        HashInput::Single(pad_to_ssz_chunk(&input.to_le_bytes()), false)
+impl<I: Into<HashInputRaw<u8>>> From<I> for HashInput<u8> {
+    fn from(input: I) -> Self {
+        HashInput::Single(input.into())
     }
 }
 
-impl From<usize> for HashInput<u8> {
+impl<IL: Into<HashInputRaw<u8>>, IR: Into<HashInputRaw<u8>>> From<(IL, IR)> for HashInput<u8> {
+    fn from(input: (IL, IR)) -> Self {
+        let left = input.0.into();
+        let right = input.1.into();
+        HashInput::TwoToOne(left, right)
+    }
+}
+
+impl From<&[u8]> for HashInputRaw<u8> {
+    fn from(input: &[u8]) -> Self {
+        HashInputRaw {
+            bytes: input.to_vec(),
+            is_rlc: input.len() >= 32,
+        }
+    }
+}
+
+impl From<Vec<u8>> for HashInputRaw<u8> {
+    fn from(input: Vec<u8>) -> Self {
+        let is_rlc = input.len() >= 32;
+        HashInputRaw {
+            bytes: input,
+            is_rlc,
+        }
+    }
+}
+
+impl From<u64> for HashInputRaw<u8> {
+    fn from(input: u64) -> Self {
+        HashInputRaw {
+            bytes: pad_to_ssz_chunk(&input.to_le_bytes()),
+            is_rlc: false,
+        }
+    }
+}
+
+impl From<usize> for HashInputRaw<u8> {
     fn from(input: usize) -> Self {
-        HashInput::Single(pad_to_ssz_chunk(&input.to_le_bytes()), false)
+        HashInputRaw {
+            bytes: pad_to_ssz_chunk(&input.to_le_bytes()),
+            is_rlc: false,
+        }
+    }
+}
+
+impl<F: Field, I: IntoIterator<Item = AssignedValue<F>>> From<I>
+    for HashInputRaw<AssignedValue<F>>
+{
+    fn from(input: I) -> Self {
+        let bytes = input.into_iter().collect_vec();
+        HashInputRaw {
+            is_rlc: bytes.len() >= 32,
+            bytes: bytes,
+        }
     }
 }

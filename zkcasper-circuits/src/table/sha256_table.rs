@@ -68,10 +68,11 @@ impl SHA256Table {
         <SHA256Table as LookupTable<F>>::advice_columns(self)
             .iter()
             .zip(values.iter())
-            .map(|(&column, value)|
-        {
-            region.assign_advice(|| format!("assign {}", offset), column, offset, || *value)
-        }).collect::<Result<Vec<_>, _>>().map(|res| res.try_into().unwrap())
+            .map(|(&column, value)| {
+                region.assign_advice(|| format!("assign {}", offset), column, offset, || *value)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|res| res.try_into().unwrap())
     }
 
     pub fn build_lookup<F: Field>(
@@ -135,42 +136,45 @@ impl SHA256Table {
         )
     }
 
-
     /// Generate the sha256 table assignments from a byte array input.
     fn assignments_dev<F: Field>(input: &HashInput<u8>, challenge: Value<F>) -> [Value<F>; 6] {
         let (input_chunks, input_rlc, preimage) = match input {
-            HashInput::Single(input, is_rlc) => {
-                let input_rlc = if *is_rlc {
-                    challenge.map(|randomness| rlc::value(input, randomness))
+            HashInput::Single(inner) => {
+                let input_rlc = if inner.is_rlc {
+                    challenge.map(|randomness| rlc::value(&inner.bytes, randomness))
                 } else {
-                    Value::known(F::from_bytes_le_unsecure(input))
+                    Value::known(F::from_bytes_le_unsecure(&inner.bytes))
                 };
 
                 (
                     [input_rlc, Value::known(F::zero())],
                     input_rlc,
-                    input.clone(),
+                    inner.bytes.clone(),
                 )
             }
-            HashInput::TwoToOne{
-                left,
-                right,
-                is_rlc
-            } => {
+            HashInput::TwoToOne(left, right) => {
                 let chunk_rlcs = [
-                    challenge.map(|randomness| rlc::value(left, randomness)),
-                    challenge.map(|randomness| rlc::value(right, randomness)),
+                    challenge.map(|randomness| rlc::value(&left.bytes, randomness)),
+                    challenge.map(|randomness| rlc::value(&right.bytes, randomness)),
                 ];
                 let chunk_vals = [
-                    F::from_bytes_le_unsecure(left),
-                    F::from_bytes_le_unsecure(right),
+                    F::from_bytes_le_unsecure(&left.bytes),
+                    F::from_bytes_le_unsecure(&right.bytes),
                 ];
-                let preimage = vec![left.clone(), right.clone()].concat();
+                let preimage = input.clone().to_vec();
                 let input_rlc = challenge.map(|randomness| rlc::value(&preimage, randomness));
 
                 let input_chunks = [
-                    if is_rlc[0] { chunk_rlcs[0] } else { Value::known(chunk_vals[0]) },
-                    if is_rlc[1] { chunk_rlcs[1] } else { Value::known(chunk_vals[1]) },
+                    if left.is_rlc {
+                        chunk_rlcs[0]
+                    } else {
+                        Value::known(chunk_vals[0])
+                    },
+                    if right.is_rlc {
+                        chunk_rlcs[1]
+                    } else {
+                        Value::known(chunk_vals[1])
+                    },
                 ];
 
                 (input_chunks, input_rlc, preimage)

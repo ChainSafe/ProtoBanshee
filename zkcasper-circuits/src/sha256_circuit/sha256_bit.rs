@@ -80,50 +80,49 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
     let num_chunks = chunks.len();
     for (idx, chunk) in chunks.enumerate() {
         // Adds a row
-        let mut add_row =
-            |w: u64,
-             a: u64,
-             e: u64,
-             is_final,
-             is_right: bool,
-             length,
-             data_rlc,
-             hash_rlc,
-             is_paddings,
-             intermediary_data_rlcs,
-             final_hash_bytes,
-             // feature: [multi input lookups]
-             chunks_rlc,
-             rnd_pow: F,
-             // feature: [lookups by value]
-             u8_pow: [F; 2],
-             chunks_val: [F; 2]| {
-                let word_to_bits = |value: u64, num_bits: usize| {
-                    into_bits(&value.to_be_bytes())[64 - num_bits..64]
-                        .iter()
-                        .map(|b| *b != 0)
-                        .collect::<Vec<_>>()
-                };
-
-                rows.push(ShaRow {
-                    w: word_to_bits(w, NUM_BITS_PER_WORD_W).try_into().unwrap(),
-                    a: word_to_bits(a, NUM_BITS_PER_WORD_EXT).try_into().unwrap(),
-                    e: word_to_bits(e, NUM_BITS_PER_WORD_EXT).try_into().unwrap(),
-                    is_final,
-                    is_right,
-                    length,
-                    data_rlc,
-                    hash_rlc,
-                    is_paddings,
-                    intermediary_data_rlcs,
-                    final_hash_bytes,
-                    chunks_rlc,
-                    rnd_pow,
-                    u8_pow,
-                    chunks_val,
-                    is_rlc,
-                });
+        let mut add_row = |w: u64,
+                           a: u64,
+                           e: u64,
+                           is_final,
+                           is_right: bool,
+                           length,
+                           data_rlc,
+                           hash_rlc,
+                           is_paddings,
+                           intermediary_data_rlcs,
+                           final_hash_bytes,
+                           // feature: [multi input lookups]
+                           chunks_rlc,
+                           rnd_pow: F,
+                           // feature: [lookups by value]
+                           u8_pow: [F; 2],
+                           chunks_val: [F; 2]| {
+            let word_to_bits = |value: u64, num_bits: usize| {
+                into_bits(&value.to_be_bytes())[64 - num_bits..64]
+                    .iter()
+                    .map(|b| *b != 0)
+                    .collect::<Vec<_>>()
             };
+
+            rows.push(ShaRow {
+                w: word_to_bits(w, NUM_BITS_PER_WORD_W).try_into().unwrap(),
+                a: word_to_bits(a, NUM_BITS_PER_WORD_EXT).try_into().unwrap(),
+                e: word_to_bits(e, NUM_BITS_PER_WORD_EXT).try_into().unwrap(),
+                is_final,
+                is_right,
+                length,
+                data_rlc,
+                hash_rlc,
+                is_paddings,
+                intermediary_data_rlcs,
+                final_hash_bytes,
+                chunks_rlc,
+                rnd_pow,
+                u8_pow,
+                chunks_val,
+                is_rlc,
+            });
+        };
 
         // Last block for this hash
         let is_final_block = idx == num_chunks - 1;
@@ -197,7 +196,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
                             data_vals[0] += u8_pow[0] * F::from(*byte as u64);
                             data_vals[1] += u8_pow[1] * F::from(*byte as u64);
                             u8_pow[0] = u8_pow[0] * f256;
-                            if length - 4 + idx >= inputs[0].len()  {
+                            if length - 4 + idx >= inputs[0].len() {
                                 u8_pow[1] = u8_pow[1] * f256;
                             }
                         }
@@ -370,12 +369,11 @@ pub fn multi_sha256<F: Field>(inputs: &[HashInput<u8>], rnd: F) -> Vec<ShaRow<F>
     let inputs = inputs
         .iter()
         .map(|input| match input {
-            HashInput::Single(bytes, is_rlc) => ([bytes.as_slice(), &[]], [*is_rlc, false]),
-            HashInput::TwoToOne{
-                left,
-                right,
-                is_rlc,
-            } => ([left.as_slice(), right.as_slice()], is_rlc.clone()),
+            HashInput::Single(inner) => ([inner.bytes.as_slice(), &[]], [inner.is_rlc, false]),
+            HashInput::TwoToOne(left, right) => (
+                [left.bytes.as_slice(), right.bytes.as_slice()],
+                [left.is_rlc, right.is_rlc],
+            ),
         })
         .collect_vec();
     let mut rows: Vec<ShaRow<F>> = Vec::new();

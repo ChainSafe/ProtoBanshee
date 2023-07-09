@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+
+use crate::witness::HashInputRaw;
 
 use super::HashInput;
 
@@ -64,11 +65,11 @@ impl MerkleTrace {
                         .to_vec(),
                     step.parent
                 );
-                HashInput::TwoToOne {
-                    left: step.node,
-                    right: step.sibling,
-                    is_rlc: step.is_rlc,
-                }
+
+                HashInput::TwoToOne(
+                    HashInputRaw::new(step.node, step.is_rlc[0]),
+                    HashInputRaw::new(step.sibling, step.is_rlc[1]),
+                )
             })
             .collect_vec()
     }

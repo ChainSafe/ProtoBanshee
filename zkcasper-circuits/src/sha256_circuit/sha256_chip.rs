@@ -295,10 +295,7 @@ mod test {
     use halo2_base::gates::range::RangeConfig;
     use halo2_base::SKIP_FIRST_PASS;
     use halo2_base::{
-        gates::{
-            builder::{GateThreadBuilder, KeygenAssignments},
-            range::RangeStrategy,
-        },
+        gates::{builder::GateThreadBuilder, range::RangeStrategy},
         halo2_proofs::{
             circuit::{Layouter, SimpleFloorPlanner},
             dev::MockProver,
@@ -373,7 +370,7 @@ mod test {
                 None,
             );
 
-            let assigned_hash_cells = layouter.assign_region(
+            let _ = layouter.assign_region(
                 || "dynamic sha2 test",
                 |mut region| {
                     if first_pass {
@@ -381,7 +378,6 @@ mod test {
                         return Ok(vec![]);
                     }
                     let builder = &mut self.builder.borrow_mut();
-                    let witness_gen_only = builder.witness_gen_only();
                     let ctx = builder.main(0);
 
                     let result = sha256.digest(self.test_input.clone(), ctx, &mut region)?;

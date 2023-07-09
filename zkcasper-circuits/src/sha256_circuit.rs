@@ -448,11 +448,6 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             let mut cb = BaseConstraintBuilder::new(MAX_DEGREE);
             let q_padding = meta.query_fixed(q_padding, Rotation::cur());
             let is_right = meta.query_advice(is_right, Rotation::cur());
-            let is_rlc = [
-                meta.query_advice(is_rlc[0], Rotation::cur()),
-                meta.query_advice(is_rlc[1], Rotation::cur()),
-            ];
-            let is_values = [not::expr(is_rlc[0].clone()), not::expr(is_rlc[1].clone())];
             let is_left_value: Expression<F> = meta.query_advice(is_left_value, Rotation::cur());
             let is_right_value: Expression<F> = meta.query_advice(is_right_value, Rotation::cur());
             let start_new_hash = start_new_hash(meta);
@@ -1217,7 +1212,7 @@ mod tests {
     #[test]
     fn test_sha256_single() {
         let k = 11;
-        let inputs = vec![HashInput::Single(vec![0u8; 32], true); 1];
+        let inputs = vec![vec![0u8; 32].into(); 1];
         let circuit = TestSha256 {
             inner: Sha256Circuit::new(inputs),
         };
@@ -1230,11 +1225,10 @@ mod tests {
     fn test_sha256_two2one_simple() {
         let k = 11;
         let inputs = vec![
-            HashInput::TwoToOne {
-                left: vec![0u8; 32],
-                right: vec![0u8; 32],
-                is_rlc: [false, false]
-            };
+            (
+                vec![0u8; 32],
+                vec![0u8; 32],
+            ).into();
             10
         ];
         let circuit = TestSha256 {
@@ -1249,11 +1243,10 @@ mod tests {
     fn test_sha256_two2one_val_and_rlc() {
         let k = 10;
         let inputs = vec![
-            HashInput::TwoToOne {
-                left: vec![vec![2u8; 4], vec![0u8; 28]].concat(),
-                right: vec![vec![3u8; 4], vec![0u8; 28]].concat(),
-                is_rlc: [false, true]
-            };
+            (
+                vec![vec![2u8; 4], vec![0u8; 28]].concat(),
+                vec![3u8; 4],
+            ).into();
             1
         ];
         let circuit = TestSha256 {
