@@ -43,7 +43,7 @@ impl MerkleTrace {
         self.0.iter().into_group_map_by(|step| step.depth)
     }
 
-    pub fn sha256_inputs(&self) -> Vec<HashInput> {
+    pub fn sha256_inputs(&self) -> Vec<HashInput<u8>> {
         let mut steps_sorted = self
             .0
             .clone()

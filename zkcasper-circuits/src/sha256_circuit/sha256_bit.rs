@@ -366,7 +366,7 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
     debug!("data rlc: {:x?}", data_rlc);
 }
 
-pub fn multi_sha256<F: Field>(inputs: &[HashInput], rnd: F) -> Vec<ShaRow<F>> {
+pub fn multi_sha256<F: Field>(inputs: &[HashInput<u8>], rnd: F) -> Vec<ShaRow<F>> {
     let inputs = inputs
         .iter()
         .map(|input| match input {

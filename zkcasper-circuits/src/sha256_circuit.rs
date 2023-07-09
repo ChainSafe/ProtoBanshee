@@ -5,6 +5,7 @@
 
 mod sha256_bit;
 mod sha256_chip;
+mod cached_chip;
 mod util;
 
 use std::marker::PhantomData;
@@ -742,7 +743,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
     pub fn digest(
         &self,
         layouter: &mut impl Layouter<F>,
-        input: HashInput,
+        input: HashInput<u8>,
     ) -> Result<[AssignedCell<F, F>; NUM_BYTES_FINAL_HASH], Error> {
         let witness = multi_sha256(&[input], Sha256CircuitConfig::fixed_challenge());
         let mut hashes = self.assign(layouter, &witness)?;
@@ -753,7 +754,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
     pub fn digest_with_region(
         &self,
         region: &mut Region<'_, F>,
-        input: HashInput,
+        input: HashInput<u8>,
         assigned_rows: &mut Sha256AssignedRows<F>,
     ) -> Result<[AssignedCell<F, F>; NUM_BYTES_FINAL_HASH], Error> {
         let witness = multi_sha256(&[input], Sha256CircuitConfig::fixed_challenge());
@@ -1098,7 +1099,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
 /// KeccakCircuit
 #[derive(Default, Clone, Debug)]
 pub struct Sha256Circuit<F: Field> {
-    inputs: Vec<HashInput>,
+    inputs: Vec<HashInput<u8>>,
     _marker: PhantomData<F>,
 }
 
@@ -1149,7 +1150,7 @@ impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
 
 impl<F: Field> Sha256Circuit<F> {
     /// Creates a new circuit instance
-    pub fn new(inputs: Vec<HashInput>) -> Self {
+    pub fn new(inputs: Vec<HashInput<u8>>) -> Self {
         Sha256Circuit {
             inputs,
             _marker: PhantomData,

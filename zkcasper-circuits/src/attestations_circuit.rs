@@ -9,7 +9,7 @@ use halo2_base::{
     gates::{builder::GateThreadBuilder, range::RangeConfig, RangeInstructions},
     safe_types::RangeChip,
 };
-use halo2_ecc::{bn254::{Fp2Chip, FpChip}, ecc::EccChip, fields::fp2};
+use halo2_ecc::{bn254::{Fp2Chip, FpChip}, ecc::EccChip};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{ConstraintSystem, Error},
@@ -120,7 +120,7 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
     }
 
     fn assign_attestation_data(&self) {
-
+        
     }
 
     fn fp2_chip(&self) -> Fp2Chip<'_, F> {
