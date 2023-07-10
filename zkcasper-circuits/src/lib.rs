@@ -7,7 +7,6 @@ pub(crate) mod util;
 pub mod witness;
 
 pub mod aggregation_circuit;
-pub mod aggregation_circuit_copy;
 pub mod sha256_circuit;
 pub mod state_circuit;
 pub mod super_circuit;
