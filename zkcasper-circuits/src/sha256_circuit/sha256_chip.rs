@@ -21,9 +21,7 @@ use halo2_proofs::{
 
 use super::Sha256CircuitConfig;
 
-const Sha256BitChipRowPerRound: usize = 72;
 const BLOCK_BYTE: usize = 64;
-const DIGEST_BYTE: usize = 32;
 const SHA256_CONTEXT_ID: usize = usize::MAX;
 
 #[derive(Debug, Clone)]
@@ -86,15 +84,19 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         let assigned_output =
             assigned_hash_bytes.map(|b| ctx.load_witness(*value_to_option(b.value()).unwrap()));
 
-        let input_byte_size_with_9 = input_byte_size + 9;
         let one_round_size = BLOCK_BYTE;
-        let num_round = if input_byte_size_with_9 % one_round_size == 0 {
-            input_byte_size_with_9 / one_round_size
-        } else {
-            input_byte_size_with_9 / one_round_size + 1
-        };
+        let num_round = 1;
+
+        // FIXME: support dynamic input size
+        //
+        // let input_byte_size_with_9 = input_byte_size + 9;
+        // let num_round = if input_byte_size_with_9 % one_round_size == 0 {
+        //     input_byte_size_with_9 / one_round_size
+        // } else {
+        //     input_byte_size_with_9 / one_round_size + 1
+        // };
         let padded_size = one_round_size * num_round;
-        let zero_padding_byte_size = padded_size - input_byte_size - 9;
+        let zero_padding_byte_size = padded_size - input_byte_size; // - 9;
         let max_round = max_byte_size / one_round_size;
         let remaining_byte_size = max_byte_size - padded_size;
         assert_eq!(
@@ -107,18 +109,19 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         for _ in 0..zero_padding_byte_size {
             assigned_input_bytes.push(assign_byte(0u8));
         }
-        let mut input_len_bytes = [0; 8];
-        let le_size_bytes = (8 * input_byte_size).to_le_bytes();
-        input_len_bytes[0..le_size_bytes.len()].copy_from_slice(&le_size_bytes);
-
-        for byte in input_len_bytes.iter().rev() {
-            assigned_input_bytes.push(assign_byte(*byte));
-        }
-        assert_eq!(assigned_input_bytes.len(), num_round * one_round_size);
-        for _ in 0..remaining_byte_size {
-            assigned_input_bytes.push(assign_byte(0u8));
-        }
-        assert_eq!(assigned_input_bytes.len(), max_byte_size);
+        // FIXME: support dynamic input size
+        //
+        // let mut input_len_bytes = [0; 8];
+        // let le_size_bytes = (8 * input_byte_size).to_le_bytes();
+        // input_len_bytes[0..le_size_bytes.len()].copy_from_slice(&le_size_bytes);
+        // for byte in input_len_bytes.iter().rev() {
+        //     assigned_input_bytes.push(assign_byte(*byte));
+        // }
+        // assert_eq!(assigned_input_bytes.len(), num_round * one_round_size);
+        // for _ in 0..remaining_byte_size {
+        //     assigned_input_bytes.push(assign_byte(0u8));
+        // }
+        // assert_eq!(assigned_input_bytes.len(), max_byte_size);
         for &assigned in assigned_input_bytes.iter() {
             range.range_check(ctx, assigned, 8);
         }
@@ -213,10 +216,6 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         self.extra_assignments = RefCell::new(extra_assignments);
     }
 
-    fn range(&self) -> &RangeChip<F> {
-        &self.range
-    }
-
     fn assigned_cell2value(
         &self,
         ctx: &mut Context<F>,
@@ -264,10 +263,11 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
 
 #[cfg(test)]
 mod test {
+    use std::vec;
     use std::{cell::RefCell, marker::PhantomData};
 
     use crate::table::SHA256Table;
-    use crate::util::{Challenges, SubCircuitConfig, IntoWitness};
+    use crate::util::{Challenges, IntoWitness, SubCircuitConfig};
 
     use super::*;
     use halo2_base::gates::range::RangeConfig;
@@ -278,11 +278,10 @@ mod test {
             circuit::{Layouter, SimpleFloorPlanner},
             dev::MockProver,
             halo2curves::bn256::Fr,
-            plonk::{Circuit, ConstraintSystem, Instance},
+            plonk::{Circuit, ConstraintSystem},
         },
     };
 
-    use halo2_proofs::plonk::Column;
     use sha2::{Digest, Sha256};
 
     #[derive(Debug, Clone)]
@@ -290,7 +289,6 @@ mod test {
         sha256_config: Sha256CircuitConfig<F>,
         pub max_byte_size: usize,
         range: RangeConfig<F>,
-        hash_column: Column<Instance>,
         challenges: Challenges<F>,
     }
 
@@ -298,6 +296,7 @@ mod test {
         builder: RefCell<GateThreadBuilder<F>>,
         range: RangeChip<F>,
         test_input: HashInput<QuantumCell<F>>,
+        test_output: [u8; 32],
         _f: PhantomData<F>,
     }
 
@@ -321,14 +320,11 @@ mod test {
                 Self::LOOKUP_BITS,
                 Self::K,
             );
-            let hash_column = meta.instance_column();
-            meta.enable_equality(hash_column);
             let challenges = Challenges::construct(meta);
             Self::Config {
                 sha256_config: sha256_configs,
                 max_byte_size: Self::MAX_BYTE_SIZE,
                 range,
-                hash_column,
                 challenges,
             }
         }
@@ -360,6 +356,18 @@ mod test {
 
                     let result = sha256.digest(self.test_input.clone(), ctx, &mut region)?;
                     let assigned_hash = result.output_bytes;
+                    println!(
+                        "assigned hash: {:?}",
+                        assigned_hash.map(|e| e.value().get_lower_32())
+                    );
+
+                    let correct_output = self
+                        .test_output
+                        .map(|b| ctx.load_witness(F::from(b as u64)));
+
+                    for (hash, check) in assigned_hash.iter().zip(correct_output.iter()) {
+                        ctx.constrain_equal(hash, check);
+                    }
 
                     let extra_assignments = sha256.take_extra_assignments();
 
@@ -374,9 +382,7 @@ mod test {
                     Ok(assigned_hash.into_iter().map(|v| v.cell).collect())
                 },
             )?;
-            // for (idx, hash) in assigned_hash_cells.into_iter().enumerate() {
-            //     layouter.constrain_instance(hash, config.hash_column, idx)?;
-            // }
+
             Ok(())
         }
     }
@@ -394,21 +400,19 @@ mod test {
     fn test_sha256_correct1() {
         let k = 12;
 
-        let test_input = vec![1u8; 32];
+        let test_input = vec![0u8; 64];
         let test_output: [u8; 32] = Sha256::digest(&test_input).into();
-
         let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
         let builder = GateThreadBuilder::new(false);
         let circuit = TestCircuit::<Fr> {
             builder: RefCell::new(builder),
             range,
             test_input: test_input.into_witness(),
+            test_output,
             _f: PhantomData,
         };
-        let test_output = test_output.map(|val| Fr::from(val as u64)).to_vec();
-        let public_inputs = vec![test_output];
 
-        let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
+        let prover = MockProver::run(k, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }
 }

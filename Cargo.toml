@@ -6,13 +6,6 @@ members = [
     "gadgets",
 ]
 
-# [patch."https://github.com/privacy-scaling-explorations/halo2.git"]
-# halo2_proofs = { git = "https://github.com/scroll-tech/halo2.git", branch = "scroll-dev-0220" }
-
-# [patch."https://github.com/privacy-scaling-explorations/zkevm-circuits.git"]
-# eth-types = { path = "./eth-types" }
-
-
 # Definition of benchmarks profile to use.
 [profile.bench]
 opt-level = 3

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, vec};
+use std::{cell::RefCell, collections::HashMap, vec};
 
 use crate::{
     aggregation_circuit::{LIMB_BITS, NUM_LIMBS},
@@ -25,11 +25,21 @@ use halo2_proofs::{
 };
 use halo2curves::{bn256::G2Affine, group::GroupEncoding};
 use itertools::Itertools;
+use ssz_rs::Merkleized;
 pub use witness::{AttestationData, IndexedAttestation};
 
 pub const MAX_VALIDATORS_PER_COMMITTEE: usize = 2048;
 pub const MAX_COMMITTEES_PER_SLOT: usize = 64;
 pub const SLOTS_PER_EPOCH: usize = 32;
+pub const G2_FQ2_BYTES: usize = 64; // TODO: 96 for BLS12-381.
+
+pub const ZERO_HASHES: [[u8; 32]; 2] = [
+    [0; 32],
+    [
+        245, 165, 253, 66, 209, 106, 32, 48, 39, 152, 239, 110, 211, 9, 151, 155, 67, 0, 61, 35,
+        32, 217, 240, 232, 234, 152, 49, 169, 39, 89, 251, 75,
+    ],
+];
 
 #[derive(Clone, Debug)]
 pub struct AttestationsCircuitConfig<F: Field> {
@@ -63,7 +73,7 @@ pub struct AttestationsCircuitBuilder<'a, F: Field> {
     attestations: &'a [IndexedAttestation<MAX_VALIDATORS_PER_COMMITTEE>],
     range: &'a RangeChip<F>,
     fp_chip: FpChip<'a, F>,
-    padding_chunk: RefCell<Option<HashInputChunk<QuantumCell<F>>>>,
+    zero_hashes: RefCell<HashMap<usize, HashInputChunk<QuantumCell<F>>>>,
 }
 
 impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
@@ -78,7 +88,7 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
             range,
             attestations,
             fp_chip,
-            padding_chunk: Default::default(),
+            zero_hashes: Default::default(),
         }
     }
 
@@ -145,7 +155,8 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
 
                     for IndexedAttestation {
                         data, signature, ..
-                    } in self.attestations.iter() {
+                    } in self.attestations.iter()
+                    {
                         assert!(!signature.is_infinity());
 
                         let _signature = self.assign_signature(&signature, &g2_chip, ctx);
@@ -158,7 +169,17 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
                             target_root.output_bytes.into(),
                         ];
 
-                        self.merkleize_chunks(chunks, &hasher, ctx, &mut region)?;
+                        let signing_root =
+                            self.merkleize_chunks(chunks, &hasher, ctx, &mut region)?;
+
+                        assert_eq!(
+                            data.clone().hash_tree_root().unwrap().as_ref().to_vec(),
+                            signing_root
+                                .iter()
+                                .map(|e| e.value().get_lower_32() as u8)
+                                .collect_vec(),
+                            "invalid signing root"
+                        );
                     }
 
                     let extra_assignments = hasher.inner.take_extra_assignments();
@@ -183,10 +204,12 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
         g2_chip: &EccChip<'a, F, Fp2Chip<'a, F>>,
         ctx: &mut Context<F>,
     ) -> EcPoint<F, FqPoint<F>> {
+        // FIXME: remove next line after switching to BLS12-381
+        let bytes_compressed = &bytes_compressed[..G2_FQ2_BYTES];
         let sig_affine = G2Affine::from_bytes(
             &bytes_compressed
                 .try_into()
-                .expect("signature bytes leath not match"),
+                .expect("signature bytes length not match"),
         )
         .unwrap();
 
@@ -203,27 +226,31 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
     where
         I::IntoIter: ExactSizeIterator,
     {
-        let chunks = chunks.into_iter();
-
-        // Pad to even length using 32 zero bytes assigned as constants.
+        let mut chunks = chunks.into_iter().collect_vec();
+        let mut zero_hashes = self.zero_hashes.borrow_mut();
         let len_even = chunks.len() + chunks.len() % 2;
-        let mut chunks = chunks
-            .pad_using(len_even, |_| {
-                self.padding_chunk
-                    .borrow_mut()
-                    .get_or_insert_with(|| {
-                        HashInputChunk::from([0; 32].map(|b| ctx.load_constant(F::from(b))))
-                    })
-                    .clone()
-            })
-            .collect_vec();
+        let height = (len_even as f64).log2().ceil() as usize;
 
-        let tree_depth = (len_even as f64).log2().ceil() as usize;
-
-        for _ in 0..tree_depth {
-            chunks = chunks
+        for depth in 0..height {
+            // Pad to even length using 32 zero bytes assigned as constants.
+            let len_even = chunks.len() + chunks.len() % 2;
+            let padded_chunks = chunks
                 .into_iter()
-                .tuple_windows()
+                .pad_using(len_even, |_| {
+                    zero_hashes
+                        .entry(depth)
+                        .or_insert_with(|| {
+                            HashInputChunk::from(
+                                ZERO_HASHES[depth].map(|b| ctx.load_constant(F::from(b as u64))),
+                            )
+                        })
+                        .clone()
+                })
+                .collect_vec();
+
+            chunks = padded_chunks
+                .into_iter()
+                .tuples()
                 .map(|(left, right)| {
                     hasher
                         .digest(HashInput::TwoToOne(left, right), ctx, region)
@@ -288,7 +315,12 @@ impl<'a, F: Field> SubCircuit<F> for AttestationsCircuitBuilder<'a, F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{table::SHA256Table};
+    use std::fs;
+
+    use crate::{
+        table::SHA256Table,
+        witness::{attestations_dev, Validator},
+    };
 
     use super::*;
     use halo2_base::gates::range::RangeStrategy;
@@ -355,13 +387,16 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregation_circuit() {
+    fn test_attestations_circuit() {
         let k = TestCircuit::<Fr>::K;
 
         let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
         let builder = GateThreadBuilder::new(false);
         builder.config(k, None);
-        let attestations = vec![];
+        let validators: Vec<Validator> =
+            serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
+        let attestations = attestations_dev(validators);
+
         let circuit = TestCircuit::<'_, Fr> {
             inner: AttestationsCircuitBuilder::new(builder, &attestations, &range),
         };
