@@ -61,35 +61,13 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
 
     pub fn digest(
         &self,
-        input: HashInput<u8>,
+        input: HashInput<QuantumCell<F>>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
     ) -> Result<AssignedHashResult<F>, Error> {
-        let assign_byte = |byte: u8| ctx.load_witness(F::from(byte as u64));
-        let assigned_input = input.clone().map(assign_byte);
-        self.digest_inner(assigned_input, input, ctx, region)
-    }
+        let binary_input = input.clone().into();
+        let assigned_input = input.into_assigned(ctx);
 
-    pub fn digest_assigned(
-        &self,
-        assigned_input: HashInput<AssignedValue<F>>,
-        ctx: &mut Context<F>,
-        region: &mut Region<'_, F>,
-    ) -> Result<AssignedHashResult<F>, Error> {
-        let unassigned_input = assigned_input
-            .clone()
-            .map(|byte| byte.value().get_lower_32() as u8);
-
-        self.digest_inner(assigned_input, unassigned_input, ctx, region)
-    }
-
-    fn digest_inner(
-        &self,
-        assigned_input: HashInput<AssignedValue<F>>,
-        unassigned_input: HashInput<u8>,
-        ctx: &mut Context<F>,
-        region: &mut Region<'_, F>,
-    ) -> Result<AssignedHashResult<F>, Error> {
         let mut extra_assignment = self.extra_assignments.borrow_mut();
         let assigned_advices = &mut extra_assignment.assigned_advices;
         let mut assigned_input_bytes = assigned_input.to_vec();
@@ -104,7 +82,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         let mut assigned_rows = Sha256AssignedRows::default();
         let assigned_hash_bytes =
             self.config
-                .digest_with_region(region, unassigned_input, &mut assigned_rows)?;
+                .digest_with_region(region, binary_input, &mut assigned_rows)?;
         let assigned_output =
             assigned_hash_bytes.map(|b| ctx.load_witness(*value_to_option(b.value()).unwrap()));
 
@@ -289,7 +267,7 @@ mod test {
     use std::{cell::RefCell, marker::PhantomData};
 
     use crate::table::SHA256Table;
-    use crate::util::{Challenges, SubCircuitConfig};
+    use crate::util::{Challenges, SubCircuitConfig, IntoWitness};
 
     use super::*;
     use halo2_base::gates::range::RangeConfig;
@@ -319,7 +297,7 @@ mod test {
     struct TestCircuit<F: Field> {
         builder: RefCell<GateThreadBuilder<F>>,
         range: RangeChip<F>,
-        test_input: HashInput<u8>,
+        test_input: HashInput<QuantumCell<F>>,
         _f: PhantomData<F>,
     }
 
@@ -424,7 +402,7 @@ mod test {
         let circuit = TestCircuit::<Fr> {
             builder: RefCell::new(builder),
             range,
-            test_input: test_input.into(),
+            test_input: test_input.into_witness(),
             _f: PhantomData,
         };
         let test_output = test_output.map(|val| Fr::from(val as u64)).to_vec();

@@ -2,13 +2,15 @@ use std::hash::Hash;
 
 use banshee_preprocessor::util::pad_to_ssz_chunk;
 use eth_types::Field;
-use halo2_base::{AssignedValue, Context};
+use halo2_base::{AssignedValue, Context, QuantumCell};
 use itertools::Itertools;
 
+use crate::util::{WitnessFrom, ConstantFrom, IntoWitness};
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum HashInput<T, U = T> {
+pub enum HashInput<T> {
     Single(HashInputRaw<T>),
-    TwoToOne(HashInputRaw<T>, HashInputRaw<U>),
+    TwoToOne(HashInputRaw<T>, HashInputRaw<T>),
 }
 
 impl<T: Clone> HashInput<T> {
@@ -58,52 +60,27 @@ impl<T: Clone> HashInput<T> {
             }
         }
     }
+}
 
-    pub fn with_is_rlc(mut self, val: bool) -> Self {
-        match self {
-            HashInput::Single(ref mut inner) => inner.is_rlc = val,
-            HashInput::TwoToOne { .. } => unimplemented!("use is_two_rlc for HashInput::TwoToOne"),
-        }
-
-        self
-    }
-
-    pub fn with_two_is_rlc(mut self, left: bool, right: bool) -> Self {
-        match self {
-            HashInput::TwoToOne(ref mut l, ref mut r) => {
-                l.is_rlc = left;
-                r.is_rlc = right;
-            }
-            HashInput::Single(_) => unimplemented!("use HashInput::is_rlc for HashInput::Single"),
-        }
-
-        self
+impl<F: Field> HashInput<QuantumCell<F>> {
+    pub fn into_assigned(self, ctx: &mut Context<F>) -> HashInput<AssignedValue<F>> {
+        self.map(|cell| match cell {
+            QuantumCell::Existing(v) => v,
+            QuantumCell::Witness(v) => ctx.load_witness(v),
+            QuantumCell::Constant(v) => ctx.load_constant(v),
+            _ => unreachable!(),
+        })
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct HashInputRaw<T> {
-    pub bytes: Vec<T>,
-    pub is_rlc: bool,
-}
-
-impl<T> HashInputRaw<T> {
-    pub fn new(bytes: Vec<T>, is_rlc: bool) -> Self {
-        Self { bytes, is_rlc }
-    }
-}
-
-impl HashInputRaw<u8> {
-    pub fn assign_with_ctx<F: Field>(&self, ctx: &mut Context<F>) -> HashInputRaw<AssignedValue<F>> {
-        let bytes = self
-            .bytes
-            .into_iter()
-            .map(|b| ctx.load_witness(F::from(b as u64)))
-            .collect();
-        HashInputRaw {
-            bytes,
-            is_rlc: self.is_rlc,
-        }
+impl<F: Field> From<HashInput<QuantumCell<F>>> for HashInput<u8> {
+    fn from(input: HashInput<QuantumCell<F>>) -> Self {
+        input.map(|cell| match cell {
+            QuantumCell::Existing(v) => v.value().get_lower_32() as u8,
+            QuantumCell::Witness(v) => v.get_lower_32() as u8,
+            QuantumCell::Constant(v) => v.get_lower_32() as u8,
+            _ => unreachable!(),
+        })
     }
 }
 
@@ -118,6 +95,68 @@ impl<IL: Into<HashInputRaw<u8>>, IR: Into<HashInputRaw<u8>>> From<(IL, IR)> for 
         let left = input.0.into();
         let right = input.1.into();
         HashInput::TwoToOne(left, right)
+    }
+}
+
+impl<F: Field, I: Into<HashInputRaw<u8>>> WitnessFrom<I> for HashInput<QuantumCell<F>> {
+    fn witness_from(input: I) -> Self {
+        let input: HashInputRaw<u8> = input.into();
+
+        HashInput::Single(HashInputRaw {
+            bytes: input.bytes.into_iter().map(|b| QuantumCell::Witness(F::from(b as u64))).collect(),
+            is_rlc: input.is_rlc,
+        })
+    }
+}
+
+impl<F: Field, IL: Into<HashInputRaw<u8>>, IR: Into<HashInputRaw<u8>>> WitnessFrom<(IL, IR)> for HashInput<QuantumCell<F>>
+{
+    fn witness_from((left, right): (IL, IR)) -> Self {
+        HashInput::TwoToOne(
+            left.into_witness(),
+            right.into_witness(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct HashInputRaw<T> {
+    pub bytes: Vec<T>,
+    pub is_rlc: bool,
+}
+
+impl<T> HashInputRaw<T> {
+    pub fn new(bytes: Vec<T>, is_rlc: bool) -> Self {
+        Self { bytes, is_rlc }
+    }
+
+    pub fn map<B, F: FnMut(T) -> B>(self, f: F) -> HashInputRaw<B> {
+        HashInputRaw {
+            bytes: self.bytes.into_iter().map(f).collect(),
+            is_rlc: self.is_rlc,
+        }
+    }
+}
+
+impl<F: Field, I: Into<HashInputRaw<u8>>> WitnessFrom<I> for HashInputRaw<QuantumCell<F>> {
+    fn witness_from(input: I) -> Self {
+        let input: HashInputRaw<u8> = input.into();
+
+        HashInputRaw {
+            bytes: input.bytes.into_iter().map(|b| QuantumCell::Witness(F::from(b as u64))).collect(),
+            is_rlc: input.is_rlc,
+        }
+    }
+}
+
+impl<F: Field, I: Into<HashInputRaw<u8>>> ConstantFrom<I> for HashInputRaw<QuantumCell<F>> {
+    fn constant_from(input: I) -> Self {
+        let input: HashInputRaw<u8> = input.into();
+
+        HashInputRaw {
+            bytes: input.bytes.into_iter().map(|b| QuantumCell::Constant(F::from(b as u64))).collect(),
+            is_rlc: input.is_rlc,
+        }
     }
 }
 
@@ -159,13 +198,14 @@ impl From<usize> for HashInputRaw<u8> {
 }
 
 impl<F: Field, I: IntoIterator<Item = AssignedValue<F>>> From<I>
-    for HashInputRaw<AssignedValue<F>>
+    for HashInputRaw<QuantumCell<F>>
 {
     fn from(input: I) -> Self {
-        let bytes = input.into_iter().collect_vec();
+        let bytes = input.into_iter().map(|av| QuantumCell::Existing(av)).collect_vec();
         HashInputRaw {
             is_rlc: bytes.len() >= 32,
             bytes: bytes,
         }
     }
 }
+

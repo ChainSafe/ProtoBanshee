@@ -1,19 +1,19 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, vec};
 
 use crate::{
     aggregation_circuit::{LIMB_BITS, NUM_LIMBS},
     sha256_circuit::{
-        chips::{CachedSha256Chip, Sha256Chip},
+        chips::{AssignedHashResult, CachedSha256Chip, Sha256Chip},
         Sha256CircuitConfig,
     },
-    util::{Challenges, SubCircuit, SubCircuitConfig},
-    witness,
+    util::{Challenges, SubCircuit, SubCircuitConfig, IntoWitness},
+    witness::{self, HashInput, HashInputRaw},
 };
 use eth_types::Field;
 use halo2_base::{
     gates::{builder::GateThreadBuilder, range::RangeConfig, RangeInstructions},
     safe_types::RangeChip,
-    Context,
+    Context, QuantumCell,
 };
 use halo2_ecc::{
     bn254::{Fp2Chip, FpChip},
@@ -24,6 +24,7 @@ use halo2_proofs::{
     plonk::{ConstraintSystem, Error},
 };
 use halo2curves::{bn256::G2Affine, group::GroupEncoding};
+use itertools::Itertools;
 use sha2::Sha256;
 pub use witness::{AttestationData, IndexedAttestation};
 
@@ -142,16 +143,54 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
             G2Affine::from_bytes(&attestation.signature.as_ref().try_into().unwrap()).unwrap();
     }
 
-    // fn assign_attestation_data(
-    //     &self,
-    //     data: &AttestationData,
-    //     sha256_chip: &Sha256Chip<F>,
-    //     ctx: &mut Context<F>,
-    //     region: &mut Region<'_, F>,
-    // ) {
-    //     let source_root = data.source.clone();
-    //     source_root.
-    // }
+    fn assign_attestation_data(
+        &self,
+        data: &AttestationData,
+        sha256_chip: &CachedSha256Chip<F>,
+        ctx: &mut Context<F>,
+        region: &mut Region<'_, F>,
+    ) -> Result<(), Error> {
+        let source_root =
+            sha256_chip.digest((data.source.epoch, data.source.root.as_ref()).into_witness(), ctx, region)?;
+        let target_root =
+            sha256_chip.digest((data.target.epoch, data.target.root.as_ref()).into_witness(), ctx, region)?;
+
+        let padding_chunk = [0; 32].map(|b| ctx.load_constant(F::from(b)));
+
+        let chunks: &[HashInputRaw<QuantumCell<F>>] = &[
+            padding_chunk.into(),
+            target_root.output_bytes.into(),
+            source_root.output_bytes.into(),
+            data.beacon_block_root.as_ref().into_witness(),
+            data.index.into_witness(),
+            data.slot.into_witness(),
+        ];
+
+        // let chunks = [
+        //     data.slot.into(),
+        //     data.index.into(),
+        //     data.beacon_block_root.as_ref().into(),
+        // ]
+        // .map(|c: HashInputRaw<u8>| c.into_witness())
+        // .into_iter()
+        // .chain([
+        //     source_root.output_bytes.into(),
+        //     target_root.output_bytes.into(),
+        //     padding_chunk.into(),
+        // ]);
+
+        // assert!(chunks.size_hint().0 % 2 == 0, "chunks must be even length");
+
+        // chunks
+        //     .tuple_windows()
+        //     .map(|(left, right)| {
+        //         sha256_chip.digest(HashInput::TwoToOne(left, right), ctx, region)
+        //     });
+
+        // let x = HashInput::TwoToOne(data.slot.into(), )
+
+        Ok(())
+    }
 
     fn fp2_chip(&self) -> Fp2Chip<'_, F> {
         Fp2Chip::new(self.fp_chip())
