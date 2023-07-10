@@ -6,7 +6,7 @@ use halo2_proofs::circuit::Cell;
 use crate::witness::{into_casper_entities, CasperEntityRow, CasperTag, Committee, Validator};
 
 use super::*;
-use types::Spec;
+use eth_types::Spec;
 
 /// The StateTable contains records of the state of the beacon chain.
 #[derive(Clone, Debug)]

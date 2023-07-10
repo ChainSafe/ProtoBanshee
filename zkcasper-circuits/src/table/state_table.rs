@@ -8,7 +8,7 @@ use crate::{
     witness::{MerkleTrace, MerkleTraceStep},
 };
 
-use types::Spec;
+use eth_types::Spec;
 
 use super::*;
 

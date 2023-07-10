@@ -13,7 +13,6 @@ use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{Challenge, ConstraintSystem, Error, Expression, SecondPhase, VirtualCells},
 };
-use types::Spec;
 
 pub(crate) fn query_expression<F: Field, T>(
     meta: &mut ConstraintSystem<F>,

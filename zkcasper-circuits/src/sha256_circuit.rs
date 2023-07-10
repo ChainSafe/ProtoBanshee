@@ -13,7 +13,7 @@ use crate::{
     util::{not, BaseConstraintBuilder, Challenges, Expr, SubCircuit, SubCircuitConfig},
     witness::{self, HashInput},
 };
-use eth_types::Field;
+use eth_types::{Field, Spec};
 use gadgets::util::{and, select, sum, xor};
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, Region, Value},
@@ -24,8 +24,6 @@ use halo2_proofs::{
 use itertools::Itertools;
 use log::debug;
 use util::*;
-
-use types::Spec;
 
 use self::sha256_bit::{multi_sha256, ShaRow};
 
@@ -1111,7 +1109,7 @@ mod tests {
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
 
-    use types::Test as S;
+    use eth_types::Test as S;
 
     #[derive(Default, Debug, Clone)]
     struct TestSha256<F: Field> {

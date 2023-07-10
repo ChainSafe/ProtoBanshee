@@ -33,7 +33,6 @@ use std::{
     cell::RefCell,
     marker::PhantomData,
 };
-use types::Spec;
 
 // TODO: Use halo2_ccc::bls12_381::FpChip after carry mod issue is resolved in halo2-lib.
 // for details see: https://github.com/flyingnobita/halo2-lib-no-fork/blob/bls12-381/halo2-ecc/src/bls12_381/notes.md
@@ -401,7 +400,7 @@ mod tests {
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
-    use types::Test as S;
+    use eth_types::Test as S;
 
     #[derive(Debug, Clone)]
     struct TestCircuit<'a, F: Field, S: Spec> {

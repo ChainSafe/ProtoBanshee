@@ -21,7 +21,6 @@ use halo2_proofs::{
 };
 use itertools::Itertools;
 use log::info;
-use types::Spec;
 
 use std::{iter, marker::PhantomData};
 
@@ -437,7 +436,7 @@ mod tests {
 
     use std::{fs, marker::PhantomData};
 
-    use types::Test as S;
+    use eth_types::Test as S;
 
     #[derive(Debug, Clone)]
     struct TestValidators<F: Field> {

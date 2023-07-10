@@ -3,11 +3,9 @@ use crate::{
     table::validators_table::ValidatorTableQueries,
     util::{Cell, CellType, ConstrainBuilderCommon, Constraint, Expr, Lookup},
 };
-use eth_types::Field;
+use eth_types::{Field, Spec};
 
 use halo2_proofs::plonk::Expression;
-
-use types::Spec;
 
 pub struct ConstraintBuilder<'a, F: Field> {
     pub constraints: Vec<Constraint<F>>,

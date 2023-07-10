@@ -26,7 +26,6 @@ use std::{
     ops::{Add, Mul},
     vec,
 };
-use types::{Spec};
 
 pub const TREE_LEVEL_AUX_COLUMNS: usize = 1;
 
@@ -215,7 +214,7 @@ mod tests {
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
     use std::{fs, marker::PhantomData};
-    use types::Test as S;
+    use eth_types::Test as S;
 
     #[derive(Debug, Clone)]
     struct TestStateSSZ<F: Field> {

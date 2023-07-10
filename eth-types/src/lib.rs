@@ -7,6 +7,9 @@ use halo2_proofs::{
     },
 };
 
+mod types;
+pub use types::*;
+
 /// Trait used to reduce verbosity with the declaration of the [`PrimeField`]
 /// trait and its repr.
 pub trait Field: FieldExt + Halo2Field + PrimeField<Repr = [u8; 32]> + Hash + Ord {
