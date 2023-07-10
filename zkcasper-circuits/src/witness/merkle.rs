@@ -3,7 +3,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::witness::HashInputRaw;
+use crate::witness::HashInputChunk;
 
 use super::HashInput;
 
@@ -67,8 +67,8 @@ impl MerkleTrace {
                 );
 
                 HashInput::TwoToOne(
-                    HashInputRaw::new(step.node, step.is_rlc[0]),
-                    HashInputRaw::new(step.sibling, step.is_rlc[1]),
+                    HashInputChunk::new(step.node, step.is_rlc[0]),
+                    HashInputChunk::new(step.sibling, step.is_rlc[1]),
                 )
             })
             .collect_vec()
