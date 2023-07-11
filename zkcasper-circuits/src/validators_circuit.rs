@@ -2,7 +2,7 @@ pub(crate) mod cell_manager;
 pub(crate) mod constraint_builder;
 
 use crate::{
-    gadget::LtGadget,
+    gadget::math::LtGadget,
     table::{
         state_table::{StateTables, StateTreeLevel},
         LookupTable, ValidatorsTable,

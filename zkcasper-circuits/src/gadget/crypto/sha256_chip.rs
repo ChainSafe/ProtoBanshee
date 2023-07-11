@@ -6,7 +6,7 @@ use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::{sha256_circuit::util::Sha256AssignedRows, witness::HashInput};
+use crate::{sha256_circuit::{Sha256CircuitConfig, util::Sha256AssignedRows}, witness::HashInput};
 use halo2_base::safe_types::RangeChip;
 use halo2_base::QuantumCell;
 use halo2_base::{
@@ -19,7 +19,6 @@ use halo2_proofs::{
     plonk::{Assigned, Error},
 };
 
-use super::Sha256CircuitConfig;
 
 const BLOCK_BYTE: usize = 64;
 const SHA256_CONTEXT_ID: usize = usize::MAX;

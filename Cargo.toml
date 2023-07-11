@@ -27,7 +27,7 @@ lto = "thin"
 incremental = true
 
 [patch."https://github.com/privacy-scaling-explorations/halo2curves"]
-halo2curves = { git = "https://github.com/timoftime/halo2curves", branch = "zkcasper" }
+halo2curves = { git = "https://github.com/timoftime/halo2curves", branch = "flyingnobita/bls12_381" }
 
 [patch."https://github.com/axiom-crypto/halo2-lib"]
 halo2-base = { git = "https://github.com/timoftime/halo2-lib", branch = "zkcasper", default-features = false, features = [

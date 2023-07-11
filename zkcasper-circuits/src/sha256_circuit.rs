@@ -3,15 +3,8 @@
 //! - https://hackmd.io/@tsgAyLwURdqHzWxSmwVLjw/Sk5AOhWhc#Bit-implementation
 //! - https://github.com/SoraSuegami/zkevm-circuits/blob/main/zkevm-circuits/src/sha256_circuit/sha256_bit.rs
 
-mod cached_chip;
 mod sha256_bit;
-mod sha256_chip;
-mod util;
-
-pub mod chips {
-    pub use super::cached_chip::CachedSha256Chip;
-    pub use super::sha256_chip::{AssignedHashResult, Sha256Chip};
-}
+pub mod util;
 
 use std::marker::PhantomData;
 

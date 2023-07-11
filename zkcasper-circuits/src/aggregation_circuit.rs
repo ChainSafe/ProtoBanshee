@@ -125,11 +125,11 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                     let randomness = QuantumCell::Constant(
                         halo2_base::utils::value_to_option(challenges.sha256_input()).unwrap(),
                     );
-                    
+
                     let pubkey_rlcs = pubkeys_compressed
                         .into_iter()
                         .map(|compressed| {
-                            self.get_rlc(&compressed[..S::G1_FQ_BYTES], &randomness, ctx)
+                            self.get_rlc(&compressed[..S::G1_BYTES_COMPRESSED], &randomness, ctx)
                         })
                         .collect_vec();
 
@@ -192,7 +192,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             let mut in_committee_pubkeys = vec![];
 
             for validator in validators {
-                let pk_compressed = validator.pubkey[..S::G1_FQ_BYTES].to_vec();
+                let pk_compressed = validator.pubkey[..S::G1_BYTES_COMPRESSED].to_vec();
 
                 // FIXME: replace with retriving y coordinate from cached map.
                 let pk_affine =
@@ -212,14 +212,14 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
                 // load masked bit from compressed representation
                 let masked_byte =
-                    ctx.load_witness(F::from(pk_compressed[S::G1_FQ_BYTES - 1] as u64));
+                    ctx.load_witness(F::from(pk_compressed[S::G1_BYTES_COMPRESSED - 1] as u64));
                 let cleared_byte = self.clear_ysign_mask(&masked_byte, ctx);
                 // constraint that the loaded masked byte is consistent with the assigned bytes used to construct the point.
-                ctx.constrain_equal(&cleared_byte, &assigned_uncompressed[S::G1_FQ_BYTES - 1]);
+                ctx.constrain_equal(&cleared_byte, &assigned_uncompressed[S::G1_BYTES_COMPRESSED - 1]);
 
                 // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                 pubkeys_compressed.push({
-                    let mut compressed_bytes = assigned_uncompressed[..S::G1_FQ_BYTES - 1].to_vec();
+                    let mut compressed_bytes = assigned_uncompressed[..S::G1_BYTES_COMPRESSED - 1].to_vec();
                     compressed_bytes.push(masked_byte);
                     compressed_bytes
                 });
@@ -248,7 +248,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     ) -> [AssignedValue<F>; 2] {
         let gate = self.range().gate();
         // assertion check for assigned_bytes to be equal to S::G1_FQ_BYTES from specification
-        assert_eq!(assigned_bytes.len(), S::G1_FQ_BYTES);
+        assert_eq!(assigned_bytes.len(), S::G1_BYTES_COMPRESSED);
 
         // TODO: remove next 2 lines after switching to bls12-381
         let mut assigned_bytes = assigned_bytes.to_vec();
@@ -298,9 +298,9 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
         // TODO: try optimized solution if LIMB_BITS i a multiple of 8:
         // https://github.com/axiom-crypto/axiom-eth/blob/6d2a4acf559a8716b867a715f3acfab745fbad3f/src/util/mod.rs#L419
-        let bytes_per_limb = S::G1_FQ_BYTES / S::NUM_LIMBS + 1;
+        let bytes_per_limb = S::G1_BYTES_COMPRESSED / S::NUM_LIMBS + 1;
         let field_limbs = &assigned_bytes
-            .chunks(S::G1_FQ_BYTES)
+            .chunks(S::G1_BYTES_COMPRESSED)
             .map(|fq_bytes| {
                 fq_bytes
                     .chunks(bytes_per_limb)
