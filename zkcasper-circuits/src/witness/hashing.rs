@@ -5,7 +5,7 @@ use eth_types::Field;
 use halo2_base::{AssignedValue, Context, QuantumCell};
 use itertools::Itertools;
 
-use crate::util::{WitnessFrom, ConstantFrom, IntoWitness};
+use crate::util::{ConstantFrom, IntoWitness, WitnessFrom};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum HashInput<T> {
@@ -19,6 +19,10 @@ impl<T: Clone> HashInput<T> {
             HashInput::Single(inner) => inner.bytes.len(),
             HashInput::TwoToOne(left, right) => left.bytes.len() + right.bytes.len(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn to_vec(self) -> Vec<T> {
@@ -103,19 +107,21 @@ impl<F: Field, I: Into<HashInputChunk<u8>>> WitnessFrom<I> for HashInput<Quantum
         let input: HashInputChunk<u8> = input.into();
 
         HashInput::Single(HashInputChunk {
-            bytes: input.bytes.into_iter().map(|b| QuantumCell::Witness(F::from(b as u64))).collect(),
+            bytes: input
+                .bytes
+                .into_iter()
+                .map(|b| QuantumCell::Witness(F::from(b as u64)))
+                .collect(),
             is_rlc: input.is_rlc,
         })
     }
 }
 
-impl<F: Field, IL: Into<HashInputChunk<u8>>, IR: Into<HashInputChunk<u8>>> WitnessFrom<(IL, IR)> for HashInput<QuantumCell<F>>
+impl<F: Field, IL: Into<HashInputChunk<u8>>, IR: Into<HashInputChunk<u8>>> WitnessFrom<(IL, IR)>
+    for HashInput<QuantumCell<F>>
 {
     fn witness_from((left, right): (IL, IR)) -> Self {
-        HashInput::TwoToOne(
-            left.into_witness(),
-            right.into_witness(),
-        )
+        HashInput::TwoToOne(left.into_witness(), right.into_witness())
     }
 }
 
@@ -143,7 +149,11 @@ impl<F: Field, I: Into<HashInputChunk<u8>>> WitnessFrom<I> for HashInputChunk<Qu
         let input: HashInputChunk<u8> = input.into();
 
         HashInputChunk {
-            bytes: input.bytes.into_iter().map(|b| QuantumCell::Witness(F::from(b as u64))).collect(),
+            bytes: input
+                .bytes
+                .into_iter()
+                .map(|b| QuantumCell::Witness(F::from(b as u64)))
+                .collect(),
             is_rlc: input.is_rlc,
         }
     }
@@ -154,7 +164,11 @@ impl<F: Field, I: Into<HashInputChunk<u8>>> ConstantFrom<I> for HashInputChunk<Q
         let input: HashInputChunk<u8> = input.into();
 
         HashInputChunk {
-            bytes: input.bytes.into_iter().map(|b| QuantumCell::Constant(F::from(b as u64))).collect(),
+            bytes: input
+                .bytes
+                .into_iter()
+                .map(|b| QuantumCell::Constant(F::from(b as u64)))
+                .collect(),
             is_rlc: input.is_rlc,
         }
     }
@@ -201,11 +215,13 @@ impl<F: Field, I: IntoIterator<Item = AssignedValue<F>>> From<I>
     for HashInputChunk<QuantumCell<F>>
 {
     fn from(input: I) -> Self {
-        let bytes = input.into_iter().map(|av| QuantumCell::Existing(av)).collect_vec();
+        let bytes = input
+            .into_iter()
+            .map(|av| QuantumCell::Existing(av))
+            .collect_vec();
         HashInputChunk {
             is_rlc: bytes.len() >= 32,
-            bytes: bytes,
+            bytes,
         }
     }
 }
-

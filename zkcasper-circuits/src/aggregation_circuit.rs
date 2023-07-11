@@ -117,13 +117,13 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
-                    let (_aggregated_pubkeys, pubkeys_compressed) = self.process_validators(ctx);
+                    let mut pubkeys_compressed = vec![];
+                    let _aggregated_pubkeys = self.process_validators(ctx, &mut pubkeys_compressed);
 
                     let ctx = builder.main(1);
 
                     let randomness = QuantumCell::Constant(
-                        halo2_base::utils::value_to_option(challenges.sha256_input().clone())
-                            .unwrap(),
+                        halo2_base::utils::value_to_option(challenges.sha256_input()).unwrap(),
                     );
                     let pubkey_rlcs = pubkeys_compressed
                         .into_iter()
@@ -177,20 +177,16 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     fn process_validators(
         &self,
         ctx: &mut Context<F>,
-    ) -> (Vec<EcPoint<F, FpPoint<F>>>, Vec<Vec<AssignedValue<F>>>) {
+        pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
+    ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let range = self.range();
 
         let fp_chip = self.fp_chip();
         let g1_chip = self.g1_chip();
 
-        let mut pubkeys_compressed = vec![];
         let mut aggregated_pubkeys = vec![];
 
-        for (_committee, validators) in self
-            .validators
-            .into_iter()
-            .group_by(|v| v.committee)
-            .into_iter()
+        for (_committee, validators) in self.validators.iter().group_by(|v| v.committee).into_iter()
         {
             let mut in_committee_pubkeys = vec![];
 
@@ -202,16 +198,13 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                     G1Affine::from_bytes(&pk_compressed.as_slice().try_into().unwrap()).unwrap();
 
                 // FIXME: constraint y coordinate bytes.
-                let assigned_uncompressed: Vec<AssignedValue<F>> = ctx
-                    .assign_witnesses(
-                        pk_affine
-                            .to_uncompressed()
-                            .as_ref()
-                            .iter()
-                            .map(|&b| F::from(b as u64)),
-                    )
-                    .try_into()
-                    .unwrap();
+                let assigned_uncompressed: Vec<AssignedValue<F>> = ctx.assign_witnesses(
+                    pk_affine
+                        .to_uncompressed()
+                        .as_ref()
+                        .iter()
+                        .map(|&b| F::from(b as u64)),
+                );
 
                 // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
                 assert_eq!(assigned_uncompressed.len(), S::G1_BYTES_UNCOMPRESSED);
@@ -227,7 +220,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                 pubkeys_compressed.push({
                     let mut compressed_bytes = assigned_uncompressed[..S::G1_FQ_BYTES - 1].to_vec();
                     compressed_bytes.push(masked_byte);
-                    compressed_bytes.try_into().unwrap()
+                    compressed_bytes
                 });
 
                 in_committee_pubkeys.push(self.uncompressed_to_g1affine(
@@ -241,7 +234,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             aggregated_pubkeys.push(g1_chip.sum::<G1Affine>(ctx, in_committee_pubkeys));
         }
 
-        (aggregated_pubkeys, pubkeys_compressed)
+        aggregated_pubkeys
     }
 
     /// Calculates RLCs (1 for each of two chacks of BLS12-381) for compresed bytes of pubkey.

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, cell::RefCell};
+use std::{cell::RefCell, collections::HashMap};
 
 use eth_types::Field;
 use halo2_base::{Context, QuantumCell};
@@ -34,7 +34,7 @@ impl<'a, F: Field> CachedSha256Chip<'a, F> {
             return Ok(result.clone());
         }
 
-        let result = self.inner.digest(input.clone(), ctx, region)?;
+        let result = self.inner.digest(input, ctx, region)?;
         cache.insert(bytes, result.clone());
         Ok(result)
     }

@@ -3,15 +3,14 @@
 //! - https://hackmd.io/@tsgAyLwURdqHzWxSmwVLjw/Sk5AOhWhc#Bit-implementation
 //! - https://github.com/SoraSuegami/zkevm-circuits/blob/main/zkevm-circuits/src/sha256_circuit/sha256_bit.rs
 
+mod cached_chip;
 mod sha256_bit;
 mod sha256_chip;
-mod cached_chip;
 mod util;
 
-
 pub mod chips {
-    pub use super::sha256_chip::{Sha256Chip, AssignedHashResult};
     pub use super::cached_chip::CachedSha256Chip;
+    pub use super::sha256_chip::{AssignedHashResult, Sha256Chip};
 }
 
 use std::marker::PhantomData;
@@ -99,7 +98,9 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
         let is_right = meta.advice_column();
 
         let is_paddings = array_init::array_init(|_| meta.advice_column());
-        is_paddings.iter().for_each(|&col| meta.enable_equality(col));
+        is_paddings
+            .iter()
+            .for_each(|&col| meta.enable_equality(col));
         let data_rlcs: [Column<Advice>; 4] = array_init::array_init(|_| meta.advice_column());
 
         let round_cst = meta.fixed_column();
@@ -495,10 +496,10 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                 let mut new_data_rlc = data_rlc_prev.clone() * not::expr(start_new_hash.expr());
                 let mut new_data_val = data_vals_prev
                     .clone()
-                    .map(|e| e.clone() * not::expr(start_new_hash.expr()));
+                    .map(|e| e * not::expr(start_new_hash.expr()));
                 let mut new_u8_pow = u8_pow_prev
                     .clone()
-                    .map(|e| e.clone() * not::expr(start_new_hash.expr()));
+                    .map(|e| e * not::expr(start_new_hash.expr()));
 
                 cb.require_equal(
                     "initial data rlc",
@@ -773,7 +774,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
             || "assign sha256 data",
             |mut region| {
                 let mut assigned_rows = Sha256AssignedRows::new(0);
-                self.assign_with_region(&mut region, witness, &mut assigned_rows, )
+                self.assign_with_region(&mut region, witness, &mut assigned_rows)
             },
         )
     }
@@ -1226,13 +1227,7 @@ mod tests {
     #[test]
     fn test_sha256_two2one_simple() {
         let k = 11;
-        let inputs = vec![
-            (
-                vec![0u8; 32],
-                vec![0u8; 32],
-            ).into();
-            10
-        ];
+        let inputs = vec![(vec![0u8; 32], vec![0u8; 32],).into(); 10];
         let circuit = TestSha256 {
             inner: Sha256Circuit::new(inputs),
         };
@@ -1244,13 +1239,7 @@ mod tests {
     #[test]
     fn test_sha256_two2one_val_and_rlc() {
         let k = 10;
-        let inputs = vec![
-            (
-                vec![vec![2u8; 4], vec![0u8; 28]].concat(),
-                vec![3u8; 4],
-            ).into();
-            1
-        ];
+        let inputs = vec![(vec![vec![2u8; 4], vec![0u8; 28]].concat(), vec![3u8; 4],).into(); 1];
         let circuit = TestSha256 {
             inner: Sha256Circuit::new(inputs),
         };

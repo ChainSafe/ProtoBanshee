@@ -1,4 +1,5 @@
 #![feature(associated_type_bounds)]
+#![allow(unused, clippy::uninlined_format_args)]
 pub(crate) mod gadget;
 pub mod table;
 pub(crate) mod util;
