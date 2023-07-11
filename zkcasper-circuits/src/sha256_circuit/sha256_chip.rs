@@ -281,7 +281,7 @@ mod test {
             plonk::{Circuit, ConstraintSystem},
         },
     };
-
+    use eth_types::Test;
     use sha2::{Digest, Sha256};
 
     #[derive(Debug, Clone)]
@@ -310,7 +310,7 @@ mod test {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let sha_table = SHA256Table::construct(meta);
-            let sha256_configs = Sha256CircuitConfig::<F>::new(meta, sha_table);
+            let sha256_configs = Sha256CircuitConfig::<F>::new::<Test>(meta, sha_table);
             let range = RangeConfig::configure(
                 meta,
                 RangeStrategy::Vertical,

@@ -1,5 +1,5 @@
 mod spec;
-pub use spec::*;
+pub use spec::{Spec, Mainnet, Test};
 
 use core::hash::Hash;
 use halo2_proofs::{

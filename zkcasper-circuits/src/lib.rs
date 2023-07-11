@@ -1,4 +1,3 @@
-#![feature(generic_const_exprs)]
 #![feature(associated_type_bounds)]
 pub(crate) mod gadget;
 pub mod table;

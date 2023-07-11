@@ -1,7 +1,6 @@
-use std::{cell::RefCell, collections::HashMap, vec};
+use std::{cell::RefCell, collections::HashMap, vec, marker::PhantomData};
 
 use crate::{
-    aggregation_circuit::{LIMB_BITS, NUM_LIMBS},
     sha256_circuit::{
         chips::{CachedSha256Chip, Sha256Chip},
         Sha256CircuitConfig,
@@ -9,7 +8,7 @@ use crate::{
     util::{Challenges, IntoWitness, SubCircuit, SubCircuitConfig},
     witness::{self, HashInput, HashInputChunk},
 };
-use eth_types::Field;
+use eth_types::{Field, Spec};
 use halo2_base::{
     gates::{builder::GateThreadBuilder, range::RangeConfig},
     safe_types::RangeChip,
@@ -55,7 +54,7 @@ pub struct AttestationsCircuitArgs<F: Field> {
 impl<F: Field> SubCircuitConfig<F> for AttestationsCircuitConfig<F> {
     type ConfigArgs = AttestationsCircuitArgs<F>;
 
-    fn new(_meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
+    fn new<S: Spec>(_meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let range = args.range;
         let sha256_config = args.sha256_config;
         Self {
@@ -68,27 +67,29 @@ impl<F: Field> SubCircuitConfig<F> for AttestationsCircuitConfig<F> {
 }
 
 #[derive(Debug)]
-pub struct AttestationsCircuitBuilder<'a, F: Field> {
+pub struct AttestationsCircuitBuilder<'a, S: Spec, F: Field> {
     builder: RefCell<GateThreadBuilder<F>>,
     attestations: &'a [IndexedAttestation<MAX_VALIDATORS_PER_COMMITTEE>],
     range: &'a RangeChip<F>,
     fp_chip: FpChip<'a, F>,
     zero_hashes: RefCell<HashMap<usize, HashInputChunk<QuantumCell<F>>>>,
+    _spec: PhantomData<S>,
 }
 
-impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
+impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
     pub fn new(
         builder: GateThreadBuilder<F>,
         attestations: &'a [IndexedAttestation<MAX_VALIDATORS_PER_COMMITTEE>],
         range: &'a RangeChip<F>,
     ) -> Self {
-        let fp_chip = FpChip::new(range, LIMB_BITS, NUM_LIMBS);
+        let fp_chip = FpChip::new(range, S::LIMB_BITS, S::NUM_LIMBS);
         Self {
             builder: RefCell::new(builder),
             range,
             attestations,
             fp_chip,
             zero_hashes: Default::default(),
+            _spec: PhantomData,
         }
     }
 
@@ -282,7 +283,7 @@ impl<'a, F: Field> AttestationsCircuitBuilder<'a, F> {
     }
 }
 
-impl<'a, F: Field> SubCircuit<F> for AttestationsCircuitBuilder<'a, F> {
+impl<'a, S: Spec, F: Field> SubCircuit<F> for AttestationsCircuitBuilder<'a, S, F> {
     type Config = AttestationsCircuitConfig<F>;
 
     fn new_from_block(_block: &witness::Block<F>) -> Self {
@@ -327,13 +328,14 @@ mod tests {
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
+    use eth_types::Test;
 
     #[derive(Debug)]
-    struct TestCircuit<'a, F: Field> {
-        inner: AttestationsCircuitBuilder<'a, F>,
+    struct TestCircuit<'a, S: Spec, F: Field> {
+        inner: AttestationsCircuitBuilder<'a, S, F>,
     }
 
-    impl<'a, F: Field> TestCircuit<'a, F> {
+    impl<'a, S: Spec, F: Field> TestCircuit<'a, S, F> {
         const NUM_ADVICE: &[usize] = &[6, 1];
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 1;
@@ -341,7 +343,7 @@ mod tests {
         const K: usize = 14;
     }
 
-    impl<'a, F: Field> Circuit<F> for TestCircuit<'a, F> {
+    impl<'a, S: Spec, F: Field> Circuit<F> for TestCircuit<'a, S, F> {
         type Config = (AttestationsCircuitConfig<F>, Challenges<F>);
         type FloorPlanner = SimpleFloorPlanner;
 
@@ -360,8 +362,8 @@ mod tests {
                 Self::K,
             );
             let hash_table = SHA256Table::construct(meta);
-            let sha256_config = Sha256CircuitConfig::new(meta, hash_table);
-            let config = AttestationsCircuitConfig::new(
+            let sha256_config = Sha256CircuitConfig::new::<Test>(meta, hash_table);
+            let config = AttestationsCircuitConfig::new::<Test>(
                 meta,
                 AttestationsCircuitArgs {
                     range,
@@ -388,16 +390,16 @@ mod tests {
 
     #[test]
     fn test_attestations_circuit() {
-        let k = TestCircuit::<Fr>::K;
+        let k = TestCircuit::<Test, Fr>::K;
 
-        let range = RangeChip::default(TestCircuit::<Fr>::LOOKUP_BITS);
+        let range = RangeChip::default(TestCircuit::<Test, Fr>::LOOKUP_BITS);
         let builder = GateThreadBuilder::new(false);
         builder.config(k, None);
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
         let attestations = attestations_dev(validators);
 
-        let circuit = TestCircuit::<'_, Fr> {
+        let circuit = TestCircuit::<'_, Test, Fr> {
             inner: AttestationsCircuitBuilder::new(builder, &attestations, &range),
         };
 
