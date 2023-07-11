@@ -69,7 +69,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         let mut extra_assignment = self.extra_assignments.borrow_mut();
         let assigned_advices = &mut extra_assignment.assigned_advices;
         let mut assigned_input_bytes = assigned_input.to_vec();
-        let rnd = QuantumCell::Constant(self.randomness.clone());
+        let rnd = QuantumCell::Constant(self.randomness);
         let input_byte_size = assigned_input_bytes.len();
         let max_byte_size = self.max_input_size;
         assert!(input_byte_size <= max_byte_size);
@@ -127,7 +127,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         }
 
         let zero = ctx.load_zero();
-        let mut full_input_len = zero.clone();
+        let mut full_input_len = zero;
 
         let mut offset = 0;
         for round_idx in 0..max_round {
@@ -146,7 +146,7 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
 
             let padding_selectors = assigned_rows.padding_selectors
                 [16 * round_idx..16 * (round_idx + 1)]
-                .into_iter()
+                .iter()
                 .map(|cells| {
                     self.upload_assigned_cells(
                         cells,
@@ -177,10 +177,10 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
                 gate.add(ctx, full_input_len, muled)
             };
 
-            let mut sum = zero.clone();
+            let mut sum = zero;
             for word_idx in 0..16 {
                 let offset_in = 64 * round_idx + 4 * word_idx;
-                let assigned_input_u32 = &assigned_input_bytes[offset_in + 0..offset_in + 4];
+                let assigned_input_u32 = &assigned_input_bytes[offset_in..(offset_in + 4)];
 
                 for (idx, &assigned_byte) in assigned_input_u32.iter().enumerate() {
                     let tmp = gate.mul_add(ctx, sum, rnd, assigned_byte);
@@ -270,6 +270,7 @@ mod test {
     use crate::util::{Challenges, IntoWitness, SubCircuitConfig};
 
     use super::*;
+    use eth_types::Test;
     use halo2_base::gates::range::RangeConfig;
     use halo2_base::SKIP_FIRST_PASS;
     use halo2_base::{
@@ -281,7 +282,6 @@ mod test {
             plonk::{Circuit, ConstraintSystem},
         },
     };
-    use eth_types::Test;
     use sha2::{Digest, Sha256};
 
     #[derive(Debug, Clone)]

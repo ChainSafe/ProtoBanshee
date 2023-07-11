@@ -113,12 +113,10 @@ impl SHA256Table {
         layouter.assign_region(
             || "sha256 table",
             |mut region| {
-                let mut offset = 0;
-
                 self.annotate_columns_in_region(&mut region);
 
                 let sha256_table_columns = <SHA256Table as LookupTable<F>>::advice_columns(self);
-                for input in inputs.clone() {
+                for (offset, input) in inputs.clone().into_iter().enumerate() {
                     let row = Self::assignments_dev(input, challenge);
 
                     for (&column, value) in sha256_table_columns.iter().zip_eq(row) {
@@ -129,7 +127,6 @@ impl SHA256Table {
                             || value,
                         )?;
                     }
-                    offset += 1;
                 }
                 Ok(())
             },

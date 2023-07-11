@@ -195,9 +195,9 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
                         if length <= input_len {
                             data_vals[0] += u8_pow[0] * F::from(*byte as u64);
                             data_vals[1] += u8_pow[1] * F::from(*byte as u64);
-                            u8_pow[0] = u8_pow[0] * f256;
+                            u8_pow[0] *= f256;
                             if length - 4 + idx >= inputs[0].len() {
-                                u8_pow[1] = u8_pow[1] * f256;
+                                u8_pow[1] *= f256;
                             }
                         }
                         // end

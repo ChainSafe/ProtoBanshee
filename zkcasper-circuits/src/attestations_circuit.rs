@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, vec, marker::PhantomData};
+use std::{cell::RefCell, collections::HashMap, marker::PhantomData, vec};
 
 use crate::{
     sha256_circuit::{
@@ -103,7 +103,7 @@ impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) {
-        assert!(self.attestations.len() > 0, "no attestations supplied");
+        assert!(!self.attestations.is_empty(), "no attestations supplied");
         assert!(
             self.attestations.len() <= MAX_COMMITTEES_PER_SLOT * SLOTS_PER_EPOCH,
             "too many attestations supplied",
@@ -160,7 +160,7 @@ impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
                     {
                         assert!(!signature.is_infinity());
 
-                        let _signature = self.assign_signature(&signature, &g2_chip, ctx);
+                        let _signature = self.assign_signature(signature, &g2_chip, ctx);
 
                         let chunks = [
                             data.slot.into_witness(),
@@ -232,7 +232,7 @@ impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
         let len_even = chunks.len() + chunks.len() % 2;
         let height = (len_even as f64).log2().ceil() as usize;
 
-        for depth in 0..height {
+        for (depth, item) in ZERO_HASHES.iter().enumerate().take(height) {
             // Pad to even length using 32 zero bytes assigned as constants.
             let len_even = chunks.len() + chunks.len() % 2;
             let padded_chunks = chunks
@@ -241,9 +241,7 @@ impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
                     zero_hashes
                         .entry(depth)
                         .or_insert_with(|| {
-                            HashInputChunk::from(
-                                ZERO_HASHES[depth].map(|b| ctx.load_constant(F::from(b as u64))),
-                            )
+                            HashInputChunk::from(item.map(|b| ctx.load_constant(F::from(b as u64))))
                         })
                         .clone()
                 })
@@ -324,11 +322,11 @@ mod tests {
     };
 
     use super::*;
+    use eth_types::Test;
     use halo2_base::gates::range::RangeStrategy;
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
-    use eth_types::Test;
 
     #[derive(Debug)]
     struct TestCircuit<'a, S: Spec, F: Field> {
