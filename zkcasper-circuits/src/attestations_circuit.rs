@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, marker::PhantomData, vec};
 
 use crate::{
-    gadget::crypto::{CachedSha256Chip, Sha256Chip},
+    gadget::crypto::{CachedHashChip, Sha256Chip, HashChip},
     sha256_circuit::Sha256CircuitConfig,
     util::{Challenges, IntoWitness, SubCircuit, SubCircuitConfig},
     witness::{self, HashInput, HashInputChunk},
@@ -115,7 +115,7 @@ impl<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
             .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
 
-        let hasher = CachedSha256Chip::new(Sha256Chip::new(
+        let hasher = CachedHashChip::new(Sha256Chip::new(
             &config.sha256_config,
             self.range(),
             64,
@@ -185,7 +185,7 @@ impl<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
                         );
                     }
 
-                    let extra_assignments = hasher.inner.take_extra_assignments();
+                    let extra_assignments = hasher.take_extra_assignments();
 
                     let _ = builder.assign_all(
                         &config.range.gate,
@@ -222,7 +222,7 @@ impl<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
     fn merkleize_chunks<I: IntoIterator<Item = HashInputChunk<QuantumCell<F>>>>(
         &self,
         chunks: I,
-        hasher: &CachedSha256Chip<F>,
+        hasher: &CachedHashChip<F, Sha256Chip<'a, F>>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
     ) -> Result<Vec<AssignedValue<F>>, Error>

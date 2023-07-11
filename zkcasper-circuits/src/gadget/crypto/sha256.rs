@@ -19,9 +19,21 @@ use halo2_proofs::{
     plonk::{Assigned, Error},
 };
 
-
 const BLOCK_BYTE: usize = 64;
 const SHA256_CONTEXT_ID: usize = usize::MAX;
+
+pub trait HashChip<F: Field> {
+    fn digest(
+        &self,
+        input: HashInput<QuantumCell<F>>,
+        ctx: &mut Context<F>,
+        region: &mut Region<'_, F>,
+    ) -> Result<AssignedHashResult<F>, Error>;
+
+    fn take_extra_assignments(&self) -> KeygenAssignments<F>;
+
+    fn set_extra_assignments(&mut self, extra_assignments: KeygenAssignments<F>);
+} 
 
 #[derive(Debug, Clone)]
 pub struct AssignedHashResult<F: Field> {
@@ -40,26 +52,8 @@ pub struct Sha256Chip<'a, F: Field> {
     sha256_circui_offset: RefCell<usize>,
 }
 
-impl<'a, F: Field> Sha256Chip<'a, F> {
-    pub fn new(
-        config: &'a Sha256CircuitConfig<F>,
-        range: &'a RangeChip<F>,
-        max_input_size: usize,
-        randomness: Value<F>,
-        extra_assignments: Option<KeygenAssignments<F>>,
-        sha256_circui_offset: usize,
-    ) -> Self {
-        Self {
-            config,
-            max_input_size,
-            range,
-            randomness: value_to_option(randomness).expect("randomness is not assigned"),
-            extra_assignments: RefCell::new(extra_assignments.unwrap_or_default()),
-            sha256_circui_offset: RefCell::new(sha256_circui_offset),
-        }
-    }
-
-    pub fn digest(
+impl<'a, F: Field> HashChip<F> for Sha256Chip<'a, F> {
+    fn digest(
         &self,
         input: HashInput<QuantumCell<F>>,
         ctx: &mut Context<F>,
@@ -218,12 +212,32 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
     /// **Warning**: In case `extra_assignments` wasn't default at the time of chip initialization,
     /// use `set_extra_assignments` to restore at the start of region declartion.
     /// Otherwise at the second synthesis run, the setted `extra_assignments` will be erased.
-    pub fn take_extra_assignments(&self) -> KeygenAssignments<F> {
+    fn take_extra_assignments(&self) -> KeygenAssignments<F> {
         self.extra_assignments.take()
     }
 
-    pub fn set_extra_assignments(&mut self, extra_assignments: KeygenAssignments<F>) {
+    fn set_extra_assignments(&mut self, extra_assignments: KeygenAssignments<F>) {
         self.extra_assignments = RefCell::new(extra_assignments);
+    }
+}
+
+impl<'a, F: Field> Sha256Chip<'a, F> {
+    pub fn new(
+        config: &'a Sha256CircuitConfig<F>,
+        range: &'a RangeChip<F>,
+        max_input_size: usize,
+        randomness: Value<F>,
+        extra_assignments: Option<KeygenAssignments<F>>,
+        sha256_circui_offset: usize,
+    ) -> Self {
+        Self {
+            config,
+            max_input_size,
+            range,
+            randomness: value_to_option(randomness).expect("randomness is not assigned"),
+            extra_assignments: RefCell::new(extra_assignments.unwrap_or_default()),
+            sha256_circui_offset: RefCell::new(sha256_circui_offset),
+        }
     }
 
     fn assigned_cell2value(
