@@ -135,7 +135,6 @@ impl StateTables {
         layouter: &mut impl Layouter<F>,
         trace: &MerkleTrace,
         challenge: Value<F>,
-        _spec: S,
     ) -> Result<(), Error> {
         let mut trace_by_depth = trace.trace_by_level_map();
 

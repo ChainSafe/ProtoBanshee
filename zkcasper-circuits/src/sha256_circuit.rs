@@ -68,7 +68,7 @@ pub struct Sha256CircuitConfig<F> {
 impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
     type ConfigArgs = SHA256Table;
 
-    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, spec: S) -> Self {
+    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         // consts
         let two = F::from(2);
         let f256 = two.pow_const(8);
@@ -1127,7 +1127,7 @@ mod tests {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let hash_table = SHA256Table::construct(meta);
-            Sha256CircuitConfig::new(meta, hash_table, S)
+            Sha256CircuitConfig::new::<S>(meta, hash_table)
         }
 
         fn synthesize(

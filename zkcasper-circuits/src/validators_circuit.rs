@@ -48,7 +48,7 @@ pub struct ValidatorsCircuitArgs {
 impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
     type ConfigArgs = ValidatorsCircuitArgs;
 
-    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, _spec: S) -> Self {
+    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let q_enabled = meta.fixed_column();
         let target_epoch = meta.advice_column();
         let state_tables = args.state_tables;
@@ -459,7 +459,7 @@ mod tests {
             };
 
             (
-                ValidatorsCircuitConfig::new(meta, args, S),
+                ValidatorsCircuitConfig::new::<S>(meta, args),
                 Challenges::construct(meta),
             )
         }
@@ -473,7 +473,7 @@ mod tests {
             config
                 .0
                 .state_tables
-                .dev_load(&mut layouter, &self.state_tree_trace, challenge, S)?;
+                .dev_load::<S, _>(&mut layouter, &self.state_tree_trace, challenge)?;
             self.inner.synthesize_sub(
                 &mut config.0,
                 &config.1.values(&mut layouter),

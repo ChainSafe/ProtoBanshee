@@ -29,10 +29,7 @@ use halo2curves::{
 };
 use itertools::Itertools;
 use num_bigint::BigUint;
-use std::{
-    cell::RefCell,
-    marker::PhantomData,
-};
+use std::{cell::RefCell, marker::PhantomData};
 
 // TODO: Use halo2_ccc::bls12_381::FpChip after carry mod issue is resolved in halo2-lib.
 // for details see: https://github.com/flyingnobita/halo2-lib-no-fork/blob/bls12-381/halo2-ecc/src/bls12_381/notes.md
@@ -52,7 +49,7 @@ pub struct AggregationCircuitArgs<F: Field> {
 impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
     type ConfigArgs = AggregationCircuitArgs<F>;
 
-    fn new<S: Spec>(_meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, spec: S) -> Self {
+    fn new<S: Spec>(_meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let validators_table = args.validators_table;
         let range = args.range;
 
@@ -75,7 +72,7 @@ pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec> {
     // Witness
     validators: &'a [Validator],
     _committees: &'a [Committee],
-    _spec: PhantomData<S>
+    _spec: PhantomData<S>,
 }
 
 impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
@@ -84,7 +81,6 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         validators: &'a [Validator],
         committees: &'a [Committee],
         range: &'a RangeChip<F>,
-        _spec: S,
     ) -> Self {
         let fp_chip = FpChip::new(range, S::LIMB_BITS, S::NUM_LIMBS);
         Self {
@@ -182,10 +178,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     fn process_validators(
         &self,
         ctx: &mut Context<F>,
-    ) -> (
-        Vec<EcPoint<F, FpPoint<F>>>,
-        Vec<Vec<AssignedValue<F>>>,
-    ) {
+    ) -> (Vec<EcPoint<F, FpPoint<F>>>, Vec<Vec<AssignedValue<F>>>) {
         let range = self.range();
 
         let fp_chip = self.fp_chip();
@@ -204,7 +197,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
             for validator in validators {
                 let pk_compressed = validator.pubkey[..S::G1_FQ_BYTES].to_vec();
-    
+
                 // FIXME: replace with retriving y coordinate from cached map.
                 let pk_affine =
                     G1Affine::from_bytes(&pk_compressed.as_slice().try_into().unwrap()).unwrap();
@@ -221,11 +214,12 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                     .try_into()
                     .unwrap();
 
-                 // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
+                // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
                 assert_eq!(assigned_uncompressed.len(), S::G1_BYTES_UNCOMPRESSED);
 
                 // load masked bit from compressed representation
-                let masked_byte = ctx.load_witness(F::from(pk_compressed[S::G1_FQ_BYTES - 1] as u64));
+                let masked_byte =
+                    ctx.load_witness(F::from(pk_compressed[S::G1_FQ_BYTES - 1] as u64));
                 let cleared_byte = self.clear_ysign_mask(&masked_byte, ctx);
                 // constraint that the loaded masked byte is consistent with the assigned bytes used to construct the point.
                 ctx.constrain_equal(&cleared_byte, &assigned_uncompressed[S::G1_FQ_BYTES - 1]);
@@ -396,11 +390,11 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use eth_types::Test as S;
     use halo2_base::gates::range::RangeStrategy;
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
-    use eth_types::Test as S;
 
     #[derive(Debug, Clone)]
     struct TestCircuit<'a, F: Field, S: Spec> {
@@ -434,13 +428,12 @@ mod tests {
                 Self::LOOKUP_BITS,
                 Self::K,
             );
-            let config = AggregationCircuitConfig::new(
+            let config = AggregationCircuitConfig::new::<S>(
                 meta,
                 AggregationCircuitArgs {
                     validators_table,
                     range,
                 },
-                S,
             );
 
             (config, Challenges::construct(meta))
@@ -479,7 +472,7 @@ mod tests {
         let builder = GateThreadBuilder::new(false);
         builder.config(k, None);
         let circuit = TestCircuit::<'_, Fr, S> {
-            inner: AggregationCircuitBuilder::new(builder, &validators, &committees, &range, S),
+            inner: AggregationCircuitBuilder::new(builder, &validators, &committees, &range),
         };
 
         let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();

@@ -45,7 +45,7 @@ impl Spec for Mainnet {
     // TODO: calculate and verify the pubkeys level for mainnet
     const STATE_TREE_LEVEL_PUBKEYS: usize = 49;
     const STATE_TREE_LEVEL_VALIDATORS: usize = Self::STATE_TREE_LEVEL_PUBKEYS - 1;
-    const G1_FQ_BYTES: usize = 48; // TODO: 48 for BLS12-381.
+    const G1_FQ_BYTES: usize = 48;
     const G1_BYTES_UNCOMPRESSED: usize = Self:: G1_FQ_BYTES * 2;
     const LIMB_BITS: usize = 112;
     const NUM_LIMBS: usize = 5;

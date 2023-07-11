@@ -44,7 +44,7 @@ pub struct StateSSZCircuitArgs {
 impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
     type ConfigArgs = StateSSZCircuitArgs;
 
-    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs, _spec: S) -> Self {
+    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let sha256_table = args.sha256_table;
 
         let pubkeys_level = TreeLevel::configure(meta, S::STATE_TREE_LEVEL_PUBKEYS, 0, 3, true);
@@ -233,7 +233,7 @@ mod tests {
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let sha256_table = SHA256Table::construct(meta);
 
-            let config = { StateSSZCircuitConfig::new(meta, StateSSZCircuitArgs { sha256_table }, S) };
+            let config = { StateSSZCircuitConfig::new::<S>(meta, StateSSZCircuitArgs { sha256_table }) };
 
             (config, Challenges::construct(meta))
         }
