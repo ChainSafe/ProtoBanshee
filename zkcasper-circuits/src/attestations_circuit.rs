@@ -232,7 +232,7 @@ impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
         let len_even = chunks.len() + chunks.len() % 2;
         let height = (len_even as f64).log2().ceil() as usize;
 
-        for (depth, item) in ZERO_HASHES.iter().enumerate().take(height) {
+        for depth in 0..height {
             // Pad to even length using 32 zero bytes assigned as constants.
             let len_even = chunks.len() + chunks.len() % 2;
             let padded_chunks = chunks
@@ -241,7 +241,9 @@ impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
                     zero_hashes
                         .entry(depth)
                         .or_insert_with(|| {
-                            HashInputChunk::from(item.map(|b| ctx.load_constant(F::from(b as u64))))
+                            HashInputChunk::from(
+                                ZERO_HASHES[depth].map(|b| ctx.load_constant(F::from(b as u64))),
+                            )
                         })
                         .clone()
                 })
