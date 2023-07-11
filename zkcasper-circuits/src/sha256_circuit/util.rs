@@ -33,7 +33,6 @@ pub const H: [u64; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
 
-
 /// Assigned values for each row.
 #[derive(Clone, Debug, Default)]
 pub struct Sha256AssignedRows<F: Field> {
@@ -48,13 +47,7 @@ pub struct Sha256AssignedRows<F: Field> {
     /// Whether the row is padding.
     pub padding_selectors: Vec<[AssignedCell<F, F>; 4]>,
     /// Output words at the row.
-    pub output_words: Vec<AssignedCell<F, F>>,
-    /// Whether the round is dummy at the row.
-    pub is_dummy: Vec<AssignedCell<F, F>>,
-    /// Assigned h_a,h_b,h_c,h_d.
-    pub assigned_ha: Vec<AssignedCell<F, F>>,
-    /// Assigned h_e,h_f,h_g,h_h.
-    pub assigned_he: Vec<AssignedCell<F, F>>,
+    pub output_rlc: Vec<AssignedCell<F, F>>,
 }
 
 impl <F: Field> Sha256AssignedRows<F> {

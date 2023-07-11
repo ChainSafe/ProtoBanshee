@@ -847,6 +847,16 @@ impl<F: Field> Sha256CircuitConfig<F> {
                     0
                 }),
             ),
+            (
+                "Ha",
+                self.h_a,
+                F::from(if round < 4 { H[3 - round] } else { 0 }),
+            ),
+            (
+                "He",
+                self.h_e,
+                F::from(if round < 4 { H[7 - round] } else { 0 }),
+            ),
         ] {
             region.assign_fixed(
                 || format!("assign {} {}", name, offset),
@@ -855,19 +865,6 @@ impl<F: Field> Sha256CircuitConfig<F> {
                 || Value::known(*value),
             )?;
         }
-
-        let assigned_ha = region.assign_fixed(
-            || format!("assign {} {}", "Ha", offset),
-            self.h_a,
-            offset,
-            || Value::known(F::from(if round < 4 { H[3 - round] } else { 0 })),
-        )?;
-        let assigned_he = region.assign_fixed(
-            || format!("assign {} {}", "He", offset),
-            self.h_e,
-            offset,
-            || Value::known(F::from(if round < 4 { H[7 - round] } else { 0 })),
-        )?;
 
         // Advice values
         for (name, columns, values) in [
@@ -996,19 +993,13 @@ impl<F: Field> Sha256CircuitConfig<F> {
             ],
         )?;
 
-        if round < 4 {
-            assigned_rows.assigned_ha.push(assigned_ha);
-            assigned_rows.assigned_he.push(assigned_he);
-        }
-
         if (4..20).contains(&round) {
             assigned_rows.padding_selectors.push(padding_selectors);
             assigned_rows.input_rlc.push(input_word);
-            // assigned_rows.is_dummy.push(is_dummy);
         }
 
         if row.is_final && round == NUM_ROUNDS + 7 {
-            assigned_rows.output_words.push(output_word);
+            assigned_rows.output_rlc.push(output_word);
         }
 
         if round == NUM_ROUNDS + 7 {

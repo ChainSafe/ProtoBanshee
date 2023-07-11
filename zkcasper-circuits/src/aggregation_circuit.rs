@@ -125,6 +125,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                     let randomness = QuantumCell::Constant(
                         halo2_base::utils::value_to_option(challenges.sha256_input()).unwrap(),
                     );
+                    
                     let pubkey_rlcs = pubkeys_compressed
                         .into_iter()
                         .map(|compressed| {

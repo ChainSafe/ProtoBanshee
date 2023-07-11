@@ -16,7 +16,7 @@ use halo2_base::{
 };
 use halo2_ecc::{
     bn254::{Fp2Chip, FpChip, FqPoint},
-    ecc::{EcPoint, EccChip},
+    ecc::{EcPoint, EccChip}, fields::FieldChip,
 };
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
@@ -120,6 +120,7 @@ impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F> {
             64,
             challenges.sha256_input(),
             None,
+            0,
         ));
 
         let fp2_chip = self.fp2_chip();
@@ -336,11 +337,11 @@ mod tests {
     }
 
     impl<'a, S: Spec, F: Field> TestCircuit<'a, S, F> {
-        const NUM_ADVICE: &[usize] = &[6, 1];
+        const NUM_ADVICE: &[usize] = &[10];
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 1;
         const LOOKUP_BITS: usize = 8;
-        const K: usize = 14;
+        const K: usize = 11;
     }
 
     impl<'a, S: Spec, F: Field> Circuit<F> for TestCircuit<'a, S, F> {
