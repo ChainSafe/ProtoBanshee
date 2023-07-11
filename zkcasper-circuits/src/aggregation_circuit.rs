@@ -117,7 +117,8 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
-                    let (_aggregated_pubkeys, pubkeys_compressed) = self.process_validators(ctx);
+                    let mut pubkeys_compressed = vec![];
+                    let _aggregated_pubkeys = self.process_validators(ctx, &mut pubkeys_compressed);
 
                     let ctx = builder.main(1);
 
@@ -176,13 +177,13 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     fn process_validators(
         &self,
         ctx: &mut Context<F>,
-    ) -> (Vec<EcPoint<F, FpPoint<F>>>, Vec<Vec<AssignedValue<F>>>) {
+        pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
+    ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let range = self.range();
 
         let fp_chip = self.fp_chip();
         let g1_chip = self.g1_chip();
 
-        let mut pubkeys_compressed = vec![];
         let mut aggregated_pubkeys = vec![];
 
         for (_committee, validators) in self.validators.iter().group_by(|v| v.committee).into_iter()
@@ -233,7 +234,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             aggregated_pubkeys.push(g1_chip.sum::<G1Affine>(ctx, in_committee_pubkeys));
         }
 
-        (aggregated_pubkeys, pubkeys_compressed)
+        aggregated_pubkeys
     }
 
     /// Calculates RLCs (1 for each of two chacks of BLS12-381) for compresed bytes of pubkey.
