@@ -29,6 +29,7 @@ use halo2curves::{
 };
 use itertools::Itertools;
 use num_bigint::BigUint;
+use rayon::prelude::*;
 use std::{cell::RefCell, marker::PhantomData};
 
 // TODO: Use halo2_ccc::bls12_381::FpChip after carry mod issue is resolved in halo2-lib.
@@ -65,7 +66,7 @@ impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec> {
+pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec + Sync> {
     builder: RefCell<GateThreadBuilder<F>>,
     range: &'a RangeChip<F>,
     fp_chip: FpChip<'a, F>,
@@ -76,7 +77,7 @@ pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec> {
     _spec: PhantomData<S>,
 }
 
-impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
+impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
     pub fn new(
         builder: GateThreadBuilder<F>,
         validators: &'a [Validator],
@@ -211,69 +212,82 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         let fp_chip = self.fp_chip();
         let g1_chip = self.g1_chip();
 
-        let mut aggregated_pubkeys = vec![];
-
-        for (_committee, validators) in self
+        let grouped_validators = self
             .validators
             .iter()
             .zip(self.validators_y.iter())
-            .group_by(|v| v.0.committee)
+            .group_by(|v| v.0.committee);
+        // convert the `itertools::GroupBy` into a plain vector so that `rayon::par_iter`
+        // can use it.
+        let grouped_validators: Vec<Vec<(&Validator, &Fq)>> = grouped_validators
             .into_iter()
-        {
-            let mut in_committee_pubkeys = vec![];
+            .map(|(_committee, validator_coord_group)| {
+                // NOTE: This needs to be a plain vector instead of the `Group` object that
+                // isn't ParIter.
+                validator_coord_group.into_iter().collect()
+            })
+            .collect();
 
-            for (validator, y_coord) in validators {
-                let pk_compressed = validator.pubkey[..S::G1_BYTES_COMPRESSED].to_vec();
+        let aggregated_pubkeys = grouped_validators
+            .into_par_iter()
+            .map(|validators| {
+                let mut in_committee_pubkeys = vec![];
 
-                let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
-                    ctx.assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
+                for (validator, y_coord) in validators.into_iter() {
+                    let pk_compressed = validator.pubkey[..S::G1_BYTES_COMPRESSED].to_vec();
 
-                // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
-                assert_eq!(assigned_x_compressed_bytes.len(), S::G1_BYTES_COMPRESSED);
+                    let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
+                        ctx.assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
 
-                // Clear the sign bit from the last byte of the compressed representation to construct the x coordinate in Fq
-                let mut pk_compressed_cleared = pk_compressed;
-                pk_compressed_cleared[S::G1_BYTES_COMPRESSED - 1] &= 0b0011_1111;
-                let x_coord =
-                    Fq::from_bytes(&pk_compressed_cleared.as_slice().try_into().unwrap()).unwrap();
+                    // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
+                    assert_eq!(assigned_x_compressed_bytes.len(), S::G1_BYTES_COMPRESSED);
 
-                // masked byte from compressed representation
-                let masked_byte = &assigned_x_compressed_bytes[S::G1_BYTES_COMPRESSED - 1];
-                // clear the sign bit from masked byte
-                let cleared_byte = self.clear_ysign_mask(masked_byte, ctx);
-                // Use the cleared byte to construct the x coordinate
-                let assigned_x_bytes_cleared = [
-                    &assigned_x_compressed_bytes.as_slice()[..S::G1_BYTES_COMPRESSED - 1],
-                    &[cleared_byte],
-                ]
-                .concat();
+                    // Clear the sign bit from the last byte of the compressed representation to construct the x coordinate in Fq
+                    let mut pk_compressed_cleared = pk_compressed;
+                    pk_compressed_cleared[S::G1_BYTES_COMPRESSED - 1] &= 0b0011_1111;
+                    let x_coord =
+                        Fq::from_bytes(&pk_compressed_cleared.as_slice().try_into().unwrap())
+                            .unwrap();
 
-                let x_crt = self.decode_fq(&assigned_x_bytes_cleared, &x_coord, ctx);
+                    // masked byte from compressed representation
+                    let masked_byte = &assigned_x_compressed_bytes[S::G1_BYTES_COMPRESSED - 1];
+                    // clear the sign bit from masked byte
+                    let cleared_byte = self.clear_ysign_mask(masked_byte, ctx);
+                    // Use the cleared byte to construct the x coordinate
+                    let assigned_x_bytes_cleared = [
+                        &assigned_x_compressed_bytes.as_slice()[..S::G1_BYTES_COMPRESSED - 1],
+                        &[cleared_byte],
+                    ]
+                    .concat();
 
-                // Load private witness y coordinate
-                let y_crt = fp_chip.load_private(ctx, *y_coord);
-                // Square y coordinate
-                let ysq = fp_chip.mul(ctx, y_crt.clone(), y_crt.clone());
-                // Calculate y^2 using the elliptic curve equation
-                let ysq_calc = Self::calculate_ysquared(ctx, fp_chip, x_crt.clone());
-                // Constrain witness y^2 to be equal to calculated y^2
-                fp_chip.assert_equal(ctx, ysq, ysq_calc);
+                    let x_crt = self.decode_fq(&assigned_x_bytes_cleared, &x_coord, ctx);
 
-                // constraint that the loaded masked byte is consistent with the assigned bytes used to construct the point.
-                // ctx.constrain_equal(&cleared_byte, &assigned_x_bytes[S::G1_BYTES_COMPRESSED - 1]);
+                    // Load private witness y coordinate
+                    let y_crt = fp_chip.load_private(ctx, *y_coord);
+                    // Square y coordinate
+                    let ysq = fp_chip.mul(ctx, y_crt.clone(), y_crt.clone());
+                    // Calculate y^2 using the elliptic curve equation
+                    let ysq_calc = Self::calculate_ysquared(ctx, fp_chip, x_crt.clone());
+                    // Constrain witness y^2 to be equal to calculated y^2
+                    fp_chip.assert_equal(ctx, ysq, ysq_calc);
 
-                // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
-                pubkeys_compressed.push(assigned_x_compressed_bytes);
-                // Normally, we would need to take into account the sign of the y coordinate, but
-                // because we are concerned only with signature forgery, if this is the wrong
-                // sign, the signature will be invalid anyway and thus verification fails.
-                in_committee_pubkeys.push(EcPoint::new(x_crt, y_crt));
-            }
+                    // constraint that the loaded masked byte is consistent with the assigned bytes used to construct the point.
+                    // ctx.constrain_equal(&cleared_byte, &assigned_x_bytes[S::G1_BYTES_COMPRESSED - 1]);
 
-            aggregated_pubkeys.push(g1_chip.sum::<G1Affine>(ctx, in_committee_pubkeys));
-        }
+                    // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
+                    pubkeys_compressed.push(assigned_x_compressed_bytes);
+                    // Normally, we would need to take into account the sign of the y coordinate, but
+                    // because we are concerned only with signature forgery, if this is the wrong
+                    // sign, the signature will be invalid anyway and thus verification fails.
+                    in_committee_pubkeys.push(EcPoint::new(x_crt, y_crt));
+                }
 
-        aggregated_pubkeys
+                // let pk_affine = G1Affine::random(&mut rand::thread_rng());
+                (g1_chip.sum::<G1Affine>(ctx, in_committee_pubkeys))
+            })
+            .collect();
+
+        return aggregated_pubkeys;
     }
 
     /// Calculates RLCs (1 for each of two chacks of BLS12-381) for compresed bytes of pubkey.
@@ -377,7 +391,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     }
 }
 
-impl<'a, F: Field, S: Spec> SubCircuit<F> for AggregationCircuitBuilder<'a, F, S> {
+impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'a, F, S> {
     type Config = AggregationCircuitConfig<F>;
 
     fn new_from_block(_block: &witness::Block<F>) -> Self {
