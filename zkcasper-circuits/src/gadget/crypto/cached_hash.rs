@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, hash::Hash};
 
 use eth_types::Field;
-use halo2_base::{Context, QuantumCell};
+use halo2_base::{Context, QuantumCell, safe_types::RangeChip};
 use halo2_proofs::{circuit::Region, plonk::Error};
 
 use crate::witness::HashInput;
@@ -15,6 +15,10 @@ pub struct CachedHashChip<F: Field, HC: HashChip<F>> {
 }
 
 impl<F: Field, HC: HashChip<F>> HashChip<F> for CachedHashChip<F, HC> {
+    const BLOCK_SIZE: usize = HC::BLOCK_SIZE;
+
+    const DIGEST_SIZE: usize = HC::DIGEST_SIZE;
+
     fn digest(
         &self,
         input: HashInput<QuantumCell<F>>,
@@ -38,6 +42,10 @@ impl<F: Field, HC: HashChip<F>> HashChip<F> for CachedHashChip<F, HC> {
 
     fn set_extra_assignments(&mut self, extra_assignments: halo2_base::gates::builder::KeygenAssignments<F>) {
         self.inner.set_extra_assignments(extra_assignments)
+    }
+
+    fn range(&self) -> &RangeChip<F> {
+        self.inner.range()
     }
 }
 

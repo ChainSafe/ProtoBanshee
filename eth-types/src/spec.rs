@@ -1,8 +1,9 @@
 use core::fmt::Debug;
+use std::iter;
 
 use halo2curves::{bls12_381, bn256, CurveExt};
 
-pub trait Spec: 'static + Default + Debug {
+pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const VALIDATOR_REGISTRY_LIMIT: usize;
     const MAX_VALIDATORS_PER_COMMITTEE: usize;
     const MAX_COMMITTEES_PER_SLOT: usize;
@@ -18,12 +19,23 @@ pub trait Spec: 'static + Default + Debug {
     const G2_BYTES_COMPRESSED: usize;
     const LIMB_BITS: usize;
     const NUM_LIMBS: usize;
+    const DST: &'static [u8];
+
     type PubKeysCurve: CurveExt;
     type SiganturesCurve: CurveExt;
+
+    fn limb_bytes_bases() -> Vec<u64> {
+        iter::repeat(8)
+            .enumerate()
+            .map(|(i, x)| i * x)
+            .take_while(|&bits| bits <= Self::LIMB_BITS)
+            .map(|bits| 1 << bits)
+            .collect()
+    }
 }
 
 /// Ethereum Foundation specifications.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, )]
 pub struct Test;
 
 impl Spec for Test {
@@ -42,11 +54,13 @@ impl Spec for Test {
     const G2_BYTES_COMPRESSED: usize = Self::G1_BYTES_COMPRESSED * 2;
     const LIMB_BITS: usize = 88;
     const NUM_LIMBS: usize = 3;
+    const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+    
     type PubKeysCurve = bn256::G1;
     type SiganturesCurve = bn256::G2;
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub struct Mainnet;
 
 impl Spec for Mainnet {
@@ -66,6 +80,8 @@ impl Spec for Mainnet {
     const G2_BYTES_COMPRESSED: usize = Self::G1_BYTES_COMPRESSED * 2;
     const LIMB_BITS: usize = 112;
     const NUM_LIMBS: usize = 5;
+    const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+
     type PubKeysCurve = bls12_381::G1;
     type SiganturesCurve = bls12_381::G2;
 }

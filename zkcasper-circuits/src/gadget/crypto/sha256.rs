@@ -2,6 +2,7 @@ use eth_types::Field;
 use gadgets::util::rlc;
 use halo2_base::gates::builder::KeygenAssignments;
 use halo2_proofs::circuit::Value;
+use halo2curves::group::ff::PrimeField;
 use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,10 +23,12 @@ use halo2_proofs::{
     plonk::{Assigned, Error},
 };
 
-const BLOCK_BYTE: usize = 64;
 const SHA256_CONTEXT_ID: usize = usize::MAX;
 
 pub trait HashChip<F: Field> {
+    const BLOCK_SIZE: usize;
+    const DIGEST_SIZE: usize;
+
     fn digest(
         &self,
         input: HashInput<QuantumCell<F>>,
@@ -36,6 +39,8 @@ pub trait HashChip<F: Field> {
     fn take_extra_assignments(&self) -> KeygenAssignments<F>;
 
     fn set_extra_assignments(&mut self, extra_assignments: KeygenAssignments<F>);
+
+    fn range(&self) -> &RangeChip<F>;
 } 
 
 #[derive(Debug, Clone)]
@@ -56,6 +61,9 @@ pub struct Sha256Chip<'a, F: Field> {
 }
 
 impl<'a, F: Field> HashChip<F> for Sha256Chip<'a, F> {
+    const BLOCK_SIZE: usize = 64;
+    const DIGEST_SIZE: usize = 32;
+
     fn digest(
         &self,
         input: HashInput<QuantumCell<F>>,
@@ -85,7 +93,7 @@ impl<'a, F: Field> HashChip<F> for Sha256Chip<'a, F> {
         let assigned_output =
             assigned_hash_bytes.map(|b| ctx.load_witness(*value_to_option(b.value()).unwrap()));
 
-        let one_round_size = BLOCK_BYTE;
+        let one_round_size = Self::BLOCK_SIZE;
         let num_round = 1;
 
         // FIXME: support dynamic input size
@@ -221,6 +229,10 @@ impl<'a, F: Field> HashChip<F> for Sha256Chip<'a, F> {
 
     fn set_extra_assignments(&mut self, extra_assignments: KeygenAssignments<F>) {
         self.extra_assignments = RefCell::new(extra_assignments);
+    }
+
+    fn range(&self) -> &RangeChip<F> {
+        &self.range
     }
 }
 

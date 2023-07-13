@@ -4,7 +4,7 @@ use crate::{
     gadget::crypto::{CachedHashChip, Sha256Chip, HashChip},
     sha256_circuit::Sha256CircuitConfig,
     util::{Challenges, IntoWitness, SubCircuit, SubCircuitConfig},
-    witness::{self, HashInput, HashInputChunk},
+    witness::{self, HashInput, HashInputChunk, Attestation},
 };
 use eth_types::{Field, Spec};
 use halo2_base::{
@@ -60,10 +60,17 @@ impl<F: Field> SubCircuitConfig<F> for AttestationsCircuitConfig<F> {
     fn annotate_columns_in_region(&self, _region: &mut Region<'_, F>) {}
 }
 
+
+#[allow(type_alias_bounds)]
 #[derive(Debug)]
-pub struct AttestationsCircuitBuilder<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize> {
+pub struct AttestationsCircuitBuilder<
+    'a,
+    S: Spec,
+    F: Field,
+    const COMMITTEE_MAX_SIZE: usize,
+> where [(); S::MAX_VALIDATORS_PER_COMMITTEE]: {
     builder: RefCell<GateThreadBuilder<F>>,
-    attestations: &'a [IndexedAttestation<COMMITTEE_MAX_SIZE>],
+    attestations: &'a [Attestation<S>],
     range: &'a RangeChip<F>,
     fp_chip: FpChip<'a, F>,
     zero_hashes: RefCell<HashMap<usize, HashInputChunk<QuantumCell<F>>>>,
@@ -71,11 +78,11 @@ pub struct AttestationsCircuitBuilder<'a, S: Spec, F: Field, const COMMITTEE_MAX
 }
 
 impl<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
-    AttestationsCircuitBuilder<'a, S, F, COMMITTEE_MAX_SIZE>
+    AttestationsCircuitBuilder<'a, S, F, COMMITTEE_MAX_SIZE> where [(); S::MAX_VALIDATORS_PER_COMMITTEE]:
 {
     pub fn new(
         builder: GateThreadBuilder<F>,
-        attestations: &'a [IndexedAttestation<COMMITTEE_MAX_SIZE>],
+        attestations: &'a [Attestation<S>],
         range: &'a RangeChip<F>,
     ) -> Self {
         let fp_chip = FpChip::new(range, S::LIMB_BITS, S::NUM_LIMBS);
@@ -280,8 +287,7 @@ impl<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
     }
 }
 
-impl<'a, S: Spec, F: Field, const MAX_VALIDATORS_PER_COMMITTEE: usize> SubCircuit<F>
-    for AttestationsCircuitBuilder<'a, S, F, MAX_VALIDATORS_PER_COMMITTEE>
+impl<'a, S: Spec, F: Field,const MAX_VALIDATORS_PER_COMMITTEE: usize> SubCircuit<F> for AttestationsCircuitBuilder<'a, S, F, MAX_VALIDATORS_PER_COMMITTEE> where [(); S::MAX_VALIDATORS_PER_COMMITTEE]:
 {
     type Config = AttestationsCircuitConfig<F>;
 
@@ -330,11 +336,13 @@ mod tests {
     };
 
     #[derive(Debug)]
-    struct TestCircuit<'a, S: Spec, F: Field, const CMS: usize> {
+    struct TestCircuit<'a, S: Spec, F: Field, const CMS: usize> where [(); S::MAX_VALIDATORS_PER_COMMITTEE]:
+    {
         inner: AttestationsCircuitBuilder<'a, S, F, CMS>,
     }
 
-    impl<'a, S: Spec, F: Field, const CMS: usize> TestCircuit<'a, S, F, CMS> {
+    impl<'a, S: Spec, F: Field, const CMS: usize> TestCircuit<'a, S, F, CMS> where [(); S::MAX_VALIDATORS_PER_COMMITTEE]:
+    {
         const NUM_ADVICE: &[usize] = &[10];
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 1;
@@ -342,7 +350,7 @@ mod tests {
         const K: usize = 11;
     }
 
-    impl<'a, S: Spec, F: Field, const CMS: usize> Circuit<F> for TestCircuit<'a, S, F, CMS> {
+    impl<'a, S: Spec, F: Field, const CMS: usize> Circuit<F> for TestCircuit<'a, S, F, CMS> where [(); S::MAX_VALIDATORS_PER_COMMITTEE]: {
         type Config = (AttestationsCircuitConfig<F>, Challenges<F>);
         type FloorPlanner = SimpleFloorPlanner;
 
