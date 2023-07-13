@@ -8,6 +8,13 @@ pub use constraint_builder::*;
 
 mod conversion;
 pub use conversion::*;
+use halo2_base::{
+    safe_types::{GateInstructions, RangeInstructions},
+    AssignedValue, Context, QuantumCell,
+};
+use halo2_ecc::bigint::{ProperCrtUint, ProperUint};
+use itertools::Itertools;
+use num_bigint::BigUint;
 
 use crate::{sha256_circuit::Sha256CircuitConfig, witness};
 use eth_types::*;
@@ -215,4 +222,40 @@ pub(crate) fn transpose_val_ret<F, E>(value: Value<Result<F, E>>) -> Result<Valu
 /// Ceiling of log_2(n)
 pub fn log2_ceil(n: usize) -> u32 {
     u32::BITS - (n as u32).leading_zeros() - (n & (n - 1) == 0) as u32
+}
+
+/// Converts assigned bytes into biginterger
+/// Warning: method does not perfrom any checks on input `bytes`.
+pub fn decode_into_field<S: Spec, F: Field>(
+    bytes: impl IntoIterator<Item=AssignedValue<F>>,
+    limb_bases: &[F],
+    gate: &impl GateInstructions<F>,
+    ctx: &mut Context<F>,
+) -> ProperCrtUint<F> {
+    let bytes = bytes.into_iter().collect_vec();
+    let limb_bytes = S::LIMB_BITS / 8;
+    let bits = S::NUM_LIMBS * S::LIMB_BITS;
+
+    let value = BigUint::from_bytes_le(
+        &bytes
+            .iter()
+            .map(|v| v.value().get_lower_32() as u8)
+            .collect_vec(),
+    );
+
+    // inputs is a bool or uint8.
+    let assigned_uint = if bits == 1 || limb_bytes == 8 {
+        ProperUint::new(bytes)
+    } else {
+        let byte_base = (0..limb_bytes)
+            .map(|i| QuantumCell::Constant(gate.pow_of_two()[i * 8]))
+            .collect_vec();
+        let limbs = bytes
+            .chunks(limb_bytes)
+            .map(|chunk| gate.inner_product(ctx, chunk.to_vec(), byte_base[..chunk.len()].to_vec()))
+            .collect::<Vec<_>>();
+        ProperUint::new(limbs)
+    };
+
+    assigned_uint.into_crt(ctx, gate, value, limb_bases, S::LIMB_BITS)
 }
