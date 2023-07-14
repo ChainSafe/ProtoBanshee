@@ -89,7 +89,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             .iter()
             .map(|v| {
                 let g1_affine =
-                    G1Affine::from_bytes(&v.pubkey[..S::G1_BYTES_COMPRESSED].try_into().unwrap())
+                    G1Affine::from_bytes(&v.pubkey[..S::FQ_BYTES].try_into().unwrap())
                         .unwrap();
                 g1_affine.y
             })
@@ -141,7 +141,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                     let pubkey_rlcs = pubkeys_compressed
                         .into_iter()
                         .map(|compressed| {
-                            self.get_rlc(&compressed[..S::G1_BYTES_COMPRESSED], &randomness, ctx)
+                            self.get_rlc(&compressed[..S::FQ_BYTES], &randomness, ctx)
                         })
                         .collect_vec();
 
@@ -224,21 +224,21 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             let mut in_committee_pubkeys = vec![];
 
             for (validator, y_coord) in validators {
-                let pk_compressed = validator.pubkey[..S::G1_BYTES_COMPRESSED].to_vec();
+                let pk_compressed = validator.pubkey[..S::FQ_BYTES].to_vec();
 
                 let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
                     ctx.assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
 
                 // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
-                assert_eq!(assigned_x_compressed_bytes.len(), S::G1_BYTES_COMPRESSED);
+                assert_eq!(assigned_x_compressed_bytes.len(), S::FQ_BYTES);
 
                 // masked byte from compressed representation
-                let masked_byte = &assigned_x_compressed_bytes[S::G1_BYTES_COMPRESSED - 1];
+                let masked_byte = &assigned_x_compressed_bytes[S::FQ_BYTES - 1];
                 // clear the sign bit from masked byte
                 let cleared_byte = self.clear_ysign_mask(masked_byte, ctx);
                 // Use the cleared byte to construct the x coordinate
                 let assigned_x_bytes_cleared = [
-                    &assigned_x_compressed_bytes.as_slice()[..S::G1_BYTES_COMPRESSED - 1],
+                    &assigned_x_compressed_bytes.as_slice()[..S::FQ_BYTES - 1],
                     &[cleared_byte],
                 ]
                 .concat();
@@ -286,7 +286,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     ) -> [AssignedValue<F>; 2] {
         let gate = self.range().gate();
         // assertion check for assigned_bytes to be equal to S::G1_FQ_BYTES from specification
-        assert_eq!(assigned_bytes.len(), S::G1_BYTES_COMPRESSED);
+        assert_eq!(assigned_bytes.len(), S::FQ_BYTES);
 
         // TODO: remove next 2 lines after switching to bls12-381
         let mut assigned_bytes = assigned_bytes.to_vec();

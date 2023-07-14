@@ -10,9 +10,9 @@ mod conversion;
 pub use conversion::*;
 use halo2_base::{
     safe_types::{GateInstructions, RangeInstructions},
-    AssignedValue, Context, QuantumCell,
+    AssignedValue, Context, QuantumCell, utils::ScalarField,
 };
-use halo2_ecc::bigint::{ProperCrtUint, ProperUint};
+use halo2_ecc::{bigint::{ProperCrtUint, ProperUint}, fields::{fp::FpChip, FieldChip}};
 use itertools::Itertools;
 use num_bigint::BigUint;
 
@@ -259,3 +259,25 @@ pub fn decode_into_field<S: Spec, F: Field>(
 
     assigned_uint.into_crt(ctx, gate, value, limb_bases, S::LIMB_BITS)
 }
+
+pub fn decode_into_field_be<S: Spec, F: Field, I: IntoIterator<Item=AssignedValue<F>>>(
+    bytes: I,
+    limb_bases: &[F],
+    gate: &impl GateInstructions<F>,
+    ctx: &mut Context<F>,
+) -> ProperCrtUint<F> where I::IntoIter: DoubleEndedIterator {
+    let bytes = bytes.into_iter().rev().collect_vec();
+    decode_into_field::<S, F>(bytes, limb_bases, gate, ctx)
+}
+
+pub fn decode_into_field_modp<'a, S: Spec, F: Field, FP: ScalarField>(
+    bytes: impl IntoIterator<Item=AssignedValue<F>>,
+    fp_chip: &FpChip<'a, F, FP>,
+    gate: &impl GateInstructions<F>,
+    ctx: &mut Context<F>,
+) -> ProperCrtUint<F> {
+    let overflow = decode_into_field::<S, F>(bytes, &fp_chip.limb_bases, gate, ctx);
+    fp_chip.carry_mod(ctx, overflow.into())
+}
+
+

@@ -210,7 +210,7 @@ impl<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
         ctx: &mut Context<F>,
     ) -> EcPoint<F, FqPoint<F>> {
         // FIXME: remove next line after switching to BLS12-381
-        let bytes_compressed = &bytes_compressed[..S::G2_BYTES_COMPRESSED];
+        let bytes_compressed = &bytes_compressed[..S::FQ2_BYTES];
         let sig_affine = G2Affine::from_bytes(
             &bytes_compressed
                 .try_into()

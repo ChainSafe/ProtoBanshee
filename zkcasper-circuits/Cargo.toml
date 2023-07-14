@@ -35,6 +35,7 @@ gadgets = { path = "../gadgets" }
 banshee-preprocessor = { path = "../preprocessor" }
 ethereum-consensus = { git = "https://github.com/ralexstokes/ethereum-consensus", rev = "46ca171" }
 ssz-rs = { git = "https://github.com/ralexstokes/ssz-rs", rev = "adf1a0b14cef90b9536f28ef89da1fab316465e1" }
+# zkcrypto_bls12_381 = { git = "https://github.com/zkcrypto/bls12_381", package = "bls12_381"}
 
 ark-ec = "0.4.0"
 ark-bn254 = "0.4.0"
