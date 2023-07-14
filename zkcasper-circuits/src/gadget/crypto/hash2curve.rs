@@ -1,17 +1,16 @@
 //! The chip that implements `draft-irtf-cfrg-hash-to-curve-16`
 //! https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16
 
-use std::{cell::RefCell, iter, marker::PhantomData};
+use std::{cell::RefCell, iter, marker::PhantomData, ops::Add};
 
-use eth_types::{Field, Spec};
+use eth_types::{Field, Spec, AppCurve, HashCurve};
 use halo2_base::{
     safe_types::{GateInstructions, RangeInstructions, SafeBytes32, SafeTypeChip},
-    utils::ScalarField,
     AssignedValue, Context, QuantumCell,
 };
 use halo2_ecc::{
     bigint::{CRTInteger, ProperCrtUint, ProperUint},
-    fields::{fp::FpChip, vector::FieldVector, FieldChip},
+    fields::{FieldChip, fp::FpChip, vector::FieldVector, fp2::Fp2Chip, PrimeField, FieldExtConstructor},
 };
 use halo2_proofs::{circuit::Region, plonk::Error};
 use halo2curves::group::GroupEncoding;
@@ -20,7 +19,7 @@ use lazy_static::lazy_static;
 use num_bigint::{BigInt, BigUint};
 
 use crate::{
-    util::{decode_into_field, decode_into_field_be, decode_into_field_modp},
+    util::{decode_into_field, decode_into_field_be},
     witness::HashInput,
 };
 
@@ -36,8 +35,7 @@ type Fp2Point<F> = FieldVector<ProperCrtUint<F>>;
 #[derive(Debug)]
 pub struct HashToCurveChip<S: Spec, F: Field, HC: HashChip<F>> {
     hash_chip: HC,
-    assigned_dst_with_len: RefCell<Option<Vec<AssignedValue<F>>>>,
-    binary_bases: RefCell<Option<Vec<AssignedValue<F>>>>,
+    _f: PhantomData<F>,
     _spec: PhantomData<S>,
 }
 
@@ -45,18 +43,26 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
     pub fn new(hash_chip: HC) -> Self {
         Self {
             hash_chip,
-            assigned_dst_with_len: Default::default(),
-            binary_bases: Default::default(),
+            _f: PhantomData,
             _spec: PhantomData,
         }
     }
 
-    pub fn hash_to_field<FP: ScalarField>(
+    /// Implements [section 5.2 of `draft-irtf-cfrg-hash-to-curve-16`][hash_to_field].
+    /// 
+    /// [hash_to_field]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#section-5.2
+    ///
+    /// References:
+    /// - https://github.com/cfrg/draft-irtf-cfrg-hash-to-curve/blob/6ce20a1/poc/hash_to_field.py#L49
+    /// - https://github.com/paulmillr/noble-curves/blob/bf70ba9/src/abstract/hash-to-curve.ts#L128
+    /// - https://github.com/succinctlabs/telepathy-circuits/blob/d5c7771/circuits/hash_to_field.circom#L11
+    pub fn hash_to_field<C: HashCurve>(
         &self,
         msg: HashInput<QuantumCell<F>>,
-        fp_chip: &FpChip<F, FP>,
+        fp_chip: &FpChip<F, C::Fp>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
+        cache: &mut HashToCurveCache<F>
     ) -> Result<[Fp2Point<F>; 2], Error> {
         //
         let range = self.hash_chip.range();
@@ -70,9 +76,9 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let assigned_msg = msg.into_assigned(ctx).to_vec();
 
         let len_in_bytes = 2 * G2_EXT_DEGREE * L;
-        let extended_msg = self.expand_message_xmd(assigned_msg, len_in_bytes, ctx, region)?;
+        let extended_msg = self.expand_message_xmd(assigned_msg, len_in_bytes, ctx, region, cache)?;
 
-        let limb_bases = self.binary_bases.borrow_mut().get_or_insert_with(|| {
+        let limb_bases = cache.binary_bases.get_or_insert_with(|| {
             S::limb_bytes_bases()
                 .into_iter()
                 .map(|base| ctx.load_constant(base))
@@ -123,10 +129,20 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         Ok(u)
     }
 
-    /// Produces a uniformly random byte string using a cryptographic hash function H that outputs b bits
-    ///
-    /// Implements [section 5.3 of `draft-irtf-cfrg-hash-to-curve-16`][hash_to_field].
-    /// [hash_to_field]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#name-expand_message_xmd
+    pub fn map_to_curve<C: HashCurve>(
+        &self,
+        u: [Fp2Point<F>; 2],
+        fp_chip: &FpChip<F, C::Fp>,
+        ctx: &mut Context<F>,
+        region: &mut Region<'_, F>,
+    ) -> Result<(), Error> {
+
+        Ok(())
+    }
+
+    /// Implements [section 5.3 of `draft-irtf-cfrg-hash-to-curve-16`][expand_message_xmd].
+    /// 
+    /// [expand_message_xmd]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#section-5.3
     ///
     /// References:
     /// - https://github.com/cfrg/draft-irtf-cfrg-hash-to-curve/blob/6ce20a1/poc/hash_to_field.py#L89
@@ -138,6 +154,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         len_in_bytes: usize,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
+        cache: &mut HashToCurveCache<F>,
     ) -> Result<Vec<AssignedValue<F>>, Error> {
         let range = self.hash_chip.range();
         let gate = range.gate();
@@ -148,9 +165,8 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
 
         // assign DST bytes & cache them
         let dst_len = ctx.load_constant(F::from(S::DST.len() as u64));
-        let dst_prime = self
-            .assigned_dst_with_len
-            .borrow_mut()
+        let dst_prime = cache
+            .dst_with_len
             .get_or_insert_with(|| {
                 S::DST
                     .iter()
@@ -161,7 +177,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
             .clone();
 
         // padding and length strings
-        let z_pad = Self::i2osp(0, HC::BLOCK_SIZE, |b| zero);
+        let z_pad = Self::i2osp(0, HC::BLOCK_SIZE, |b| zero); // TODO: cache these
         let l_i_b_str = Self::i2osp(len_in_bytes as u128, 2, |b| ctx.load_constant(b));
 
         // compute blocks
@@ -220,7 +236,46 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         Ok(uniform_bytes)
     }
 
-    // Integer to Octet Stream (numberToBytesBE)
+    /// Implements [section 6.2 of draft-irtf-cfrg-hash-to-curve-16][map_to_curve_simple_swu]
+    /// 
+    /// [map_to_curve_simple_swu]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#appendix-F.1-3
+    ///
+    /// References:
+    /// - https://github.com/paulmillr/noble-curves/blob/bf70ba9/src/abstract/weierstrass.ts#L1175 (different sqrt_ratio implementation)
+    #[allow(non_snake_case)]
+    fn map_to_curve_simple_swu<C: HashCurve>(
+        &self,
+        u: Fp2Point<F>,
+        fp_chip: &FpChip<F, C::Fp>,
+        ctx: &mut Context<F>,
+        region: &mut Region<'_, F>,
+        cache: &mut HashToCurveCache<F>,
+    ) -> Result<(), Error> where C::Fq: FieldExtConstructor<C::Fp, 2> {
+        let fp2_chip = Fp2Chip::<_, _, C::Fq>::new(fp_chip);
+        
+        // constants
+        let swu_a = cache.swu_a.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_A));
+        let swu_b = cache.swu_b.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_B));
+        let swu_z = cache.swu_z.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_Z));
+        let one = cache.fq2_one.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::Fq::one()));
+
+        let usq = fp2_chip.mul(ctx, u.clone(), u.clone()); // 1.  tv1 = u^2
+        let z_usq = fp2_chip.mul(ctx, usq.clone(), swu_z.clone()); // 2.  tv1 = Z * tv1
+        let zsq_u4 = fp2_chip.mul(ctx, z_usq.clone(), z_usq.clone()); // 3.  tv2 = tv1^2
+        let tv2 = fp2_chip.add_no_carry(ctx, zsq_u4.clone(), z_usq.clone()); // 4.  tv2 = tv2 + tv1
+        let tv3 = fp2_chip.add_no_carry(ctx, zsq_u4.clone(), one.clone()); // 5.  tv3 = tv2 + 1
+        let x0_num = fp2_chip.mul(ctx, tv3.clone(), swu_b.clone()); // 6.  tv3 = B * tv3
+
+        let x_den = {
+            let tv2_c1 = tv2.into_iter().map(|v| v.into()).collect_vec();
+            let is_zero = fp2_chip.is_zero(ctx, tv2_c1);
+        }
+
+        Ok(())
+    }
+
+
+    /// Integer to Octet Stream (numberToBytesBE)
     fn i2osp(
         mut value: u128,
         length: usize,
@@ -273,17 +328,14 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
     }
 }
 
-fn bigint_to_le_bytes<F: Field>(
-    limbs: impl IntoIterator<Item = F>,
-    limb_bits: usize,
-    total_bytes: usize,
-) -> Vec<u8> {
-    let limb_bytes = limb_bits / 8;
-    limbs
-        .into_iter()
-        .flat_map(|x| x.to_bytes_le()[..limb_bytes].to_vec())
-        .take(total_bytes)
-        .collect()
+#[derive(Clone, Debug, Default)]
+pub struct HashToCurveCache<F: Field> {
+    dst_with_len: Option<Vec<AssignedValue<F>>>,
+    binary_bases: Option<Vec<AssignedValue<F>>>,
+    swu_a: Option<FieldVector<ProperCrtUint<F>>>,
+    swu_b: Option<FieldVector<ProperCrtUint<F>>>,
+    swu_z: Option<FieldVector<ProperCrtUint<F>>>,
+    fq2_one: Option<FieldVector<ProperCrtUint<F>>>,
 }
 
 #[cfg(test)]
@@ -392,12 +444,14 @@ mod test {
 
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
-
-                    let [x, y] = h2c_chip.hash_to_field(
+                    
+                    let mut cache = HashToCurveCache::<F>::default();
+                    let [x, y] = h2c_chip.hash_to_field::<bls12_381::G2>(
                         self.test_input.clone(),
                         &fp_chip,
                         ctx,
                         &mut region,
+                        &mut cache,
                     )?;
 
                     let extra_assignments = h2c_chip.hash_chip.take_extra_assignments();

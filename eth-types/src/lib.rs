@@ -1,6 +1,9 @@
 mod spec;
 pub use spec::{Mainnet, Spec, Test};
 
+mod curves;
+pub use curves::{AppCurve, HashCurve};
+
 use core::hash::Hash;
 use halo2_proofs::{
     arithmetic::{Field as Halo2Field, FieldExt},

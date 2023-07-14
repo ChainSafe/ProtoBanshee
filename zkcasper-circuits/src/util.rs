@@ -280,4 +280,15 @@ pub fn decode_into_field_modp<'a, S: Spec, F: Field, FP: ScalarField>(
     fp_chip.carry_mod(ctx, overflow.into())
 }
 
-
+fn bigint_to_le_bytes_dev<F: Field>(
+    limbs: impl IntoIterator<Item = F>,
+    limb_bits: usize,
+    total_bytes: usize,
+) -> Vec<u8> {
+    let limb_bytes = limb_bits / 8;
+    limbs
+        .into_iter()
+        .flat_map(|x| x.to_bytes_le()[..limb_bytes].to_vec())
+        .take(total_bytes)
+        .collect()
+}

@@ -1,9 +1,12 @@
 use core::fmt::Debug;
 use std::iter;
 
-use halo2curves::{bls12_381, bn256, CurveExt};
+use halo2curves::bls12_381;
 
-use crate::Field;
+use crate::{
+    curves::{AppCurve, HashCurve},
+    Field,
+};
 
 pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const VALIDATOR_REGISTRY_LIMIT: usize;
@@ -23,8 +26,8 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const NUM_LIMBS: usize;
     const DST: &'static [u8];
 
-    type PubKeysCurve: CurveExt;
-    type SiganturesCurve: CurveExt;
+    type PubKeysCurve: AppCurve;
+    type SiganturesCurve: AppCurve + HashCurve;
 
     fn limb_bytes_bases<F: Field>() -> Vec<F> {
         iter::repeat(8)
@@ -37,7 +40,7 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
 }
 
 /// Ethereum Foundation specifications.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, )]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub struct Test;
 
 impl Spec for Test {
@@ -57,9 +60,9 @@ impl Spec for Test {
     const LIMB_BITS: usize = 112;
     const NUM_LIMBS: usize = 4;
     const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
-    
-    type PubKeysCurve = bn256::G1;
-    type SiganturesCurve = bn256::G2;
+
+    type PubKeysCurve = bls12_381::G1;
+    type SiganturesCurve = bls12_381::G2;
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
