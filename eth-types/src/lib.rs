@@ -1,8 +1,8 @@
 mod spec;
 pub use spec::{Mainnet, Spec, Test};
 
-mod curves;
-pub use curves::{AppCurve, HashCurve};
+mod curve;
+pub use curve::{AppCurveExt, HashCurveExt};
 
 use core::hash::Hash;
 use halo2_proofs::{

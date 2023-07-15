@@ -3,25 +3,28 @@
 
 use std::{cell::RefCell, iter, marker::PhantomData, ops::Add};
 
-use eth_types::{Field, Spec, AppCurve, HashCurve};
+use crate::{
+    util::{decode_into_field, decode_into_field_be},
+    witness::HashInput,
+};
+use eth_types::{AppCurveExt, Field, HashCurveExt, Spec};
 use halo2_base::{
     safe_types::{GateInstructions, RangeInstructions, SafeBytes32, SafeTypeChip},
     AssignedValue, Context, QuantumCell,
 };
 use halo2_ecc::{
     bigint::{CRTInteger, ProperCrtUint, ProperUint},
-    fields::{FieldChip, fp::FpChip, vector::FieldVector, fp2::Fp2Chip, PrimeField, FieldExtConstructor},
+    ecc::EcPoint,
+    fields::{
+        fp::FpChip, fp2::Fp2Chip, vector::FieldVector, FieldChip, FieldExtConstructor, PrimeField,
+    },
 };
 use halo2_proofs::{circuit::Region, plonk::Error};
 use halo2curves::group::GroupEncoding;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use num_bigint::{BigInt, BigUint};
-
-use crate::{
-    util::{decode_into_field, decode_into_field_be},
-    witness::HashInput,
-};
+use pasta_curves::arithmetic::SqrtRatio;
 
 use super::sha256::HashChip;
 
@@ -49,20 +52,20 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
     }
 
     /// Implements [section 5.2 of `draft-irtf-cfrg-hash-to-curve-16`][hash_to_field].
-    /// 
+    ///
     /// [hash_to_field]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#section-5.2
     ///
     /// References:
     /// - https://github.com/cfrg/draft-irtf-cfrg-hash-to-curve/blob/6ce20a1/poc/hash_to_field.py#L49
     /// - https://github.com/paulmillr/noble-curves/blob/bf70ba9/src/abstract/hash-to-curve.ts#L128
     /// - https://github.com/succinctlabs/telepathy-circuits/blob/d5c7771/circuits/hash_to_field.circom#L11
-    pub fn hash_to_field<C: HashCurve>(
+    pub fn hash_to_field<C: HashCurveExt>(
         &self,
         msg: HashInput<QuantumCell<F>>,
         fp_chip: &FpChip<F, C::Fp>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
-        cache: &mut HashToCurveCache<F>
+        cache: &mut HashToCurveCache<F>,
     ) -> Result<[Fp2Point<F>; 2], Error> {
         //
         let range = self.hash_chip.range();
@@ -76,7 +79,8 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let assigned_msg = msg.into_assigned(ctx).to_vec();
 
         let len_in_bytes = 2 * G2_EXT_DEGREE * L;
-        let extended_msg = self.expand_message_xmd(assigned_msg, len_in_bytes, ctx, region, cache)?;
+        let extended_msg =
+            self.expand_message_xmd(assigned_msg, len_in_bytes, ctx, region, cache)?;
 
         let limb_bases = cache.binary_bases.get_or_insert_with(|| {
             S::limb_bytes_bases()
@@ -115,7 +119,8 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
                                 ctx,
                             );
 
-                            let lo_2_256 = fp_chip.mul_no_carry(ctx, lo.clone(), two_pow_256.clone());
+                            let lo_2_256 =
+                                fp_chip.mul_no_carry(ctx, lo.clone(), two_pow_256.clone());
                             let lo_2_356_hi = fp_chip.add_no_carry(ctx, lo_2_256, hi.clone());
                             fp_chip.carry_mod(ctx, lo_2_356_hi)
                         })
@@ -129,19 +134,18 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         Ok(u)
     }
 
-    pub fn map_to_curve<C: HashCurve>(
+    pub fn map_to_curve<C: HashCurveExt>(
         &self,
         u: [Fp2Point<F>; 2],
         fp_chip: &FpChip<F, C::Fp>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
     ) -> Result<(), Error> {
-
         Ok(())
     }
 
     /// Implements [section 5.3 of `draft-irtf-cfrg-hash-to-curve-16`][expand_message_xmd].
-    /// 
+    ///
     /// [expand_message_xmd]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#section-5.3
     ///
     /// References:
@@ -237,27 +241,38 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
     }
 
     /// Implements [section 6.2 of draft-irtf-cfrg-hash-to-curve-16][map_to_curve_simple_swu]
-    /// 
+    ///
     /// [map_to_curve_simple_swu]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#appendix-F.1-3
     ///
     /// References:
-    /// - https://github.com/paulmillr/noble-curves/blob/bf70ba9/src/abstract/weierstrass.ts#L1175 (different sqrt_ratio implementation)
-    #[allow(non_snake_case)]
-    fn map_to_curve_simple_swu<C: HashCurve>(
+    /// - https://github.com/mikelodder7/bls12_381_plus/blob/ml/0.5.6/src/hash_to_curve/map_g2.rs#L388
+    /// - https://github.com/paulmillr/noble-curves/blob/bf70ba9/src/abstract/weierstrass.ts#L1175
+    fn map_to_curve_simple_swu<C: HashCurveExt>(
         &self,
         u: Fp2Point<F>,
         fp_chip: &FpChip<F, C::Fp>,
         ctx: &mut Context<F>,
-        region: &mut Region<'_, F>,
         cache: &mut HashToCurveCache<F>,
-    ) -> Result<(), Error> where C::Fq: FieldExtConstructor<C::Fp, 2> {
+    ) -> EcPoint<F, Fp2Point<F>>
+    where
+        C::Fq: FieldExtConstructor<C::Fp, 2>,
+    {
+        let gate = fp_chip.range().gate();
         let fp2_chip = Fp2Chip::<_, _, C::Fq>::new(fp_chip);
-        
+
         // constants
-        let swu_a = cache.swu_a.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_A));
-        let swu_b = cache.swu_b.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_B));
-        let swu_z = cache.swu_z.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_Z));
-        let one = cache.fq2_one.get_or_insert_with(|| fp2_chip.load_constant(ctx, C::Fq::one()));
+        let swu_a = cache
+            .swu_a
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_A));
+        let swu_b = cache
+            .swu_b
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_B));
+        let swu_z = cache
+            .swu_z
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_Z));
+        let one = cache
+            .fq2_one
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::Fq::one()));
 
         let usq = fp2_chip.mul(ctx, u.clone(), u.clone()); // 1.  tv1 = u^2
         let z_usq = fp2_chip.mul(ctx, usq.clone(), swu_z.clone()); // 2.  tv1 = Z * tv1
@@ -267,13 +282,116 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let x0_num = fp2_chip.mul(ctx, tv3.clone(), swu_b.clone()); // 6.  tv3 = B * tv3
 
         let x_den = {
-            let tv2_c1 = tv2.into_iter().map(|v| v.into()).collect_vec();
-            let is_zero = fp2_chip.is_zero(ctx, tv2_c1);
-        }
+            let tv2 = fp2_chip.carry_mod(ctx, tv2);
+            let tv2_is_zero = fp2_chip.is_zero(ctx, tv2.clone());
+            let tv2_neg = fp2_chip.negate(ctx, tv2);
 
-        Ok(())
+            fp2_chip.select(ctx, swu_z.clone(), tv2_neg, tv2_is_zero) // tv2_is_zero ? swu_z : tv2_neg
+        }; // 7.  tv4 = tv2 != 0 ? -tv2 : Z
+
+        let x_den = fp2_chip.mul(ctx, x_den, swu_a.clone()); // 8.  tv4 = A * tv4
+
+        let x0_num_sqr = fp2_chip.mul(ctx, x0_num.clone(), x0_num.clone()); // 9.  tv2 = tv3^2
+        let x_densq = fp2_chip.mul(ctx, x_den.clone(), x_den.clone()); // 10. tv6 = tv4^2
+        let ax_densq = fp2_chip.mul(ctx, x_densq.clone(), swu_a.clone()); // 11. tv5 = A * tv6
+        let tv2 = fp2_chip.add_no_carry(ctx, x0_num_sqr.clone(), ax_densq.clone()); // 12. tv2 = tv2 + tv5
+        let tv2 = fp2_chip.mul(ctx, tv2, x0_num_sqr); // 13. tv2 = tv2 * tv3
+        let gx_den = fp2_chip.mul(ctx, x_densq, x_den.clone()); // 14. tv6 = tv6 * tv4
+        let tv5 = fp2_chip.mul(ctx, gx_den.clone(), swu_b.clone()); // 15. tv5 = B * tv6
+        let gx0_num = {
+            let tv2 = fp2_chip.add_no_carry(ctx, tv2, tv5);
+            fp2_chip.carry_mod(ctx, tv2)
+        }; // 16. tv2 = tv2 + tv5
+
+        let x = fp2_chip.mul(ctx, &z_usq, &x0_num); // 17.  x = tv1 * tv3
+        let (is_gx1_square, y1) = Self::sqrt_ratio::<C>(gx0_num, gx_den, &fp2_chip, ctx, cache); // 18.  (is_gx1_square, y1) = sqrt_ratio(tv2, tv6)
+        let y = fp2_chip.mul(ctx, &z_usq, &u); // 19.  y = tv1 * u
+        let y = fp2_chip.mul(ctx, y, y1.clone()); // 20.  y = y * y1
+        let x = fp2_chip.select(ctx, x, x0_num, is_gx1_square); // 21.  x = is_gx1_square ? x : tv3
+        let y = fp2_chip.select(ctx, y, y1, is_gx1_square); // 22.  y = is_gx1_square ? y : y1
+
+        let to_neg = {
+            let u_sgn = Self::sgn0::<C>(u, ctx, fp_chip, cache);
+            let y_sgn = Self::sgn0::<C>(y.clone(), ctx, fp_chip, cache);
+            gate.xor(ctx, u_sgn, y_sgn)
+        }; // 23.  e1 = sgn0(u) == sgn0(y)
+
+        let y_neg = fp2_chip.negate(ctx, y.clone());
+        let y = fp2_chip.select(ctx, y_neg, y, to_neg); // 24.  y = e1 ? -y : y
+        let x = fp2_chip.divide(ctx, x, x_den); // 25.  x = x / tv4
+
+        EcPoint::new(x, y)
     }
 
+    // Implements [Appendix F.2.1 of draft-irtf-cfrg-hash-to-curve-16][sqrt_ration]
+    //
+    // [sqrt_ration]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#appendix-F.2.1
+    fn sqrt_ratio<C: HashCurveExt>(
+        num: Fp2Point<F>, // u
+        div: Fp2Point<F>, // v
+        fp2_chip: &Fp2Chip<F, FpChip<F, C::Fp>, C::Fq>,
+        ctx: &mut Context<F>,
+        cache: &mut HashToCurveCache<F>,
+    ) -> (AssignedValue<F>, Fp2Point<F>)
+    where
+        C::Fq: FieldExtConstructor<C::Fp, 2>,
+    {
+        let num_v = C::get_fq(num.0.iter().map(|c| c.value()));
+        let div_v = C::get_fq(div.0.iter().map(|c| c.value()));
+
+        let (is_square, y) = C::Fq::sqrt_ratio(&num_v, &div_v);
+
+        let is_square = ctx.load_witness(F::from(is_square.unwrap_u8() as u64));
+        fp2_chip.fp_chip().gate().assert_bit(ctx, is_square); // assert is_square is boolean
+
+        let y_assigned = fp2_chip.load_private(ctx, y);
+
+        let num_div = fp2_chip.divide(ctx, num.clone(), div.clone()); // r (ratio) = u / v
+        let num_div_sqr = fp2_chip.mul(ctx, num_div.clone(), num_div.clone()); // sqrt_a = r^2
+
+        let rv1 = cache
+            .swu_rv1
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_RV1));
+        let num_div_rv1 = fp2_chip.mul(ctx, num_div, rv1.clone()); // sqrt_b = r * rv1 (first root of unity)
+
+        let y_check = fp2_chip.select(ctx, num_div_sqr, num_div_rv1, is_square.clone()); // y_check = is_square ? sqrt_a : sqrt_b
+
+        fp2_chip.assert_equal(ctx, y_check, y_assigned.clone()); // assert y_check == y_assigned
+
+        (is_square, y_assigned)
+    }
+
+    fn sgn0<C: AppCurveExt>(
+        x: Fp2Point<F>,
+        ctx: &mut Context<F>,
+        fp_chip: &FpChip<F, C::Fp>,
+        cache: &mut HashToCurveCache<F>,
+    ) -> AssignedValue<F> {
+        let gate = fp_chip.gate();
+        let c0 = x.0[0].clone();
+        let c1 = x.0[1].clone();
+
+        let c0_zero = fp_chip.is_zero(ctx, &c0);
+        let c0_sgn = Self::fp_sgn0::<C>(c0, ctx, fp_chip);
+        let c1_sgn = Self::fp_sgn0::<C>(c1, ctx, fp_chip);
+        let sgn = gate.select(ctx, c1_sgn, c0_sgn, c0_zero);
+        gate.assert_bit(ctx, sgn);
+        sgn
+    }
+
+    fn fp_sgn0<C: AppCurveExt>(
+        x: ProperCrtUint<F>,
+        ctx: &mut Context<F>,
+        fp_chip: &FpChip<F, C::Fp>,
+    ) -> AssignedValue<F> {
+        let range = fp_chip.range();
+        let gate = range.gate();
+
+        let half = QuantumCell::Constant(F::from(2).pow_const(C::LIMB_BITS - 1));
+        let msl = x.limbs().last().unwrap(); // most significant limb
+        let msb = gate.div_unsafe(ctx, *msl, half); // most significant bit
+        range.div_mod(ctx, msb, BigUint::from(2u64), 1).1
+    }
 
     /// Integer to Octet Stream (numberToBytesBE)
     fn i2osp(
@@ -336,6 +454,7 @@ pub struct HashToCurveCache<F: Field> {
     swu_b: Option<FieldVector<ProperCrtUint<F>>>,
     swu_z: Option<FieldVector<ProperCrtUint<F>>>,
     fq2_one: Option<FieldVector<ProperCrtUint<F>>>,
+    swu_rv1: Option<FieldVector<ProperCrtUint<F>>>,
 }
 
 #[cfg(test)]
@@ -444,7 +563,7 @@ mod test {
 
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
-                    
+
                     let mut cache = HashToCurveCache::<F>::default();
                     let [x, y] = h2c_chip.hash_to_field::<bls12_381::G2>(
                         self.test_input.clone(),

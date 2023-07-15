@@ -1,9 +1,12 @@
 use halo2_ecc::fields::PrimeField;
-use halo2curves::CurveExt;
 use halo2curves::FieldExt;
 use halo2curves::bls12_381;
+use halo2curves::CurveExt;
+use itertools::Itertools;
+use num_bigint::BigUint;
+use halo2_proofs::arithmetic::Field as Halo2Field;
 
-pub trait AppCurve: CurveExt {
+pub trait AppCurveExt: CurveExt {
     type Fp: PrimeField;
 
     const BASE_BYTES: usize;
@@ -12,7 +15,7 @@ pub trait AppCurve: CurveExt {
     const NUM_LIMBS: usize;
 }
 
-impl AppCurve for bls12_381::G1 {
+impl AppCurveExt for bls12_381::G1 {
     type Fp = bls12_381::Fq;
     const BASE_BYTES: usize = 48;
     const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
@@ -20,7 +23,7 @@ impl AppCurve for bls12_381::G1 {
     const NUM_LIMBS: usize = 4;
 }
 
-impl AppCurve for bls12_381::G2 {
+impl AppCurveExt for bls12_381::G2 {
     type Fp = bls12_381::Fq;
 
     const BASE_BYTES: usize = 96;
@@ -29,22 +32,25 @@ impl AppCurve for bls12_381::G2 {
     const NUM_LIMBS: usize = 4;
 }
 
-pub trait HashCurve: AppCurve {
-    type Fq: FieldExt;
+pub trait HashCurveExt: AppCurveExt {
+    type Fq: FieldExt + Halo2Field;
     const BLS_X: u64;
 
     const SWU_A: Self::Fq;
     const SWU_B: Self::Fq;
     const SWU_Z: Self::Fq;
+    // First root of unity
     const SWU_RV1: Self::Fq;
     const SWU_ETAS: [Self::Fq; 4];
     const ISO_XNUM: [Self::Fq; 4];
     const ISO_XDEN: [Self::Fq; 3];
     const ISO_YNUM: [Self::Fq; 4];
     const ISO_YDEN: [Self::Fq; 4];
+
+    fn get_fq(v: impl IntoIterator<Item = BigUint>) -> Self::Fq;
 }
 
-impl HashCurve for bls12_381::G2 {
+impl HashCurveExt for bls12_381::G2 {
     type Fq = bls12_381::Fq2;
     const BLS_X: u64 = 0xd201000000010000;
 
@@ -59,7 +65,7 @@ impl HashCurve for bls12_381::G2 {
             0x1220_b4e9_79ea_5467,
         ]),
     };
-    
+
     const SWU_B: Self::Fq = Self::Fq {
         c0: bls12_381::Fq::from_raw_unchecked([
             0x22ea_0000_0cf8_9db2,
@@ -78,7 +84,7 @@ impl HashCurve for bls12_381::G2 {
             0x125c_db5e_74dc_4fd1,
         ]),
     };
-    
+
     const SWU_Z: Self::Fq = Self::Fq {
         c0: bls12_381::Fq::from_raw_unchecked([
             0x87eb_ffff_fff9_555c,
@@ -97,7 +103,7 @@ impl HashCurve for bls12_381::G2 {
             0x040a_b326_3eff_0206,
         ]),
     };
-    
+
     const SWU_RV1: Self::Fq = Self::Fq {
         c0: bls12_381::Fq::from_raw_unchecked([
             0x7bcf_a7a2_5aa3_0fda,
@@ -116,7 +122,7 @@ impl HashCurve for bls12_381::G2 {
             0x0e2b_7eed_bbfd_87d2,
         ]),
     };
-    
+
     const SWU_ETAS: [Self::Fq; 4] = [
         Self::Fq {
             c0: bls12_381::Fq::from_raw_unchecked([
@@ -191,7 +197,7 @@ impl HashCurve for bls12_381::G2 {
             ]),
         },
     ];
-    
+
     /// Coefficients of the 3-isogeny x map's numerator
     const ISO_XNUM: [Self::Fq; 4] = [
         Self::Fq {
@@ -253,7 +259,7 @@ impl HashCurve for bls12_381::G2 {
             ]),
         },
     ];
-    
+
     /// Coefficients of the 3-isogeny x map's denominator
     const ISO_XDEN: [Self::Fq; 3] = [
         // Self::Fp::zero(),
@@ -291,7 +297,7 @@ impl HashCurve for bls12_381::G2 {
             ]),
         },
     ];
-    
+
     /// Coefficients of the 3-isogeny y map's numerator
     const ISO_YNUM: [Self::Fq; 4] = [
         Self::Fq {
@@ -353,7 +359,7 @@ impl HashCurve for bls12_381::G2 {
             ]),
         },
     ];
-    
+
     /// Coefficients of the 3-isogeny y map's denominator
     const ISO_YDEN: [Self::Fq; 4] = [
         Self::Fq {
@@ -407,5 +413,17 @@ impl HashCurve for bls12_381::G2 {
                 0x03c6_a03d_41da_1151,
             ]),
         },
-    ];    
+    ];
+
+    fn get_fq(v: impl IntoIterator<Item = BigUint>) -> Self::Fq {
+        let (c0, c1) = v
+            .into_iter()
+            .map(|c| c.iter_u64_digits().collect_vec().try_into().unwrap())
+            .collect_tuple()
+            .unwrap();
+        bls12_381::Fq2 {
+            c0: bls12_381::Fq::from_raw_unchecked(c0),
+            c1: bls12_381::Fq::from_raw_unchecked(c1),
+        }
+    }
 }

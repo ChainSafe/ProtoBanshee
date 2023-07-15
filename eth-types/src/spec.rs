@@ -4,7 +4,7 @@ use std::iter;
 use halo2curves::bls12_381;
 
 use crate::{
-    curves::{AppCurve, HashCurve},
+    curve::{AppCurveExt, HashCurveExt},
     Field,
 };
 
@@ -26,8 +26,8 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const NUM_LIMBS: usize;
     const DST: &'static [u8];
 
-    type PubKeysCurve: AppCurve;
-    type SiganturesCurve: AppCurve + HashCurve;
+    type PubKeysCurve: AppCurveExt;
+    type SiganturesCurve: AppCurveExt + HashCurveExt;
 
     fn limb_bytes_bases<F: Field>() -> Vec<F> {
         iter::repeat(8)
