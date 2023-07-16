@@ -107,8 +107,8 @@ pub fn bitwise_xor<F: Field, const BITS: usize>(
         .fold(ctx.load_zero(), |acc, bit| gate.mul_add(ctx, acc, two, bit))
 }
 
-pub fn g2_mul_x<F: Field, C: HashCurveExt>(
-    p: &G2Point<F>,
+pub fn mul_by_x<F: Field, C: HashCurveExt>(
+    p: G2Point<F>,
     mut x: u64,
     ecc_chip: &EccChip<F, C>,
     ctx: &mut Context<F>,
@@ -119,17 +119,14 @@ where
     let mut acc = ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one()));
     let mut double = p.clone();
 
-
     let mut i = 0;
     while x > 0 {
         let bit = ctx
             .load_constant(F::from((x % 2 == 1) as u64));
         let acc_d = ecc_chip.add_unequal(ctx, &acc, &double, false);
         acc = ecc_chip.select(ctx, acc_d, acc, bit);
-        // println!("[{i}] point {:?} {:?} {:?}", assigned_fq2_to_value(&acc.x), assigned_fq2_to_value(&acc.y), assigned_fq2_to_value(&acc.z));
 
         double = ecc_chip.double(ctx, double);
-        // println!("[{i}] double {:?} {:?} {:?}", assigned_fq2_to_value(&double.x), assigned_fq2_to_value(&double.y), assigned_fq2_to_value(&double.z));
 
         x >>= 1;
         i += 1;
@@ -137,3 +134,4 @@ where
     
     p.clone()
 }
+
