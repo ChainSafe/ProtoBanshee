@@ -1,6 +1,8 @@
+use super::hash2curve::HashToCurveCache;
 use eth_types::{AppCurveExt, Field, HashCurveExt};
 use halo2_base::{
     safe_types::{GateInstructions, RangeInstructions},
+    utils::ScalarField,
     AssignedValue, Context, QuantumCell,
 };
 use halo2_ecc::{
@@ -10,7 +12,6 @@ use halo2_ecc::{
 };
 use itertools::Itertools;
 use num_bigint::BigUint;
-use super::hash2curve::HashToCurveCache;
 
 pub type FpPoint<F> = ProperCrtUint<F>;
 pub type Fp2Point<F> = FieldVector<FpPoint<F>>;
@@ -49,10 +50,12 @@ pub fn fp_sgn0<F: Field, C: AppCurveExt>(
     let range = fp_chip.range();
     let gate = range.gate();
 
-    let half = QuantumCell::Constant(F::from(2).pow_const(C::LIMB_BITS - 1));
-    let msl = x.limbs().last().unwrap(); // most significant limb
-    let msb = gate.div_unsafe(ctx, *msl, half); // most significant bit
-    range.div_mod(ctx, msb, BigUint::from(2u64), 1).1
+    let msl = x.limbs()[0]; // most significant limb
+
+    let lsb = range
+        .div_mod(ctx, msl, BigUint::from(256u64), C::LIMB_BITS)
+        .1; // get least significant *byte*
+    range.div_mod(ctx, lsb, BigUint::from(2u64), 8).1 // sgn0 = lsb % 2
 }
 
 /// Integer to Octet Stream (numberToBytesBE)
@@ -114,15 +117,14 @@ pub fn mul_by_x<F: Field, C: HashCurveExt>(
     ctx: &mut Context<F>,
 ) -> G2Point<F>
 where
-    C::Fq: FieldExtConstructor<C::Fp, 2>
+    C::Fq: FieldExtConstructor<C::Fp, 2>,
 {
     let mut acc = ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one()));
     let mut double = p.clone();
 
     let mut i = 0;
     while x > 0 {
-        let bit = ctx
-            .load_constant(F::from((x % 2 == 1) as u64));
+        let bit = ctx.load_constant(F::from((x % 2 == 1) as u64));
         let acc_d = ecc_chip.add_unequal(ctx, &acc, &double, false);
         acc = ecc_chip.select(ctx, acc_d, acc, bit);
 
@@ -131,7 +133,6 @@ where
         x >>= 1;
         i += 1;
     }
-    
+
     p.clone()
 }
-

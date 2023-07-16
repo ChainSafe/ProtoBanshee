@@ -1,9 +1,11 @@
 use halo2_ecc::fields::PrimeField;
-use halo2curves::FieldExt;
+use halo2_proofs::arithmetic::Field as Halo2Field;
 use halo2curves::CurveExt;
+use halo2curves::FieldExt;
 use itertools::Itertools;
 use num_bigint::BigUint;
-use halo2_proofs::arithmetic::Field as Halo2Field;
+use pasta_curves::arithmetic::SqrtRatio;
+use subtle::Choice;
 
 pub trait AppCurveExt: CurveExt {
     type Fp: PrimeField;
@@ -15,7 +17,7 @@ pub trait AppCurveExt: CurveExt {
 }
 
 pub trait HashCurveExt: AppCurveExt {
-    type Fq: FieldExt + Halo2Field;
+    type Fq: FieldExt + Halo2Field + SqrtRatio;
     const BLS_X: u64;
 
     const SWU_A: Self::Fq;
@@ -33,12 +35,16 @@ pub trait HashCurveExt: AppCurveExt {
     const PSI_Y: Self::Fq;
     const PSI2_X: Self::Fq;
 
-    fn get_fq(v: impl IntoIterator<Item = BigUint>) -> Self::Fq;
+    fn get_fq(v: impl IntoIterator<Item = Vec<u8>>) -> Self::Fq;
+
+    fn sqrt_ratio(num: &Self::Fq, div: &Self::Fq, _u: Option<Self::Fq>) -> (Choice, Self::Fq) {
+        Self::Fq::sqrt_ratio(num, div)
+    }
 }
 
 mod bls12_381 {
     use super::*;
-    use halo2curves::bls12_381::{Fq, Fq2, G1, G2};
+    use halo2curves::bls12_381::{chain::chain_p2m9div16, Fq, Fq2, G1, G2};
 
     impl AppCurveExt for G1 {
         type Fp = Fq;
@@ -47,10 +53,10 @@ mod bls12_381 {
         const LIMB_BITS: usize = 112;
         const NUM_LIMBS: usize = 4;
     }
-    
+
     impl AppCurveExt for G2 {
         type Fp = Fq;
-    
+
         const BASE_BYTES: usize = 96;
         const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
         const LIMB_BITS: usize = 112;
@@ -60,7 +66,7 @@ mod bls12_381 {
     impl HashCurveExt for G2 {
         type Fq = Fq2;
         const BLS_X: u64 = 0xd201000000010000;
-    
+
         const SWU_A: Self::Fq = Self::Fq {
             c0: Fq::zero(),
             c1: Fq::from_raw_unchecked([
@@ -72,7 +78,7 @@ mod bls12_381 {
                 0x1220_b4e9_79ea_5467,
             ]),
         };
-    
+
         const SWU_B: Self::Fq = Self::Fq {
             c0: Fq::from_raw_unchecked([
                 0x22ea_0000_0cf8_9db2,
@@ -91,7 +97,7 @@ mod bls12_381 {
                 0x125c_db5e_74dc_4fd1,
             ]),
         };
-    
+
         const SWU_Z: Self::Fq = Self::Fq {
             c0: Fq::from_raw_unchecked([
                 0x87eb_ffff_fff9_555c,
@@ -110,7 +116,7 @@ mod bls12_381 {
                 0x040a_b326_3eff_0206,
             ]),
         };
-    
+
         const SWU_RV1: Self::Fq = Self::Fq {
             c0: Fq::from_raw_unchecked([
                 0x7bcf_a7a2_5aa3_0fda,
@@ -129,7 +135,7 @@ mod bls12_381 {
                 0x0e2b_7eed_bbfd_87d2,
             ]),
         };
-    
+
         const SWU_ETAS: [Self::Fq; 4] = [
             Self::Fq {
                 c0: Fq::from_raw_unchecked([
@@ -204,7 +210,7 @@ mod bls12_381 {
                 ]),
             },
         ];
-    
+
         /// Coefficients of the 3-isogeny x map's numerator
         const ISO_XNUM: [Self::Fq; 4] = [
             Self::Fq {
@@ -266,7 +272,7 @@ mod bls12_381 {
                 ]),
             },
         ];
-    
+
         /// Coefficients of the 3-isogeny x map's denominator
         const ISO_XDEN: [Self::Fq; 3] = [
             // Self::Fp::zero(),
@@ -304,7 +310,7 @@ mod bls12_381 {
                 ]),
             },
         ];
-    
+
         /// Coefficients of the 3-isogeny y map's numerator
         const ISO_YNUM: [Self::Fq; 4] = [
             Self::Fq {
@@ -366,7 +372,7 @@ mod bls12_381 {
                 ]),
             },
         ];
-    
+
         /// Coefficients of the 3-isogeny y map's denominator
         const ISO_YDEN: [Self::Fq; 4] = [
             Self::Fq {
@@ -421,7 +427,7 @@ mod bls12_381 {
                 ]),
             },
         ];
-    
+
         const PSI_X: Self::Fq = Self::Fq {
             c0: Fq::zero(),
             c1: Fq::from_raw_unchecked([
@@ -433,7 +439,7 @@ mod bls12_381 {
                 0x14e56d3f1564853a,
             ]),
         };
-    
+
         const PSI_Y: Self::Fq = Self::Fq {
             c0: Fq::from_raw_unchecked([
                 0x3e2f585da55c9ad1,
@@ -464,18 +470,68 @@ mod bls12_381 {
             ]),
             c1: Fq::zero(),
         };
-    
-        fn get_fq(v: impl IntoIterator<Item = BigUint>) -> Self::Fq {
+
+        fn get_fq(v: impl IntoIterator<Item = Vec<u8>>) -> Self::Fq {
             let (c0, c1) = v
                 .into_iter()
-                .map(|c| c.iter_u64_digits().collect_vec().try_into().unwrap())
+                .map(|c| Fq::from_bytes(&c.try_into().unwrap()).unwrap())
                 .collect_tuple()
                 .unwrap();
-            Fq2 {
-                c0: Fq::from_raw_unchecked(c0),
-                c1: Fq::from_raw_unchecked(c1),
+            Fq2 { c0, c1 }
+        }
+
+        fn sqrt_ratio(num: &Self::Fq, div: &Self::Fq, u: Option<Self::Fq>) -> (Choice, Self::Fq) {
+            let u = u.expect("u is required");
+            let usq = u.square();
+            let z_usq = Self::SWU_Z * usq;
+            let zsq_u4 = z_usq.square();
+
+            let sqrt_candidate = {
+                let vsq = div.square(); // v^2
+                let v_3 = vsq * div; // v^3
+                let v_4 = vsq.square(); // v^4
+                let uv_7 = num * v_3 * v_4; // u v^7
+                let uv_15 = uv_7 * v_4.square(); // u v^15
+                uv_7 * chain_p2m9div16(&uv_15) // u v^7 (u v^15) ^ ((p^2 - 9) // 16)
+            };
+
+            // set y = sqrt_candidate * Fp2::one(), check candidate against other roots of unity
+            let mut y = sqrt_candidate;
+
+            // check Fp2(0, 1)
+            let tmp = Self::Fq {
+                c0: -sqrt_candidate.c1,
+                c1: sqrt_candidate.c0,
+            };
+            let mut is_square = (tmp.square() * div).ct_eq(&num);
+
+            y.conditional_assign(&tmp, is_square);
+
+            // check Fp2(RV1, RV1)
+            let tmp = sqrt_candidate * Self::SWU_RV1;
+            is_square = (tmp.square() * div).ct_eq(&num);
+            y.conditional_assign(&tmp, is_square);
+            // check Fp2(RV1, -RV1)
+            let tmp = Self::Fq {
+                c0: tmp.c1,
+                c1: -tmp.c0,
+            };
+            is_square = (tmp.square() * div).ct_eq(&num);
+            y.conditional_assign(&tmp, is_square);
+
+            is_square = Choice::from(0);
+
+            let gx1_num = num * z_usq * zsq_u4;
+            // compute g(x1(u)) * u^3
+            let sqrt_candidate = sqrt_candidate * usq * u;
+            for eta in &Self::SWU_ETAS[..] {
+                let tmp = sqrt_candidate * eta;
+                let found = (tmp.square() * div).ct_eq(&gx1_num);
+                y.conditional_assign(&tmp, found);
+                is_square |= found;
             }
+
+            (is_square, y)
         }
     }
-    
 }

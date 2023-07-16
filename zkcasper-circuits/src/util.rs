@@ -280,7 +280,7 @@ pub fn decode_into_field_modp<'a, S: Spec, F: Field, FP: ScalarField>(
     fp_chip.carry_mod(ctx, overflow.into())
 }
 
-fn bigint_to_le_bytes_dev<F: Field>(
+pub fn bigint_to_le_bytes<F: Field>(
     limbs: impl IntoIterator<Item = F>,
     limb_bits: usize,
     total_bytes: usize,

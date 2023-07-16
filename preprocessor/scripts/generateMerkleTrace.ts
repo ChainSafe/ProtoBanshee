@@ -55,7 +55,58 @@ let bn256PubKeys = [
     Uint8Array.from([121, 120, 209, 158, 108, 187, 60, 235, 177, 236, 91, 119, 41, 91, 169, 248, 81, 14, 103, 225, 193, 253, 84, 100, 35, 74, 153, 84, 192, 99, 209, 164]),
     Uint8Array.from([52, 219, 202, 145, 120, 83, 129, 10, 43, 214, 40, 152, 52, 137, 13, 111, 29, 53, 100, 179, 118, 189, 3, 68, 151, 17, 118, 216, 241, 40, 62, 164]),
     Uint8Array.from([3, 108, 186, 33, 251, 235, 204, 9, 215, 241, 212, 103, 5, 127, 9, 119, 207, 230, 42, 192, 21, 66, 41, 224, 255, 53, 248, 103, 1, 247, 171, 138]),
-]
+];
+
+function bigintToArray32(bigInt: bigint): number[] {
+    const arr: number[] = [];
+    const base = BigInt(2 ** 32);  // base for each chunk
+
+    while (bigInt > 0) {
+        // get the 32 least significant bits and convert it to a number
+        const value = Number(bigInt % base);
+
+        // push the value to the array
+        arr.push(value);
+
+        // remove the 32 least significant bits from the BigInt
+        bigInt /= base;
+    }
+
+    return arr;
+}
+
+function bigintToArray64(bigInt: bigint): number[] {
+    const arr: number[] = [];
+    const base = BigInt(2 ** 64);  // base for each chunk
+
+    while (bigInt > 0) {
+        // get the 32 least significant bits and convert it to a number
+        const value = Number(bigInt % base);
+
+        // push the value to the array
+        arr.push(value);
+
+        // remove the 32 least significant bits from the BigInt
+        bigInt /= base;
+    }
+
+    return arr;
+}
+
+console.log(bls12_381.fields.Fp.ORDER % 4n);
+if (bls12_381.fields.Fp2.ORDER % 4n === 3n) {
+    const Z = bls12_381.fields.Fp2.create({c0: bls12_381.fields.Fp.create(BigInt(-2)), c1: bls12_381.fields.Fp.create(BigInt(-1))});
+
+    const c2 = bls12_381.fields.Fp2.sqrt(bls12_381.fields.Fp2.neg(Z)) // 2. c2 = sqrt(-Z)
+    
+    console.log("c2.c0:", bigintToArray64(c2.c0));
+    console.log("c2.c1:", bigintToArray64(c2.c1));
+    
+    console.log("c1:", bigintToArray32((bls12_381.fields.Fp2.ORDER - 3n) / 4n));
+}
+
+
+
 
 for (let i = 0; i < N; i++) {
     // let privKey = bls12_381.utils.randomPrivateKey();
