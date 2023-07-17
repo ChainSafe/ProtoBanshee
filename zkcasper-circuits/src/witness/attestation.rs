@@ -8,7 +8,7 @@ use halo2curves::{
 use ssz_rs::Merkleized;
 
 #[allow(type_alias_bounds)]
-pub type Attestation<S: Spec> = IndexedAttestation<{S::MAX_VALIDATORS_PER_COMMITTEE}>;
+pub type Attestation<S: Spec> = IndexedAttestation<{ S::MAX_VALIDATORS_PER_COMMITTEE }>;
 
 pub fn attestations_dev<const MAX_VALIDATORS_PER_COMMITTEE: usize>(
     validators: Vec<Validator>,

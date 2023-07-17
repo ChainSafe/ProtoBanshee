@@ -1,12 +1,12 @@
 use std::{cell::RefCell, collections::HashMap, hash::Hash};
 
 use eth_types::Field;
-use halo2_base::{Context, QuantumCell, safe_types::RangeChip};
+use halo2_base::{safe_types::RangeChip, Context, QuantumCell};
 use halo2_proofs::{circuit::Region, plonk::Error};
 
 use crate::witness::HashInput;
 
-use super::sha256::{AssignedHashResult, Sha256Chip, HashChip};
+use super::sha256::{AssignedHashResult, HashChip, Sha256Chip};
 
 #[derive(Debug)]
 pub struct CachedHashChip<F: Field, HC: HashChip<F>> {
@@ -40,7 +40,10 @@ impl<F: Field, HC: HashChip<F>> HashChip<F> for CachedHashChip<F, HC> {
         self.inner.take_extra_assignments()
     }
 
-    fn set_extra_assignments(&mut self, extra_assignments: halo2_base::gates::builder::KeygenAssignments<F>) {
+    fn set_extra_assignments(
+        &mut self,
+        extra_assignments: halo2_base::gates::builder::KeygenAssignments<F>,
+    ) {
         self.inner.set_extra_assignments(extra_assignments)
     }
 

@@ -89,8 +89,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             .iter()
             .map(|v| {
                 let g1_affine =
-                    G1Affine::from_bytes(&v.pubkey[..S::FQ_BYTES].try_into().unwrap())
-                        .unwrap();
+                    G1Affine::from_bytes(&v.pubkey[..S::FQ_BYTES].try_into().unwrap()).unwrap();
                 g1_affine.y
             })
             .collect();

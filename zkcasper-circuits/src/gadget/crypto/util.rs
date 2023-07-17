@@ -109,5 +109,3 @@ pub fn bitwise_xor<F: Field, const BITS: usize>(
         .rev()
         .fold(ctx.load_zero(), |acc, bit| gate.mul_add(ctx, acc, two, bit))
 }
-
-
