@@ -344,28 +344,25 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
 
         let x = fp2_chip.mul(ctx, &z_usq, &x0_num); // 17.  x = tv1 * tv3
 
-        let (is_gx1_square, y) =
+        let (is_gx1_square, y1) =
             Self::sqrt_ratio::<C>(gx0_num, gx_den, u.clone(), &fp2_chip, ctx, cache); // 18.  (is_gx1_square, y1) = sqrt_ratio(tv2, tv6)
 
-        // let y = fp2_chip.mul(ctx, &z_usq, &u); // 19.  y = tv1 * u
-        // let y = fp2_chip.mul(ctx, y, y1.clone()); // 20.  y = y * y1
-        let x = fp2_chip.select(ctx, x, x0_num, is_gx1_square); // 21.  x = is_gx1_square ? x : tv3
-        // let y = fp2_chip.select(ctx, y, y1, is_gx1_square); // 22.  y = is_gx1_square ? y : y1
+        let y = fp2_chip.mul(ctx, &z_usq, &u); // 19.  y = tv1 * u
+        let y = fp2_chip.mul(ctx, y, y1.clone()); // 20.  y = y * y1
+        let x = fp2_chip.select(ctx, x0_num, x, is_gx1_square); // 21.  x = is_gx1_square ? tv3 : x
+        let y = fp2_chip.select(ctx, y1, y, is_gx1_square); // 22.  y = is_gx1_square ? y1 : y
 
         let to_neg = {
             let u_sgn = fp2_sgn0::<_, C>(u, ctx, fp_chip);
             let y_sgn = fp2_sgn0::<_, C>(y.clone(), ctx, fp_chip);
             gate.xor(ctx, u_sgn, y_sgn)
-        }; // 23.  e1 = sgn0(u) == sgn0(y)
+        }; // 23.  e1 = sgn0(u) == sgn0(y) // we implement an opposite condition: !e1 = sgn0(u) ^ sgn0(y)
 
         let y_neg = fp2_chip.negate(ctx, y.clone());
-        let y = fp2_chip.select(ctx, y_neg, y, to_neg); // 24.  y = e1 ? -y : y
+        let y = fp2_chip.select(ctx, y_neg, y, to_neg); // 24.  y = !e1 ? -y : y
         let x = fp2_chip.divide(ctx, x, x_den); // 25.  x = x / tv4
-        print_fq2_dev::<C, F>(&x, "x");
-        print_fq2_dev::<C, F>(&y, "y");
 
-
-        G2Point::new(_tmp.clone(), _tmp)
+        G2Point::new(x, y)
     }
 
     /// Implements [Appendix E.3 of draft-irtf-cfrg-hash-to-curve-16][isogeny_map_g2]
@@ -490,24 +487,24 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let div_v = Self::assigned_fq2_to_value::<C>(&div);
         let u = Self::assigned_fq2_to_value::<C>(&u);
 
-        let (is_square, y) = C::sqrt_ratio(&num_v, &div_v, Some(u));
+        let (is_square, y) = C::Fq::sqrt_ratio(&num_v, &div_v);
 
         let is_square = ctx.load_witness(F::from(is_square.unwrap_u8() as u64));
-        //fp2_chip.fp_chip().gate().assert_bit(ctx, is_square); // assert is_square is boolean
+        fp2_chip.fp_chip().gate().assert_bit(ctx, is_square); // assert is_square is boolean
 
         let y_assigned = fp2_chip.load_private(ctx, y);
 
-        // let num_div = fp2_chip.divide(ctx, num.clone(), div.clone()); // r (ratio) = u / v
-        // let num_div_sqr = fp2_chip.mul(ctx, num_div.clone(), num_div.clone()); // sqrt_a = r^2
+        let num_div = fp2_chip.divide(ctx, num.clone(), div.clone()); // r (ratio) = u / v
+        let num_div_sqr = fp2_chip.mul(ctx, num_div.clone(), num_div.clone()); // sqrt_a = r^2
 
-        // let rv1 = cache
-        //     .swu_rv1
-        //     .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_RV1));
-        // let num_div_rv1 = fp2_chip.mul(ctx, num_div, rv1.clone()); // sqrt_b = r * rv1 (first root of unity)
+        let rv1 = cache
+            .swu_rv1
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_RV1));
+        let num_div_rv1 = fp2_chip.mul(ctx, num_div, rv1.clone()); // sqrt_b = r * rv1 (first root of unity)
 
-        // let y_check = fp2_chip.select(ctx, num_div_sqr, num_div_rv1, is_square.clone()); // y_check = is_square ? sqrt_a : sqrt_b
+        let y_check = fp2_chip.select(ctx, num_div_sqr, num_div_rv1, is_square.clone()); // y_check = is_square ? sqrt_a : sqrt_b
 
-        // fp2_chip.assert_equal(ctx, y_check, y_assigned.clone()); // assert y_check == y_assigned
+        fp2_chip.assert_equal(ctx, y_check, y_assigned.clone()); // assert y_check == y_assigned
 
         (is_square, y_assigned)
     }
@@ -584,8 +581,11 @@ fn print_fq2_dev<C: AppCurveExt, F: Field>(fq2: &Fp2Point<F>, label: &str) {
         C::LIMB_BITS,
         48,
     );
-    let c0 = hex::encode(&c0_bytes);
-    let c1 = hex::encode(&c1_bytes);
+    // println!("{label} bytes: {:?}", c0_bytes.clone().into_iter().rev().chain(c1_bytes.clone().into_iter().rev()).collect::<Vec<u8>>());
+    let c0 = BigUint::from_bytes_le(&c0_bytes);
+    let c1 = BigUint::from_bytes_le(&c1_bytes);
+    // let c0 = hex::encode(c0_bytes);
+    // let c1 = hex::encode(c1_bytes);
     println!("{label}: ({}, {})", c0, c1);
 }
 

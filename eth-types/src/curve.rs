@@ -36,15 +36,11 @@ pub trait HashCurveExt: AppCurveExt {
     const PSI2_X: Self::Fq;
 
     fn get_fq(v: impl IntoIterator<Item = Vec<u8>>) -> Self::Fq;
-
-    fn sqrt_ratio(num: &Self::Fq, div: &Self::Fq, _u: Option<Self::Fq>) -> (Choice, Self::Fq) {
-        Self::Fq::sqrt_ratio(num, div)
-    }
 }
 
 mod bls12_381 {
     use super::*;
-    use halo2curves::bls12_381::{chain::chain_p2m9div16, Fq, Fq2, G1, G2};
+    use halo2curves::bls12_381::{Fq, Fq2, G1, G2};
 
     impl AppCurveExt for G1 {
         type Fp = Fq;
@@ -477,61 +473,12 @@ mod bls12_381 {
                 .map(|c| Fq::from_bytes(&c.try_into().unwrap()).unwrap())
                 .collect_tuple()
                 .unwrap();
-            Fq2 { c0, c1 }
-        }
-
-        fn sqrt_ratio(num: &Self::Fq, div: &Self::Fq, u: Option<Self::Fq>) -> (Choice, Self::Fq) {
-            let u = u.expect("u is required");
-            let usq = u.square();
-            let z_usq = Self::SWU_Z * usq;
-            let zsq_u4 = z_usq.square();
-
-            let sqrt_candidate = {
-                let vsq = div.square(); // v^2
-                let v_3 = vsq * div; // v^3
-                let v_4 = vsq.square(); // v^4
-                let uv_7 = num * v_3 * v_4; // u v^7
-                let uv_15 = uv_7 * v_4.square(); // u v^15
-                uv_7 * chain_p2m9div16(&uv_15) // u v^7 (u v^15) ^ ((p^2 - 9) // 16)
-            };
-
-            // set y = sqrt_candidate * Fp2::one(), check candidate against other roots of unity
-            let mut y = sqrt_candidate;
-
-            // check Fp2(0, 1)
-            let tmp = Self::Fq {
-                c0: -sqrt_candidate.c1,
-                c1: sqrt_candidate.c0,
-            };
-            let mut is_square = (tmp.square() * div).ct_eq(&num);
-
-            y.conditional_assign(&tmp, is_square);
-
-            // check Fp2(RV1, RV1)
-            let tmp = sqrt_candidate * Self::SWU_RV1;
-            is_square = (tmp.square() * div).ct_eq(&num);
-            y.conditional_assign(&tmp, is_square);
-            // check Fp2(RV1, -RV1)
-            let tmp = Self::Fq {
-                c0: tmp.c1,
-                c1: -tmp.c0,
-            };
-            is_square = (tmp.square() * div).ct_eq(&num);
-            y.conditional_assign(&tmp, is_square);
-
-            is_square = Choice::from(0);
-
-            let gx1_num = num * z_usq * zsq_u4;
-            // compute g(x1(u)) * u^3
-            let sqrt_candidate = sqrt_candidate * usq * u;
-            for eta in &Self::SWU_ETAS[..] {
-                let tmp = sqrt_candidate * eta;
-                let found = (tmp.square() * div).ct_eq(&gx1_num);
-                y.conditional_assign(&tmp, found);
-                is_square |= found;
-            }
-
-            (is_square, y)
+            let v = Fq2 { c0, c1 };
+            let bytes_be = v.to_bytes().into_iter().rev();
+            // println!("v: {:?}", bytes_be.clone());
+            // println!("v.c0: {:?}", BigUint::from_bytes_le(&v.c0.to_bytes()));
+            // println!("v.c1: {:?}", BigUint::from_bytes_le(&v.c1.to_bytes()));
+            v
         }
     }
 }
