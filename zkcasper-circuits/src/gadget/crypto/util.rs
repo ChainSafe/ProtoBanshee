@@ -119,20 +119,27 @@ pub fn mul_by_x<F: Field, C: HashCurveExt>(
 where
     C::Fq: FieldExtConstructor<C::Fp, 2>,
 {
-    let mut acc = ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one()));
-    let mut double = p.clone();
+    // let mut acc = ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one()));
+    // let mut double = p.clone();
 
-    let mut i = 0;
-    while x > 0 {
-        let bit = ctx.load_constant(F::from((x % 2 == 1) as u64));
-        let acc_d = ecc_chip.add_unequal(ctx, &acc, &double, false);
-        acc = ecc_chip.select(ctx, acc_d, acc, bit);
+    let scalar = vec![ctx.load_constant(F::from(x))];
+    ecc_chip.scalar_mult(ctx, p, scalar, 64, 4, true)
 
-        double = ecc_chip.double(ctx, double);
+    // let mut bits = vec![];
+    // let mut i = 0;
+    // while x > 0 {
+    //     let bit = ctx.load_constant(F::from((x % 2 == 1) as u64));
+    //     bits.push(bit.value().get_lower_32());
+    //     let acc_d = ecc_chip.add_unequal(ctx, &acc, &double, false);
+    //     acc = ecc_chip.select(ctx, acc, acc_d, bit);
 
-        x >>= 1;
-        i += 1;
-    }
+    //     double = ecc_chip.double(ctx, double);
 
-    p.clone()
+    //     x >>= 1;
+    //     i += 1;
+    // }
+
+    // println!("bits[{}]: {:?}", bits.len(), bits);
+
+    // acc
 }

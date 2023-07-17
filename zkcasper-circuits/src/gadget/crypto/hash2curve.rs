@@ -170,14 +170,13 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let [u0, u1] = u;
 
         let p1 = Self::map_to_curve_simple_swu::<C>(u0, &fp2_chip, ctx, cache);
-        // let p2 = Self::map_to_curve_simple_swu::<C>(u1, &fp2_chip, ctx, cache);
+        let p2 = Self::map_to_curve_simple_swu::<C>(u1, &fp2_chip, ctx, cache);
 
-        // let p_sum = ecc_chip.add_unequal(ctx, p1, p2, false);
+        let p_sum = ecc_chip.add_unequal(ctx, p1, p2, false);
 
-        // let iso_p = Self::isogeny_map::<C>(p_sum, &fp2_chip, ctx, cache);
+        let iso_p = Self::isogeny_map::<C>(p_sum, &fp2_chip, ctx, cache);
 
-        // Ok(Self::clear_cofactor::<C>(iso_p, &ecc_chip, ctx, cache))
-        Ok(ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one())))
+        Ok(Self::clear_cofactor::<C>(iso_p, &ecc_chip, ctx, cache))
     }
 
     /// Implements [section 5.3 of `draft-irtf-cfrg-hash-to-curve-16`][expand_message_xmd].
@@ -291,7 +290,6 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
     where
         C::Fq: FieldExtConstructor<C::Fp, 2>,
     {
-        let _tmp = u.clone();
         let fp_chip = fp2_chip.fp_chip();
         let gate = fp_chip.range().gate();
 
@@ -432,7 +430,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
     /// References:
     /// - https://github.com/mikelodder7/bls12_381_plus/blob/ml/0.5.6/src/g2.rs#L956
     /// - https://github.com/paulmillr/noble-curves/blob/bf70ba9/src/bls12-381.ts#L1111
-    pub fn clear_cofactor<C: HashCurveExt>(
+    fn clear_cofactor<C: HashCurveExt>(
         p: G2Point<F>,
         ecc_chip: &EccChip<F, C>,
         ctx: &mut Context<F>,
@@ -467,6 +465,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
 
         // Ψ²(2P) - Ψ(P) + [x²]P - [x]Ψ(P) + [x]P - 1P => [x²-x-1]P + [x-1]Ψ(P) + Ψ²(2P)
         ecc_chip.sub_unequal(ctx, t3, p, false)
+        // ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one()))
     }
 
     // Implements [Appendix F.2.1 of draft-irtf-cfrg-hash-to-curve-16][sqrt_ration]
@@ -493,18 +492,18 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         fp2_chip.fp_chip().gate().assert_bit(ctx, is_square); // assert is_square is boolean
 
         let y_assigned = fp2_chip.load_private(ctx, y);
+        let y_sqr = fp2_chip.mul(ctx, y_assigned.clone(), y_assigned.clone()); // y_sqr = y1^2
 
-        let num_div = fp2_chip.divide(ctx, num.clone(), div.clone()); // r (ratio) = u / v
-        let num_div_sqr = fp2_chip.mul(ctx, num_div.clone(), num_div.clone()); // sqrt_a = r^2
+        let ratio = fp2_chip.divide(ctx, num.clone(), div.clone()); // r = u / v
 
-        let rv1 = cache
-            .swu_rv1
-            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_RV1));
-        let num_div_rv1 = fp2_chip.mul(ctx, num_div, rv1.clone()); // sqrt_b = r * rv1 (first root of unity)
+        let swu_z = cache
+            .swu_z
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_Z));
+        let ratio_z = fp2_chip.mul(ctx, ratio.clone(), swu_z.clone()); // r_z = r * z
 
-        let y_check = fp2_chip.select(ctx, num_div_sqr, num_div_rv1, is_square.clone()); // y_check = is_square ? sqrt_a : sqrt_b
+        let y_check = fp2_chip.select(ctx, ratio, ratio_z, is_square.clone()); // y_check = is_square ? ratio : r_z
 
-        fp2_chip.assert_equal(ctx, y_check, y_assigned.clone()); // assert y_check == y_assigned
+        fp2_chip.assert_equal(ctx, y_check, y_sqr); // assert y_check == y_sqr
 
         (is_square, y_assigned)
     }
@@ -535,7 +534,6 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let y = fp2_chip.mul(ctx, y_frob, psi_y.clone());
 
         // TODO: z?
-
         G2Point::new(x, y)
     }
 
@@ -551,7 +549,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         // 1 / 2 ^ ((q-1)/3)
         let psi2_x = cache
             .psi2_x
-            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::PSI_X));
+            .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::PSI2_X));
 
         let x = fp2_chip.mul(ctx, p.x, psi2_x.clone());
         let y = fp2_chip.negate(ctx, p.y);
@@ -598,7 +596,6 @@ pub struct HashToCurveCache<F: Field> {
     swu_z: Option<Fp2Point<F>>,
     fq2_zero: Option<Fp2Point<F>>,
     fq2_one: Option<Fp2Point<F>>,
-    swu_rv1: Option<Fp2Point<F>>,
     iso_coeffs: Option<[Vec<Fp2Point<F>>; 4]>,
     psi_x: Option<Fp2Point<F>>,
     psi_y: Option<Fp2Point<F>>,
@@ -741,11 +738,11 @@ mod test {
 
     impl<S: Spec, F: Field> TestCircuit<S, F> {
         const MAX_BYTE_SIZE: usize = 160;
-        const NUM_ADVICE: usize = 20;
+        const NUM_ADVICE: usize = 25;
         const NUM_FIXED: usize = 1;
-        const NUM_LOOKUP_ADVICE: usize = 4;
+        const NUM_LOOKUP_ADVICE: usize = 5;
         const LOOKUP_BITS: usize = 8;
-        const K: usize = 13;
+        const K: usize = 16;
     }
 
     #[test]
@@ -763,6 +760,6 @@ mod test {
         };
 
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();
-        // prover.assert_satisfied();
+        prover.assert_satisfied();
     }
 }

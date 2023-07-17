@@ -57,10 +57,6 @@ let bn256PubKeys = [
     Uint8Array.from([3, 108, 186, 33, 251, 235, 204, 9, 215, 241, 212, 103, 5, 127, 9, 119, 207, 230, 42, 192, 21, 66, 41, 224, 255, 53, 248, 103, 1, 247, 171, 138]),
 ];
 
-bls12_381.G2.hashToCurve(Uint8Array.from(Array(32).fill(0)), {
-    DST: "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_",
-});
-
 for (let i = 0; i < N; i++) {
     // let privKey = bls12_381.utils.randomPrivateKey();
     // let pubkey = bls12_381.getPublicKey(privKey);
@@ -101,7 +97,7 @@ const areEqual = (first: Uint8Array, second: Uint8Array) =>
 
 let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proof.witnesses, proof.gindices, nonRlcGindices);
 
-// printTrace(partial_tree, trace);
+printTrace(partial_tree, trace);
 
 const target_epoch = 25;
 

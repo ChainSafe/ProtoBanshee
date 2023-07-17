@@ -3,9 +3,7 @@ use halo2_proofs::arithmetic::Field as Halo2Field;
 use halo2curves::CurveExt;
 use halo2curves::FieldExt;
 use itertools::Itertools;
-use num_bigint::BigUint;
 use pasta_curves::arithmetic::SqrtRatio;
-use subtle::Choice;
 
 pub trait AppCurveExt: CurveExt {
     type Fp: PrimeField;
@@ -473,12 +471,7 @@ mod bls12_381 {
                 .map(|c| Fq::from_bytes(&c.try_into().unwrap()).unwrap())
                 .collect_tuple()
                 .unwrap();
-            let v = Fq2 { c0, c1 };
-            let bytes_be = v.to_bytes().into_iter().rev();
-            // println!("v: {:?}", bytes_be.clone());
-            // println!("v.c0: {:?}", BigUint::from_bytes_le(&v.c0.to_bytes()));
-            // println!("v.c1: {:?}", BigUint::from_bytes_le(&v.c1.to_bytes()));
-            v
+            Fq2 { c0, c1 }
         }
     }
 }
