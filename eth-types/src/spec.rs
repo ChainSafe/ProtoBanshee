@@ -54,11 +54,11 @@ impl Spec for Test {
     const STATE_TREE_DEPTH: usize = 10;
     const STATE_TREE_LEVEL_PUBKEYS: usize = 10;
     const STATE_TREE_LEVEL_VALIDATORS: usize = Self::STATE_TREE_LEVEL_PUBKEYS - 1;
-    const FQ_BYTES: usize = 48; // TODO: 48 for BLS12-381.
+    const FQ_BYTES: usize = 32; // TODO: 48 for BLS12-381.
     const FQ2_BYTES: usize = Self::FQ_BYTES * 2;
     const G1_BYTES_UNCOMPRESSED: usize = Self::FQ_BYTES * 2;
-    const LIMB_BITS: usize = 112;
-    const NUM_LIMBS: usize = 4;
+    const LIMB_BITS: usize = 88;
+    const NUM_LIMBS: usize = 3;
     const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
     type PubKeysCurve = bls12_381::G1;
@@ -84,7 +84,7 @@ impl Spec for Mainnet {
     const G1_BYTES_UNCOMPRESSED: usize = Self::FQ_BYTES * 2;
     const FQ2_BYTES: usize = Self::FQ_BYTES * 2;
     const LIMB_BITS: usize = 112;
-    const NUM_LIMBS: usize = 5;
+    const NUM_LIMBS: usize = 4;
     const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
     type PubKeysCurve = bls12_381::G1;

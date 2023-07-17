@@ -110,36 +110,4 @@ pub fn bitwise_xor<F: Field, const BITS: usize>(
         .fold(ctx.load_zero(), |acc, bit| gate.mul_add(ctx, acc, two, bit))
 }
 
-pub fn mul_by_x<F: Field, C: HashCurveExt>(
-    p: G2Point<F>,
-    mut x: u64,
-    ecc_chip: &EccChip<F, C>,
-    ctx: &mut Context<F>,
-) -> G2Point<F>
-where
-    C::Fq: FieldExtConstructor<C::Fp, 2>,
-{
-    // let mut acc = ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one()));
-    // let mut double = p.clone();
 
-    let scalar = vec![ctx.load_constant(F::from(x))];
-    ecc_chip.scalar_mult(ctx, p, scalar, 64, 4, true)
-
-    // let mut bits = vec![];
-    // let mut i = 0;
-    // while x > 0 {
-    //     let bit = ctx.load_constant(F::from((x % 2 == 1) as u64));
-    //     bits.push(bit.value().get_lower_32());
-    //     let acc_d = ecc_chip.add_unequal(ctx, &acc, &double, false);
-    //     acc = ecc_chip.select(ctx, acc, acc_d, bit);
-
-    //     double = ecc_chip.double(ctx, double);
-
-    //     x >>= 1;
-    //     i += 1;
-    // }
-
-    // println!("bits[{}]: {:?}", bits.len(), bits);
-
-    // acc
-}
