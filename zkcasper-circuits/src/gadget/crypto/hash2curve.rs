@@ -441,6 +441,8 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         C::Fq: FieldExtConstructor<C::Fp, 2>,
     {
         let t1 = {
+            // scalar multiplication is very expensive in terms of rows used
+            // TODO: is there other ways to clear cofactor that avoid scalar multiplication?
             let tv = Self::mul_by_bls_x::<C>(p.clone(), &ecc_chip, ctx, cache);
             ecc_chip.negate(ctx, tv)
         }; // [-x]P
@@ -464,7 +466,6 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
 
         // Ψ²(2P) - Ψ(P) + [x²]P - [x]Ψ(P) + [x]P - 1P => [x²-x-1]P + [x-1]Ψ(P) + Ψ²(2P)
         ecc_chip.sub_unequal(ctx, t3, p, false)
-        // ecc_chip.load_private_unchecked(ctx, (C::Fq::zero(), C::Fq::one()))
     }
 
     // Implements [Appendix F.2.1 of draft-irtf-cfrg-hash-to-curve-16][sqrt_ration]
@@ -555,7 +556,6 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let x = fp2_chip.mul(ctx, x_frob, psi_x.clone());
         let y = fp2_chip.mul(ctx, y_frob, psi_y.clone());
 
-        // TODO: z?
         G2Point::new(x, y)
     }
 
