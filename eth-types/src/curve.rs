@@ -1,12 +1,20 @@
 use halo2_ecc::fields::PrimeField;
+use halo2_ecc::halo2_base::utils::CurveAffineExt;
 use halo2_proofs::arithmetic::Field as Halo2Field;
 use halo2curves::CurveExt;
 use halo2curves::FieldExt;
 use itertools::Itertools;
 use pasta_curves::arithmetic::SqrtRatio;
 
-pub trait AppCurveExt: CurveExt {
+pub trait AppCurveExt: CurveExt<AffineExt: CurveAffineExt> {
+    /// Prime field of order $p$ over which the elliptic curves is defined.
     type Fp: PrimeField;
+    /// Prime field of order $q = p^k$ where k is the embedding degree.
+    type Fq: PrimeField + FieldExt + Halo2Field = Self::Fp;
+    /// Affine version of the curve.
+    type Affine: CurveAffineExt<Base = Self::Fq>;
+
+    const B: u64;
 
     const BASE_BYTES: usize;
     const BYTES_UNCOMPRESSED: usize;
@@ -14,8 +22,7 @@ pub trait AppCurveExt: CurveExt {
     const NUM_LIMBS: usize;
 }
 
-pub trait HashCurveExt: AppCurveExt {
-    type Fq: FieldExt + Halo2Field + SqrtRatio;
+pub trait HashCurveExt: AppCurveExt<Fq: SqrtRatio> {
     const BLS_X: u64;
 
     const SWU_A: Self::Fq;
@@ -37,27 +44,31 @@ pub trait HashCurveExt: AppCurveExt {
 
 mod bls12_381 {
     use super::*;
-    use halo2curves::bls12_381::{Fq, Fq2, G1, G2};
+    use halo2curves::bls12_381::{Fq, Fq2, G1Affine, G2Affine, G1, G2};
 
     impl AppCurveExt for G1 {
+        type Affine = G1Affine;
         type Fp = Fq;
         const BASE_BYTES: usize = 48;
         const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
         const LIMB_BITS: usize = 112;
         const NUM_LIMBS: usize = 4;
+        const B: u64 = 4;
     }
 
     impl AppCurveExt for G2 {
         type Fp = Fq;
+        type Fq = Fq2;
+        type Affine = G2Affine;
 
         const BASE_BYTES: usize = 96;
         const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
         const LIMB_BITS: usize = 112;
         const NUM_LIMBS: usize = 4;
+        const B: u64 = 4;
     }
 
     impl HashCurveExt for G2 {
-        type Fq = Fq2;
         const BLS_X: u64 = 0xd201000000010000;
 
         const SWU_A: Self::Fq = Self::Fq {
@@ -397,5 +408,20 @@ mod bls12_381 {
                 .unwrap();
             Fq2 { c0, c1 }
         }
+    }
+}
+
+mod bn254 {
+    use super::*;
+    use halo2curves::bn256::{Fq, G1Affine, G1};
+
+    impl AppCurveExt for G1 {
+        type Affine = G1Affine;
+        type Fp = Fq;
+        const BASE_BYTES: usize = 48;
+        const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
+        const LIMB_BITS: usize = 88;
+        const NUM_LIMBS: usize = 3;
+        const B: u64 = 3;
     }
 }

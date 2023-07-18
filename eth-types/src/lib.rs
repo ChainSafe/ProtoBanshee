@@ -1,3 +1,5 @@
+#![feature(associated_type_bounds)]
+#![feature(associated_type_defaults)]
 mod spec;
 pub use spec::{Mainnet, Spec, Test};
 

@@ -20,7 +20,7 @@ use halo2_ecc::{
 use itertools::Itertools;
 use num_bigint::BigUint;
 
-use crate::{sha256_circuit::Sha256CircuitConfig, witness};
+use crate::{sha256_circuit::Sha256CircuitConfig, witness, gadget::crypto::{Fp2Point, FpPoint}};
 use eth_types::*;
 pub use gadgets::util::{and, not, or, rlc, select, sum, xor, Expr};
 use halo2_proofs::{
@@ -298,4 +298,30 @@ pub fn bigint_to_le_bytes<F: Field>(
         .flat_map(|x| x.to_bytes_le()[..limb_bytes].to_vec())
         .take(total_bytes)
         .collect()
+}
+
+pub fn print_fq_dev<C: AppCurveExt, F: Field>(x: &FpPoint<F>, label: &str) {
+    let bytes = bigint_to_le_bytes(
+        x.limbs().iter().map(|e| *e.value()),
+        C::LIMB_BITS,
+        C::BASE_BYTES,
+    );
+    let bn = BigUint::from_bytes_le(&bytes);
+    println!("{label}: {}", bn);
+}
+
+pub fn print_fq2_dev<C: AppCurveExt, F: Field>(u: &Fp2Point<F>, label: &str) {
+    let c0_bytes = bigint_to_le_bytes(
+        u.0[0].limbs().iter().map(|e| *e.value()),
+        C::LIMB_BITS,
+        C::BASE_BYTES / 2,
+    );
+    let c1_bytes = bigint_to_le_bytes(
+        u.0[1].limbs().iter().map(|e| *e.value()),
+        C::LIMB_BITS,
+        C::BASE_BYTES / 2,
+    );
+    let c0 = BigUint::from_bytes_le(&c0_bytes);
+    let c1 = BigUint::from_bytes_le(&c1_bytes);
+    println!("{label}: ({}, {})", c0, c1);
 }
