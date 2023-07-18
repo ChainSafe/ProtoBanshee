@@ -96,9 +96,6 @@ impl<'a, F: Field> HashChip<F> for Sha256Chip<'a, F> {
         let one_round_size = Self::BLOCK_SIZE;
         let num_round = 1;
 
-        // FIXME: support dynamic input size
-        //
-        // let input_byte_size_with_9 = input_byte_size + 9;
         let num_round = if input_byte_size % one_round_size == 0 {
             input_byte_size / one_round_size
         } else {
@@ -108,30 +105,14 @@ impl<'a, F: Field> HashChip<F> for Sha256Chip<'a, F> {
         let zero_padding_byte_size = padded_size - input_byte_size; // - 9;
         let max_round = max_byte_size / one_round_size;
 
-        // let remaining_byte_size = max_byte_size - padded_size;
-        // assert_eq!(
-        //     remaining_byte_size,
-        //     one_round_size * (max_round - num_round)
-        // );
-
         let mut assign_byte = |byte: u8| ctx.load_witness(F::from(byte as u64));
 
         for _ in 0..zero_padding_byte_size {
             assigned_input_bytes.push(assign_byte(0u8));
         }
-        // FIXME: support dynamic input size
-        //
-        // let mut input_len_bytes = [0; 8];
-        // let le_size_bytes = (8 * input_byte_size).to_le_bytes();
-        // input_len_bytes[0..le_size_bytes.len()].copy_from_slice(&le_size_bytes);
-        // for byte in input_len_bytes.iter().rev() {
-        //     assigned_input_bytes.push(assign_byte(*byte));
-        // }
+
         assert_eq!(assigned_input_bytes.len(), num_round * one_round_size);
-        // for _ in 0..remaining_byte_size {
-        //     assigned_input_bytes.push(assign_byte(0u8));
-        // }
-        // assert_eq!(assigned_input_bytes.len(), max_byte_size);
+
         for &assigned in assigned_input_bytes.iter() {
             range.range_check(ctx, assigned, 8);
         }
@@ -409,9 +390,9 @@ mod test {
                         .test_output
                         .map(|b| ctx.load_witness(F::from(b as u64)));
 
-                    // for (hash, check) in assigned_hash.iter().zip(correct_output.iter()) {
-                    //     ctx.constrain_equal(hash, check);
-                    // }
+                    for (hash, check) in assigned_hash.iter().zip(correct_output.iter()) {
+                        ctx.constrain_equal(hash, check);
+                    }
 
                     let extra_assignments = sha256.take_extra_assignments();
 

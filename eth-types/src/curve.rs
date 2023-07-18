@@ -23,7 +23,6 @@ pub trait HashCurveExt: AppCurveExt {
     const SWU_Z: Self::Fq;
     // First root of unity
     const SWU_RV1: Self::Fq;
-    const SWU_ETAS: [Self::Fq; 4];
     const ISO_XNUM: [Self::Fq; 4];
     const ISO_XDEN: [Self::Fq; 3];
     const ISO_YNUM: [Self::Fq; 4];
@@ -129,81 +128,6 @@ mod bls12_381 {
                 0x0e2b_7eed_bbfd_87d2,
             ]),
         };
-
-        const SWU_ETAS: [Self::Fq; 4] = [
-            Self::Fq {
-                c0: Fq::from_raw_unchecked([
-                    0x05e5_1466_8ac7_36d2,
-                    0x9089_b4d6_b84f_3ea5,
-                    0x603c_384c_224a_8b32,
-                    0xf325_7909_536a_fea6,
-                    0x5c5c_dbab_ae65_6d81,
-                    0x075b_fa08_63c9_87e9,
-                ]),
-                c1: Fq::from_raw_unchecked([
-                    0x338d_9bfe_0808_7330,
-                    0x7b8e_48b2_bd83_cefe,
-                    0x530d_ad5d_306b_5be7,
-                    0x5a4d_7e8e_6c40_8b6d,
-                    0x6258_f7a6_232c_ab9b,
-                    0x0b98_5811_cce1_4db5,
-                ]),
-            },
-            Self::Fq {
-                c0: Fq::from_raw_unchecked([
-                    0x8671_6401_f7f7_377b,
-                    0xa31d_b74b_f3d0_3101,
-                    0x1423_2543_c645_9a3c,
-                    0x0a29_ccf6_8744_8752,
-                    0xe8c2_b010_201f_013c,
-                    0x0e68_b9d8_6c9e_98e4,
-                ]),
-                c1: Fq::from_raw_unchecked([
-                    0x05e5_1466_8ac7_36d2,
-                    0x9089_b4d6_b84f_3ea5,
-                    0x603c_384c_224a_8b32,
-                    0xf325_7909_536a_fea6,
-                    0x5c5c_dbab_ae65_6d81,
-                    0x075b_fa08_63c9_87e9,
-                ]),
-            },
-            Self::Fq {
-                c0: Fq::from_raw_unchecked([
-                    0x718f_dad2_4ee1_d90f,
-                    0xa58c_025b_ed82_76af,
-                    0x0c3a_1023_0ab7_976f,
-                    0xf0c5_4df5_c8f2_75e1,
-                    0x4ec2_478c_28ba_f465,
-                    0x1129_373a_90c5_08e6,
-                ]),
-                c1: Fq::from_raw_unchecked([
-                    0x019a_f5f9_80a3_680c,
-                    0x4ed7_da0e_6606_3afa,
-                    0x6003_5472_3b5d_9972,
-                    0x8b2f_958b_20d0_9d72,
-                    0x0474_938f_02d4_61db,
-                    0x0dcf_8b9e_0684_ab1c,
-                ]),
-            },
-            Self::Fq {
-                c0: Fq::from_raw_unchecked([
-                    0xb864_0a06_7f5c_429f,
-                    0xcfd4_25f0_4b4d_c505,
-                    0x072d_7e2e_bb53_5cb1,
-                    0xd947_b5f9_d2b4_754d,
-                    0x46a7_1427_4077_4afb,
-                    0x0c31_864c_32fb_3b7e,
-                ]),
-                c1: Fq::from_raw_unchecked([
-                    0x718f_dad2_4ee1_d90f,
-                    0xa58c_025b_ed82_76af,
-                    0x0c3a_1023_0ab7_976f,
-                    0xf0c5_4df5_c8f2_75e1,
-                    0x4ec2_478c_28ba_f465,
-                    0x1129_373a_90c5_08e6,
-                ]),
-            },
-        ];
 
         /// Coefficients of the 3-isogeny x map's numerator
         const ISO_XNUM: [Self::Fq; 4] = [
