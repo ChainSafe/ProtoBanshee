@@ -215,7 +215,7 @@ impl<'a, F: Field> HashChip<F> for Sha256Chip<'a, F> {
     }
 
     fn range(&self) -> &RangeChip<F> {
-        &self.range
+        self.range
     }
 }
 

@@ -5,7 +5,7 @@
 #![feature(const_cmp)]
 #![feature(stmt_expr_attributes)]
 #![feature(trait_alias)]
-#![allow(unused, clippy::uninlined_format_args)]
+#![allow(unused, clippy::uninlined_format_args, clippy::needless_range_loop)]
 pub(crate) mod gadget;
 pub mod table;
 pub(crate) mod util;

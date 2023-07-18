@@ -27,7 +27,7 @@ use lazy_static::{__Deref, lazy_static};
 use num_bigint::{BigInt, BigUint};
 use pasta_curves::arithmetic::SqrtRatio;
 
-use super::{sha256::HashChip, util::*};
+use super::{sha256::HashChip, Fp2Chip, G1Point, G2Point, EccChip, Fp2Point, util::{i2osp, strxor, fp2_sgn0}};
 
 const G2_EXT_DEGREE: usize = 2;
 
@@ -141,8 +141,8 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
                             );
 
                             let lo_2_256 =
-                                fp_chip.mul_no_carry(ctx, lo.clone(), two_pow_256.clone());
-                            let lo_2_356_hi = fp_chip.add_no_carry(ctx, lo_2_256, hi.clone());
+                                fp_chip.mul_no_carry(ctx, lo, two_pow_256.clone());
+                            let lo_2_356_hi = fp_chip.add_no_carry(ctx, lo_2_256, hi);
                             fp_chip.carry_mod(ctx, lo_2_356_hi)
                         })
                         .collect_vec(),
@@ -238,7 +238,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
             0,
             hash_chip
                 .digest(
-                    b_0.clone()
+                    b_0
                         .into_iter()
                         .chain(iter::once(one))
                         .chain(dst_prime.clone())
@@ -317,34 +317,34 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
             .clone();
 
         let usq = fp2_chip.mul(ctx, u.clone(), u.clone()); // 1.  tv1 = u^2
-        let z_usq = fp2_chip.mul(ctx, usq.clone(), swu_z.clone()); // 2.  tv1 = Z * tv1
+        let z_usq = fp2_chip.mul(ctx, usq, swu_z.clone()); // 2.  tv1 = Z * tv1
         let zsq_u4 = fp2_chip.mul(ctx, z_usq.clone(), z_usq.clone()); // 3.  tv2 = tv1^2
-        let tv2 = fp2_chip.add(ctx, zsq_u4.clone(), z_usq.clone()); // 4.  tv2 = tv2 + tv1
-        let tv3 = fp2_chip.add_no_carry(ctx, tv2.clone(), fq2_one.clone()); // 5.  tv3 = tv2 + 1
-        let x0_num = fp2_chip.mul(ctx, tv3.clone(), swu_b.clone()); // 6.  tv3 = B * tv3
+        let tv2 = fp2_chip.add(ctx, zsq_u4, z_usq.clone()); // 4.  tv2 = tv2 + tv1
+        let tv3 = fp2_chip.add_no_carry(ctx, tv2.clone(), fq2_one); // 5.  tv3 = tv2 + 1
+        let x0_num = fp2_chip.mul(ctx, tv3, swu_b.clone()); // 6.  tv3 = B * tv3
 
         let x_den = {
             let tv2_is_zero = fp2_chip.is_zero(ctx, tv2.clone());
             let tv2_neg = fp2_chip.negate(ctx, tv2);
 
-            fp2_chip.select(ctx, swu_z.clone(), tv2_neg, tv2_is_zero) // tv2_is_zero ? swu_z : tv2_neg
+            fp2_chip.select(ctx, swu_z, tv2_neg, tv2_is_zero) // tv2_is_zero ? swu_z : tv2_neg
         }; // 7.  tv4 = tv2 != 0 ? -tv2 : Z
 
         let x_den = fp2_chip.mul(ctx, x_den, swu_a.clone()); // 8.  tv4 = A * tv4
 
         let x0_num_sqr = fp2_chip.mul(ctx, x0_num.clone(), x0_num.clone()); // 9.  tv2 = tv3^2
         let x_densq = fp2_chip.mul(ctx, x_den.clone(), x_den.clone()); // 10. tv6 = tv4^2
-        let ax_densq = fp2_chip.mul(ctx, x_densq.clone(), swu_a.clone()); // 11. tv5 = A * tv6
-        let tv2 = fp2_chip.add_no_carry(ctx, x0_num_sqr.clone(), ax_densq.clone()); // 12. tv2 = tv2 + tv5
+        let ax_densq = fp2_chip.mul(ctx, x_densq.clone(), swu_a); // 11. tv5 = A * tv6
+        let tv2 = fp2_chip.add_no_carry(ctx, x0_num_sqr, ax_densq); // 12. tv2 = tv2 + tv5
         let tv2 = fp2_chip.mul(ctx, tv2, x0_num.clone()); // 13. tv2 = tv2 * tv3
         let gx_den = fp2_chip.mul(ctx, x_densq, x_den.clone()); // 14. tv6 = tv6 * tv4
-        let tv5 = fp2_chip.mul(ctx, gx_den.clone(), swu_b.clone()); // 15. tv5 = B * tv6
+        let tv5 = fp2_chip.mul(ctx, gx_den.clone(), swu_b); // 15. tv5 = B * tv6
         let gx0_num = fp2_chip.add(ctx, tv2, tv5); // 16. tv2 = tv2 + tv5
 
         let x = fp2_chip.mul(ctx, &z_usq, &x0_num); // 17.  x = tv1 * tv3
 
         let (is_gx1_square, y1) =
-            Self::sqrt_ratio::<C>(gx0_num, gx_den, u.clone(), &fp2_chip, ctx, cache); // 18.  (is_gx1_square, y1) = sqrt_ratio(tv2, tv6)
+            Self::sqrt_ratio::<C>(gx0_num, gx_den, u.clone(), fp2_chip, ctx, cache); // 18.  (is_gx1_square, y1) = sqrt_ratio(tv2, tv6)
 
         let y = fp2_chip.mul(ctx, &z_usq, &u); // 19.  y = tv1 * u
         let y = fp2_chip.mul(ctx, y, y1.clone()); // 20.  y = y * y1
@@ -406,7 +406,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
             .deref()
             .clone();
 
-        let [x_num, x_den, y_num, y_den] = iso_coeffs.clone().map(|coeffs| {
+        let [x_num, x_den, y_num, y_den] = iso_coeffs.map(|coeffs| {
             coeffs.into_iter().fold(fq2_zero.clone(), |acc, v| {
                 let acc = fp2_chip.mul(ctx, acc, &p.x);
                 let no_carry = fp2_chip.add_no_carry(ctx, acc, v);
@@ -443,7 +443,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let t1 = {
             // scalar multiplication is very expensive in terms of rows used
             // TODO: is there other ways to clear cofactor that avoid scalar multiplication?
-            let tv = Self::mul_by_bls_x::<C>(p.clone(), &ecc_chip, ctx, cache);
+            let tv = Self::mul_by_bls_x::<C>(p.clone(), ecc_chip, ctx, cache);
             ecc_chip.negate(ctx, tv)
         }; // [-x]P
 
@@ -455,7 +455,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
 
         let t2 = ecc_chip.add_unequal(ctx, t1.clone(), t2, false); // [-x]P + Ψ(P)
         let t2 = {
-            let tv = Self::mul_by_bls_x::<C>(t2, &ecc_chip, ctx, cache);
+            let tv = Self::mul_by_bls_x::<C>(t2, ecc_chip, ctx, cache);
             ecc_chip.negate(ctx, tv)
         }; // [x²]P - [x]Ψ(P)
 
@@ -494,14 +494,14 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         let y_assigned = fp2_chip.load_private(ctx, y);
         let y_sqr = fp2_chip.mul(ctx, y_assigned.clone(), y_assigned.clone()); // y_sqr = y1^2
 
-        let ratio = fp2_chip.divide(ctx, num.clone(), div.clone()); // r = u / v
+        let ratio = fp2_chip.divide(ctx, num, div); // r = u / v
 
         let swu_z = cache
             .swu_z
             .get_or_insert_with(|| fp2_chip.load_constant(ctx, C::SWU_Z));
         let ratio_z = fp2_chip.mul(ctx, ratio.clone(), swu_z.clone()); // r_z = r * z
 
-        let y_check = fp2_chip.select(ctx, ratio, ratio_z, is_square.clone()); // y_check = is_square ? ratio : r_z
+        let y_check = fp2_chip.select(ctx, ratio, ratio_z, is_square); // y_check = is_square ? ratio : r_z
 
         fp2_chip.assert_equal(ctx, y_check, y_sqr); // assert y_check == y_sqr
 
@@ -582,7 +582,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
     fn assigned_fq2_to_value<C: HashCurveExt>(u: &Fp2Point<F>) -> C::Fq {
         C::get_fq(u.0.iter().map(|c| {
             bigint_to_le_bytes(
-                c.limbs().into_iter().map(|e| e.value().clone()),
+                c.limbs().iter().map(|e| *e.value()),
                 C::LIMB_BITS,
                 C::BASE_BYTES / 2,
             )
@@ -608,12 +608,12 @@ pub struct HashToCurveCache<F: Field> {
 
 fn print_fq2_dev<C: AppCurveExt, F: Field>(fq2: &Fp2Point<F>, label: &str) {
     let c0_bytes = bigint_to_le_bytes(
-        fq2.0[0].limbs().iter().map(|e| e.value().clone()),
+        fq2.0[0].limbs().iter().map(|e| *e.value()),
         C::LIMB_BITS,
         C::BASE_BYTES / 2,
     );
     let c1_bytes = bigint_to_le_bytes(
-        fq2.0[1].limbs().iter().map(|e| e.value().clone()),
+        fq2.0[1].limbs().iter().map(|e| *e.value()),
         C::LIMB_BITS,
         C::BASE_BYTES / 2,
     );
