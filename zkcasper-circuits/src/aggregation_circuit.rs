@@ -252,7 +252,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     // masked byte from compressed representation
                     let masked_byte = &assigned_x_compressed_bytes[S::G1_BYTES_COMPRESSED - 1];
                     // clear the sign bit from masked byte
-                    let cleared_byte = self.clear_ysign_mask(masked_byte, ctx);
+                    let cleared_byte = Self::clear_ysign_mask(range, masked_byte, ctx);
                     // Use the cleared byte to construct the x coordinate
                     let assigned_x_bytes_cleared = [
                         &assigned_x_compressed_bytes.as_slice()[..S::G1_BYTES_COMPRESSED - 1],
@@ -321,8 +321,11 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
 
     /// Clears the sign mask bit (MSB) of a last byte of compressed pubkey.
     /// This function emulates bitwise and on 01111111 (decimal=127): `b & 127` = c
-    fn clear_ysign_mask(&self, b: &AssignedValue<F>, ctx: &mut Context<F>) -> AssignedValue<F> {
-        let range = self.range();
+    fn clear_ysign_mask(
+        range: &impl RangeInstructions<F>,
+        b: &AssignedValue<F>,
+        ctx: &mut Context<F>,
+    ) -> AssignedValue<F> {
         let gate = range.gate();
 
         // Decomposing only the first bit (MSB): b_shift_msb = b * 2 mod 256 which is equivalent to b <<= 1
