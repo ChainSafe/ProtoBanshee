@@ -171,7 +171,7 @@ where
                             .unwrap()
                     });
 
-                    // let mut h2c_cache = HashToCurveCache::default();
+                    let mut h2c_cache = HashToCurveCache::default();
 
                     for Attestation::<S> {
                         data, signature, ..
@@ -201,13 +201,13 @@ where
                             "invalid signing root"
                         );
 
-                        // let msg_point = h2c_chip.hash_to_curve::<S::SiganturesCurve>(
-                        //     signing_root.into(),
-                        //     self.fp_chip(),
-                        //     ctx,
-                        //     &mut region,
-                        //     &mut h2c_cache,
-                        // )?;
+                        let msg_point = h2c_chip.hash_to_curve::<S::SiganturesCurve>(
+                            signing_root.into(),
+                            self.fp_chip(),
+                            ctx,
+                            &mut region,
+                            &mut h2c_cache,
+                        )?;
                     }
 
                     let extra_assignments = hasher.take_extra_assignments();
@@ -370,11 +370,11 @@ mod tests {
     where
         [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
     {
-        const NUM_ADVICE: &[usize] = &[10];
+        const NUM_ADVICE: &[usize] = &[30];
         const NUM_FIXED: usize = 1;
-        const NUM_LOOKUP_ADVICE: usize = 1;
+        const NUM_LOOKUP_ADVICE: usize = 5;
         const LOOKUP_BITS: usize = 8;
-        const K: usize = 11;
+        const K: usize = 16;
     }
 
     impl<'a, S: Spec, F: Field, const CMS: usize> Circuit<F> for TestCircuit<'a, S, F, CMS>
