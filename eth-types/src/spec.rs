@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-use halo2curves::{bls12_381, bn256};
+use halo2curves::bls12_381;
 
 use crate::curve::AppCurveExt;
 use crate::curve::HashCurveExt;
@@ -60,6 +60,6 @@ impl Spec for Mainnet {
     const STATE_TREE_LEVEL_VALIDATORS: usize = Self::STATE_TREE_LEVEL_PUBKEYS - 1;
     const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
-    type PubKeysCurve = bn256::G1;
+    type PubKeysCurve = bls12_381::G1;
     type SiganturesCurve = bls12_381::G2;
 }

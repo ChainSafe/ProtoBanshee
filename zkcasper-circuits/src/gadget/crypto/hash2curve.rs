@@ -117,7 +117,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
 
         // 2^256
         let two_pow_256 = fp_chip.load_constant_uint(ctx, BigUint::from(2u8).pow(256));
-        let fq_bytes = C::BASE_BYTES / 2;
+        let fq_bytes = C::BYTES_FQ / 2;
 
         let mut fst = true;
         let u = extended_msg
@@ -588,7 +588,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
             bigint_to_le_bytes(
                 c.limbs().iter().map(|e| *e.value()),
                 C::LIMB_BITS,
-                C::BASE_BYTES / 2,
+                C::BYTES_FQ / 2,
             )
         }))
     }

@@ -298,7 +298,7 @@ pub fn print_fq_dev<C: AppCurveExt, F: Field>(x: &FpPoint<F>, label: &str) {
     let bytes = bigint_to_le_bytes(
         x.limbs().iter().map(|e| *e.value()),
         C::LIMB_BITS,
-        C::BASE_BYTES,
+        C::BYTES_FQ,
     );
     let bn = BigUint::from_bytes_le(&bytes);
     println!("{label}: {}", bn);
@@ -308,12 +308,12 @@ pub fn print_fq2_dev<C: AppCurveExt, F: Field>(u: &Fp2Point<F>, label: &str) {
     let c0_bytes = bigint_to_le_bytes(
         u.0[0].limbs().iter().map(|e| *e.value()),
         C::LIMB_BITS,
-        C::BASE_BYTES / 2,
+        C::BYTES_FQ / 2,
     );
     let c1_bytes = bigint_to_le_bytes(
         u.0[1].limbs().iter().map(|e| *e.value()),
         C::LIMB_BITS,
-        C::BASE_BYTES / 2,
+        C::BYTES_FQ / 2,
     );
     let c0 = BigUint::from_bytes_le(&c0_bytes);
     let c1 = BigUint::from_bytes_le(&c1_bytes);

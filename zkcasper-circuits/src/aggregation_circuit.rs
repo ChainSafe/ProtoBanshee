@@ -204,7 +204,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         let fp_chip = self.fp_chip();
         let g1_chip = self.g1_chip();
 
-        let pubkey_compressed_len = S::PubKeysCurve::BASE_BYTES;
+        let pubkey_compressed_len = S::PubKeysCurve::BYTES_FQ;
 
         let mut aggregated_pubkeys = vec![];
 
@@ -279,7 +279,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     ) -> [AssignedValue<F>; 2] {
         let gate = self.range().gate();
         // assertion check for assigned_bytes to be equal to BASE_BYTES from specification
-        assert_eq!(assigned_bytes.len(), S::PubKeysCurve::BASE_BYTES);
+        assert_eq!(assigned_bytes.len(), S::PubKeysCurve::BYTES_FQ);
 
         // TODO: remove next 2 lines after switching to bls12-381
         let mut assigned_bytes = assigned_bytes.to_vec();

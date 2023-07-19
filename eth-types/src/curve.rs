@@ -18,14 +18,17 @@ pub trait AppCurveExt: CurveExt<AffineExt: CurveAffineExt> {
     type Fq: PrimeField + FieldExt + Halo2Field = Self::Fp;
     /// Affine version of the curve.
     type Affine: CurveAffineExt<Base = Self::Fq> + GroupEncoding<Repr = Self::CompressedRepr>;
-
+    /// Compressed representation of the curve.
     type CompressedRepr: TryFrom<Vec<u8>, Error = std::array::TryFromSliceError>;
-
+    /// Constant $b$ in the curve equation $y^2 = x^3 + b$.
     const B: u64;
-
-    const BASE_BYTES: usize;
+    // Bytes needed to encode [`Self::Fq];
+    const BYTES_FQ: usize;
+    // Bytes needed to encode curve in uncompressed form.
     const BYTES_UNCOMPRESSED: usize;
+    /// Number of bits in a single limb.
     const LIMB_BITS: usize;
+    /// Number of limbs in the prime field.
     const NUM_LIMBS: usize;
 
     fn limb_bytes_bases<F: Field>() -> Vec<F> {
@@ -44,8 +47,7 @@ pub trait HashCurveExt: AppCurveExt<Fq: SqrtRatio> {
     const SWU_A: Self::Fq;
     const SWU_B: Self::Fq;
     const SWU_Z: Self::Fq;
-    // First root of unity
-    const SWU_RV1: Self::Fq;
+
     const ISO_XNUM: [Self::Fq; 4];
     const ISO_XDEN: [Self::Fq; 3];
     const ISO_YNUM: [Self::Fq; 4];
@@ -66,8 +68,8 @@ mod bls12_381 {
         type Affine = G1Affine;
         type Fp = Fq;
         type CompressedRepr = G1Compressed;
-        const BASE_BYTES: usize = 48;
-        const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
+        const BYTES_FQ: usize = 48;
+        const BYTES_UNCOMPRESSED: usize = Self::BYTES_FQ * 2;
         const LIMB_BITS: usize = 112;
         const NUM_LIMBS: usize = 4;
         const B: u64 = 4;
@@ -78,8 +80,8 @@ mod bls12_381 {
         type Fp = Fq;
         type Fq = Fq2;
         type CompressedRepr = G2Compressed;
-        const BASE_BYTES: usize = 96;
-        const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
+        const BYTES_FQ: usize = 96;
+        const BYTES_UNCOMPRESSED: usize = Self::BYTES_FQ * 2;
         const LIMB_BITS: usize = 112;
         const NUM_LIMBS: usize = 4;
         const B: u64 = 4;
@@ -135,25 +137,6 @@ mod bls12_381 {
                 0xeca8_f331_8332_bb7a,
                 0xef14_8d1e_a0f4_c069,
                 0x040a_b326_3eff_0206,
-            ]),
-        };
-
-        const SWU_RV1: Self::Fq = Self::Fq {
-            c0: Fq::from_raw_unchecked([
-                0x7bcf_a7a2_5aa3_0fda,
-                0xdc17_dec1_2a92_7e7c,
-                0x2f08_8dd8_6b4e_bef1,
-                0xd1ca_2087_da74_d4a7,
-                0x2da2_5966_96ce_bc1d,
-                0x0e2b_7eed_bbfd_87d2,
-            ]),
-            c1: Fq::from_raw_unchecked([
-                0x7bcf_a7a2_5aa3_0fda,
-                0xdc17_dec1_2a92_7e7c,
-                0x2f08_8dd8_6b4e_bef1,
-                0xd1ca_2087_da74_d4a7,
-                0x2da2_5966_96ce_bc1d,
-                0x0e2b_7eed_bbfd_87d2,
             ]),
         };
 
@@ -436,8 +419,8 @@ mod bn254 {
         type Affine = G1Affine;
         type Fp = Fq;
         type CompressedRepr = G1Compressed;
-        const BASE_BYTES: usize = 32;
-        const BYTES_UNCOMPRESSED: usize = Self::BASE_BYTES * 2;
+        const BYTES_FQ: usize = 32;
+        const BYTES_UNCOMPRESSED: usize = Self::BYTES_FQ * 2;
         const LIMB_BITS: usize = 88;
         const NUM_LIMBS: usize = 3;
         const B: u64 = 3;
