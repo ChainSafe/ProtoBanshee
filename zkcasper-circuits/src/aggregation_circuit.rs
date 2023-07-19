@@ -437,7 +437,6 @@ mod tests {
         let committees: Vec<Committee> =
             serde_json::from_slice(&fs::read("../test_data/committees.json").unwrap()).unwrap();
 
-        // // TODO: Cache this in Validator witness type
         let validators_y = validators
             .iter()
             .map(|v| {
