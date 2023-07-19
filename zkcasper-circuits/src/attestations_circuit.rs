@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, marker::PhantomData, vec};
 use crate::{
     gadget::crypto::{CachedHashChip, Fp2Chip, Fp2Point, G2Chip, HashChip, Sha256Chip},
     sha256_circuit::Sha256CircuitConfig,
-    util::{Challenges, IntoWitness, SubCircuit, SubCircuitConfig},
+    util::{print_fq2_dev, Challenges, IntoWitness, SubCircuit, SubCircuitConfig},
     witness::{self, Attestation, HashInput, HashInputChunk},
 };
 use eth_types::{AppCurveExt, Field, Spec};
@@ -24,7 +24,7 @@ use halo2_proofs::{
 use itertools::Itertools;
 use pasta_curves::group::GroupEncoding;
 use ssz_rs::Merkleized;
-pub use witness::{AttestationData, IndexedAttestation};
+pub use witness::AttestationData;
 
 pub const ZERO_HASHES: [[u8; 32]; 2] = [
     [0; 32],
@@ -166,7 +166,7 @@ where
                             .unwrap()
                     });
 
-                    for IndexedAttestation {
+                    for Attestation::<S> {
                         data, signature, ..
                     } in self.attestations.iter()
                     {
@@ -334,10 +334,7 @@ where
 mod tests {
     use std::fs;
 
-    use crate::{
-        table::SHA256Table,
-        witness::{attestations_dev, Validator},
-    };
+    use crate::{table::SHA256Table, witness::Validator};
 
     use super::*;
     use eth_types::Test;
@@ -424,9 +421,8 @@ mod tests {
         );
         let builder = GateThreadBuilder::new(false);
         builder.config(k, None);
-        let validators: Vec<Validator> =
-            serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
-        let attestations = attestations_dev(validators);
+        let attestations: Vec<Attestation<Test>> =
+            serde_json::from_slice(&fs::read("../test_data/attestations.json").unwrap()).unwrap();
 
         let circuit = TestCircuit::<'_, Test, Fr, { Test::MAX_VALIDATORS_PER_COMMITTEE }> {
             inner: AttestationsCircuitBuilder::new(builder, &attestations, &range),

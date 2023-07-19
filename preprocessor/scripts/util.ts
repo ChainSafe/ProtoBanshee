@@ -22,7 +22,7 @@ function toRustFormat(obj: any, keysToSkip: string[] = [], replacer: (value: any
   return replacer(obj);
 }
 
-export function serialize(obj: any, keysToSkip: string[] = []): string {
+export function serialize(obj: any, replacer: (value: any) => any = (value) => value, keysToSkip: string[] = []): string {
   const processed = toRustFormat(obj, keysToSkip, (value) => {
     if (value instanceof Uint8Array) {
       return Array.from(value);
@@ -30,7 +30,8 @@ export function serialize(obj: any, keysToSkip: string[] = []): string {
     if (typeof value === 'bigint') {
       return Number(value);
     }
-    return value;
+
+    return replacer(value);
   });
   return JSON.stringify(processed);
 }
@@ -188,15 +189,20 @@ export function g1PointToLeBytes(p: ProjPointType<bigint>, compressed: boolean):
   return bytesLe;
 }
 
-export function g2PointToLeBytes(p: ProjPointType<bigint>, compressed: boolean): Uint8Array {
+export type Fp2 = { c0: bigint; c1: bigint };
+export function g2PointToLeBytes(p: ProjPointType<Fp2>, compressed: boolean): Uint8Array {
   let bytes = p.toRawBytes(compressed);
   bytes.reverse();
-  var bytesLe = new Uint8Array(compressed ? 48 : 96);
+  var bytesLe = new Uint8Array(compressed ? 96 : 192);
   if (compressed) {
-      bytesLe = bytes;
+    // bytesLe.set(bytes.slice(0, 48), 48);
+    // bytesLe.set(bytes.slice(48, 96), 0);
+    bytesLe = bytes;
   } else {
-    bytesLe.set(bytes.slice(0, 48), 48);
-    bytesLe.set(bytes.slice(48, 96), 0);
+    bytesLe.set(bytes.slice(0, 48), 144);
+    bytesLe.set(bytes.slice(48, 96), 96);
+    bytesLe.set(bytes.slice(96, 144), 48);
+    bytesLe.set(bytes.slice(144, 192), 0);
   }
 
   return bytesLe;

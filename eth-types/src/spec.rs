@@ -28,7 +28,7 @@ pub struct Test;
 
 impl Spec for Test {
     const VALIDATOR_REGISTRY_LIMIT: usize = 100;
-    const MAX_VALIDATORS_PER_COMMITTEE: usize = 10;
+    const MAX_VALIDATORS_PER_COMMITTEE: usize = 5;
     const MAX_COMMITTEES_PER_SLOT: usize = 5;
     const SLOTS_PER_EPOCH: usize = 32;
     const VALIDATOR_0_G_INDEX: usize = 32;

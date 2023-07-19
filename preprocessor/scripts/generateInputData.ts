@@ -1,7 +1,7 @@
 import fs from "fs";
-import path from "path";
 import { bls12_381 } from '@noble/curves/bls12-381';
 import {
+    BitArray,
     ContainerType,
     ListCompositeType,
     ValueOf,
@@ -9,15 +9,10 @@ import {
 import {
     ssz,
 } from "@lodestar/types"
-import {
-    BeaconState, IndexedAttestation
-} from "@lodestar/types/phase0"
 import { createProof, ProofType, MultiProof, Node } from "@chainsafe/persistent-merkle-tree";
-import crypto from "crypto";
-import { g1PointToLeBytes as g1PointToBytesLE, serialize } from "./util";
+import { g1PointToLeBytes as g1PointToBytesLE, g2PointToLeBytes, serialize } from "./util";
 import { createNodeFromMultiProofWithTrace, printTrace } from "./merkleTrace";
 import { hexToBytes, bytesToHex } from "@noble/curves/abstract/utils";
-import { AttestationData } from "@lodestar/types/lib/phase0/sszTypes";
 import { ProjPointType } from "@noble/curves/abstract/weierstrass";
 
 const DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
@@ -47,7 +42,7 @@ let validatorBaseGindices: bigint[] = [];
 
 let nonRlcGindices = [];
 
-let privKeys = [
+let privKeyHexes = [
     "5644920314564b11404384380c1d677871ada2ec9470d5f43f03aa931ecef54b",
     "4314d9849e5cb4add3579426ba8833621dcfeba8f8b33ec8779e76c8facf6b6a",
     "6d973b68057d1b01425eb705d9951cf725aa4f138ded6d56fca23d03b7200575",
@@ -63,10 +58,10 @@ let pubKeyPoints: ProjPointType<bigint>[] = [];
 
 for (let i = 0; i < N; i++) {
     // use 5 pregenerated private keys to avoid changing JSON files.
-    let privKey = i < 5 ? hexToBytes(privKeys[i]) : bls12_381.utils.randomPrivateKey();
+    let privKey = i < 5 ? hexToBytes(privKeyHexes[i]) : bls12_381.utils.randomPrivateKey();
     let p = bls12_381.G1.ProjectivePoint.fromPrivateKey(privKey);
     let pubkey = g1PointToBytesLE(p, true);
-    
+
     validators.push({
         pubkey: pubkey,
         withdrawalCredentials: Uint8Array.from(Array(32).fill(0)),
@@ -77,6 +72,7 @@ for (let i = 0; i < N; i++) {
         exitEpoch: 100,
         withdrawableEpoch: 0
     });
+    privKeyHexes[i] = bytesToHex(privKey);
     pubKeyPoints.push(p);
     validatorBaseGindices.push(ValidatorsSsz.getPathInfo([i]).gindex);
     gindices.push(ValidatorsSsz.getPathInfo([i, 'pubkey']).gindex * 2n);
@@ -129,32 +125,58 @@ fs.writeFileSync(
 
 // //-----------------Attestations ----------------//
 
-// let attestations: IndexedAttestation[] = [];
+type Attestations = ValueOf<typeof ssz.phase0.BeaconBlockBody.fields.attestations>;
+let attestations: Attestations = [];
 
-// let data = {
-//     slot: 0,
-//     index: 0,
-//     beaconBlockRoot: Uint8Array.from(Array(32).fill(0)),
-//     source: {
-//         epoch: target_epoch - 1,
-//         root: Uint8Array.from(Array(32).fill(0))
-//     },
-//     target: {
-//         epoch: target_epoch,
-//         root: Uint8Array.from(Array(32).fill(0))
-//     }
-// };
+let data = {
+    slot: 0,
+    index: 0,
+    beaconBlockRoot: Uint8Array.from(Array(32).fill(0)),
+    source: {
+        epoch: target_epoch - 1,
+        root: Uint8Array.from(Array(32).fill(0))
+    },
+    target: {
+        epoch: target_epoch,
+        root: Uint8Array.from(Array(32).fill(0))
+    }
+};
 
-// let dataRoot = AttestationData.hashTreeRoot(data);
+let dataRoot = ssz.phase0.AttestationData.hashTreeRoot(data);
 
-// let msgPoint = bls12_381.G2.hashToCurve(dataRoot, {
-//     DST: DST,
-// });
+let msgPoint = bls12_381.G2.ProjectivePoint.fromAffine(bls12_381.G2.hashToCurve(dataRoot, {
+    DST: DST,
+}).toAffine());
 
-// // for (pkPoint of pubKeyPoints) {
-// //     const sigPoint = msgPoint.multiply(BigInt('0x' + bytesToHex(privateKey)));
+let signatures = [];
+for (const privKey of privKeyHexes) {
+    const sigPoint = msgPoint.multiply(BigInt('0x' + privKey));
+    signatures.push(sigPoint);
+}
 
-// // }
+let signature = bls12_381.aggregateSignatures(signatures)
+
+// assert signature is valid
+bls12_381.verify(signature, msgPoint, aggregatedPubKey);
+
+let sigBytes = g2PointToLeBytes(signature, true);
+
+console.log("signature", signature.toAffine());
+console.log("sigBytes", sigBytes);
+
+attestations.push({
+    aggregationBits: BitArray.fromBoolArray(Array(N).fill(1)),
+    data: data,
+    signature: sigBytes
+})
+
+let attestationJson = ssz.phase0.BeaconBlockBody.fields.attestations.toJson(attestations);
+
+fs.writeFileSync(
+    `../test_data/attestations.json`,
+    JSON.stringify(attestationJson)
+);
+
 
 //----------------- State tree -----------------//
 let view = ValidatorsSsz.toView(validators);
