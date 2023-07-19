@@ -8,7 +8,7 @@ use eth_types::{AppCurveExt, HashCurveExt};
 use halo2_ecc::{
     bigint::ProperCrtUint,
     ecc::{EcPoint, EccChip},
-    fields::{vector::FieldVector, FieldExtConstructor, fp::FpChip},
+    fields::{fp::FpChip, vector::FieldVector, FieldExtConstructor},
 };
 pub use sha256::{AssignedHashResult, HashChip, Sha256Chip};
 

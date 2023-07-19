@@ -90,7 +90,7 @@ impl Validator {
                 exit_epoch,
                 slashed: eth_validator.slashed,
                 pubkey: eth_validator.public_key.as_ref().to_vec(),
-                pubkey_uncompressed: vec![] // FIXME
+                pubkey_uncompressed: vec![], // FIXME
             };
             banshee_validators.push(banshee_validator);
         }
