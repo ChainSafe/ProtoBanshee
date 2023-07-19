@@ -1,5 +1,5 @@
 use crate::{
-    gadget::crypto::FpPoint,
+    gadget::crypto::{FpPoint, G1Chip},
     table::{LookupTable, ValidatorsTable},
     util::{decode_into_field, print_fq_dev, Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, Committee, Validator},
@@ -33,8 +33,6 @@ use std::{cell::RefCell, marker::PhantomData};
 
 #[allow(type_alias_bounds)]
 type FpChip<'chip, F, C: AppCurveExt> = halo2_ecc::fields::fp::FpChip<'chip, F, C::Fq>;
-#[allow(type_alias_bounds)]
-type G1Chip<'chip, F, C: AppCurveExt> = EccChip<'chip, F, FpChip<'chip, F, C>>;
 
 #[derive(Clone, Debug)]
 pub struct AggregationCircuitConfig<F: Field> {
@@ -85,7 +83,11 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         validators_y: Vec<<S::PubKeysCurve as AppCurveExt>::Fq>,
         range: &'a RangeChip<F>,
     ) -> Self {
-        let fp_chip = FpChip::<F, S::PubKeysCurve>::new(range, S::LIMB_BITS, S::NUM_LIMBS);
+        let fp_chip = FpChip::<F, S::PubKeysCurve>::new(
+            range,
+            S::PubKeysCurve::LIMB_BITS,
+            S::PubKeysCurve::NUM_LIMBS,
+        );
         Self {
             builder: RefCell::new(builder),
             range,
@@ -132,9 +134,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
                     let pubkey_rlcs = pubkeys_compressed
                         .into_iter()
-                        .map(|compressed| {
-                            self.get_rlc(&compressed[..S::FQ_BYTES], &randomness, ctx)
-                        })
+                        .map(|compressed| self.get_rlc(&compressed, &randomness, ctx))
                         .collect_vec();
 
                     let halo2_base::gates::builder::KeygenAssignments::<F> {
@@ -204,6 +204,8 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         let fp_chip = self.fp_chip();
         let g1_chip = self.g1_chip();
 
+        let pubkey_compressed_len = S::PubKeysCurve::BASE_BYTES;
+
         let mut aggregated_pubkeys = vec![];
 
         for (_committee, validators) in self
@@ -216,26 +218,24 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             let mut in_committee_pubkeys = vec![];
 
             for (validator, y_coord) in validators {
-                let pk_compressed = validator.pubkey[..S::FQ_BYTES].to_vec();
-
                 let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
-                    ctx.assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
+                    ctx.assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
 
                 // Assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
-                assert_eq!(assigned_x_compressed_bytes.len(), S::FQ_BYTES);
+                assert_eq!(assigned_x_compressed_bytes.len(), pubkey_compressed_len);
 
                 // Masked byte from compressed representation
-                let masked_byte = &assigned_x_compressed_bytes[S::FQ_BYTES - 1];
+                let masked_byte = &assigned_x_compressed_bytes[pubkey_compressed_len - 1];
                 // Clear the sign bit from masked byte
                 let cleared_byte = self.clear_flags_mask(masked_byte, ctx);
                 // Use the cleared byte to construct the x coordinate
                 let assigned_x_bytes_cleared = [
-                    &assigned_x_compressed_bytes.as_slice()[..S::FQ_BYTES - 1],
+                    &assigned_x_compressed_bytes.as_slice()[..pubkey_compressed_len - 1],
                     &[cleared_byte],
                 ]
                 .concat();
 
-                let x_crt = decode_into_field::<S, F>(
+                let x_crt = decode_into_field::<F, S::PubKeysCurve>(
                     assigned_x_bytes_cleared,
                     &fp_chip.limb_bases,
                     gate,
@@ -248,7 +248,8 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                 // Square y coordinate
                 let ysq = fp_chip.mul(ctx, y_crt.clone(), y_crt.clone());
                 // Calculate y^2 using the elliptic curve equation
-                let ysq_calc = Self::calculate_ysquared::<S::PubKeysCurve>(ctx, fp_chip, x_crt.clone());
+                let ysq_calc =
+                    Self::calculate_ysquared::<S::PubKeysCurve>(ctx, fp_chip, x_crt.clone());
                 // Constrain witness y^2 to be equal to calculated y^2
                 fp_chip.assert_equal(ctx, ysq, ysq_calc);
 
@@ -277,8 +278,8 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         ctx: &mut Context<F>,
     ) -> [AssignedValue<F>; 2] {
         let gate = self.range().gate();
-        // assertion check for assigned_bytes to be equal to S::G1_FQ_BYTES from specification
-        assert_eq!(assigned_bytes.len(), S::FQ_BYTES);
+        // assertion check for assigned_bytes to be equal to BASE_BYTES from specification
+        assert_eq!(assigned_bytes.len(), S::PubKeysCurve::BASE_BYTES);
 
         // TODO: remove next 2 lines after switching to bls12-381
         let mut assigned_bytes = assigned_bytes.to_vec();
@@ -441,9 +442,7 @@ mod tests {
             .iter()
             .map(|v| {
                 let g1_affine = G1Affine::from_uncompressed(
-                    &v.pubkey_uncompressed[..S::G1_BYTES_UNCOMPRESSED]
-                        .try_into()
-                        .unwrap(),
+                    &v.pubkey_uncompressed.as_slice().try_into().unwrap(),
                 )
                 .unwrap();
 

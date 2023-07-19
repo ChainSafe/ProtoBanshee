@@ -109,7 +109,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
         )?;
 
         let limb_bases = cache.binary_bases.get_or_insert_with(|| {
-            S::limb_bytes_bases()
+            C::limb_bytes_bases()
                 .into_iter()
                 .map(|base| ctx.load_constant(base))
                 .collect()
@@ -117,6 +117,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
 
         // 2^256
         let two_pow_256 = fp_chip.load_constant_uint(ctx, BigUint::from(2u8).pow(256));
+        let fq_bytes = C::BASE_BYTES / 2;
 
         let mut fst = true;
         let u = extended_msg
@@ -127,10 +128,10 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
                 FieldVector(
                     elm_chunk
                         .map(|tv| {
-                            let mut buf = vec![zero; S::FQ_BYTES];
-                            let rem = S::FQ_BYTES - 32;
+                            let mut buf = vec![zero; fq_bytes];
+                            let rem = fq_bytes - 32;
                             buf[rem..].copy_from_slice(&tv[..32]);
-                            let lo = decode_into_field_be::<S, F, _>(
+                            let lo = decode_into_field_be::<F, C, _>(
                                 buf.to_vec(),
                                 &fp_chip.limb_bases,
                                 gate,
@@ -138,7 +139,7 @@ impl<S: Spec, F: Field, HC: HashChip<F>> HashToCurveChip<S, F, HC> {
                             );
 
                             buf[rem..].copy_from_slice(&tv[32..]);
-                            let hi = decode_into_field_be::<S, F, _>(
+                            let hi = decode_into_field_be::<F, C, _>(
                                 buf.to_vec(),
                                 &fp_chip.limb_bases,
                                 gate,
@@ -617,7 +618,7 @@ mod test {
     use crate::gadget::crypto::Sha256Chip;
     use crate::sha256_circuit::Sha256CircuitConfig;
     use crate::table::SHA256Table;
-    use crate::util::{Challenges, IntoWitness, SubCircuitConfig, print_fq2_dev};
+    use crate::util::{print_fq2_dev, Challenges, IntoWitness, SubCircuitConfig};
 
     use super::*;
     use eth_types::Mainnet;
@@ -704,8 +705,8 @@ mod test {
             let fp_chip =
                 halo2_ecc::fields::fp::FpChip::<F, <S::SiganturesCurve as AppCurveExt>::Fp>::new(
                     &self.range,
-                    S::LIMB_BITS,
-                    S::NUM_LIMBS,
+                    S::SiganturesCurve::LIMB_BITS,
+                    S::SiganturesCurve::NUM_LIMBS,
                 );
 
             layouter.assign_region(
