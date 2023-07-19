@@ -1,7 +1,10 @@
 use std::{cell::RefCell, collections::HashMap, marker::PhantomData, vec};
 
 use crate::{
-    gadget::crypto::{CachedHashChip, Fp2Chip, Fp2Point, G2Chip, HashChip, Sha256Chip},
+    gadget::crypto::{
+        CachedHashChip, Fp2Chip, Fp2Point, G2Chip, HashChip, HashToCurveCache, HashToCurveChip,
+        Sha256Chip,
+    },
     sha256_circuit::Sha256CircuitConfig,
     util::{print_fq2_dev, Challenges, IntoWitness, SubCircuit, SubCircuitConfig},
     witness::{self, Attestation, HashInput, HashInputChunk},
@@ -125,17 +128,19 @@ where
             .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
 
-        let hasher = CachedHashChip::new(Sha256Chip::new(
+        let sha256_chip = Sha256Chip::new(
             &config.sha256_config,
             self.range(),
-            64,
             challenges.sha256_input(),
             None,
             0,
-        ));
+        );
+
+        let hasher = CachedHashChip::new(&sha256_chip);
 
         let fp2_chip = self.fp2_chip();
         let g2_chip = EccChip::new(&fp2_chip);
+        let h2c_chip = HashToCurveChip::<S, F, _>::new(&sha256_chip);
 
         layouter
             .assign_region(
@@ -158,13 +163,15 @@ where
                     ]
                     .map(|cp| {
                         hasher
-                            .digest(
+                            .digest::<64>(
                                 (cp.epoch, cp.root.as_ref()).into_witness(),
                                 ctx,
                                 &mut region,
                             )
                             .unwrap()
                     });
+
+                    // let mut h2c_cache = HashToCurveCache::default();
 
                     for Attestation::<S> {
                         data, signature, ..
@@ -193,6 +200,14 @@ where
                                 .collect_vec(),
                             "invalid signing root"
                         );
+
+                        // let msg_point = h2c_chip.hash_to_curve::<S::SiganturesCurve>(
+                        //     signing_root.into(),
+                        //     self.fp_chip(),
+                        //     ctx,
+                        //     &mut region,
+                        //     &mut h2c_cache,
+                        // )?;
                     }
 
                     let extra_assignments = hasher.take_extra_assignments();
@@ -230,7 +245,7 @@ where
     fn merkleize_chunks<I: IntoIterator<Item = HashInputChunk<QuantumCell<F>>>>(
         &self,
         chunks: I,
-        hasher: &CachedHashChip<F, Sha256Chip<'a, F>>,
+        hasher: &'a CachedHashChip<F, Sha256Chip<'a, F>>,
         ctx: &mut Context<F>,
         region: &mut Region<'_, F>,
     ) -> Result<Vec<AssignedValue<F>>, Error>
@@ -264,7 +279,7 @@ where
                 .tuples()
                 .map(|(left, right)| {
                     hasher
-                        .digest(HashInput::TwoToOne(left, right), ctx, region)
+                        .digest::<64>(HashInput::TwoToOne(left, right), ctx, region)
                         .map(|res| res.output_bytes.into())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
