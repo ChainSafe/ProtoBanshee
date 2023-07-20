@@ -324,6 +324,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
 impl<'a, F: Field, S: Spec> SubCircuit<F> for AggregationCircuitBuilder<'a, F, S> {
     type Config = AggregationCircuitConfig<F>;
+    type SynthesisArgs = ();
 
     fn new_from_block(_block: &witness::Block<F>) -> Self {
         todo!()
@@ -342,6 +343,7 @@ impl<'a, F: Field, S: Spec> SubCircuit<F> for AggregationCircuitBuilder<'a, F, S
         config: &mut Self::Config,
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
+        _: Self::SynthesisArgs,
     ) -> Result<(), Error> {
         self.synthesize(config, challenges, layouter);
 
@@ -424,6 +426,7 @@ mod tests {
                 &mut config.0,
                 &config.1.values(&mut layouter),
                 &mut layouter,
+                ()
             )?;
             Ok(())
         }

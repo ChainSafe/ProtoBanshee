@@ -19,7 +19,7 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const DST: &'static [u8];
 
     type PubKeysCurve: AppCurveExt;
-    type SiganturesCurve: AppCurveExt + HashCurveExt;
+    type SiganturesCurve: AppCurveExt<Fp = <Self::PubKeysCurve as AppCurveExt>::Fq> + HashCurveExt;
 }
 
 /// Ethereum Foundation specifications.
