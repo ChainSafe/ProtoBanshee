@@ -161,9 +161,6 @@ bls12_381.verify(signature, msgPoint, aggregatedPubKey);
 
 let sigBytes = g2PointToLeBytes(signature, true);
 
-console.log("signature", signature.toAffine());
-console.log("sigBytes", sigBytes);
-
 attestations.push({
     aggregationBits: BitArray.fromBoolArray(Array(N).fill(1)),
     data: data,
