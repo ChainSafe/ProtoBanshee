@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, marker::PhantomData, vec};
+use std::{cell::RefCell, collections::HashMap, marker::PhantomData, vec, ops::Neg};
 
 use crate::{
     gadget::crypto::{
@@ -194,9 +194,9 @@ where
                             .load_constant(ctx, <S::SiganturesCurve as BlsCurveExt>::Fq12::one())
                     };
                     let mut h2c_cache = HashToCurveCache::default();
-                    let g1_gen = g1_chip.load_private_unchecked(
+                    let g1_neg = g1_chip.load_private_unchecked(
                         ctx,
-                        S::PubKeysCurve::generator_affine().into_coordinates(),
+                        S::PubKeysCurve::generator_affine().neg().into_coordinates(),
                     );
 
                     for Attestation::<S> {
@@ -240,13 +240,12 @@ where
                             &mut h2c_cache,
                         )?;
 
-                        let res = bls_chip.verify_signature(
+                        let res = bls_chip.verify_pairing(
                             signature,
                             msghash,
                             pubkey,
-                            g1_gen.clone(),
+                            g1_neg.clone(),
                             ctx,
-                            false,
                         );
 
                         fp12_chip.assert_equal(ctx, res, fp12_one.clone());
