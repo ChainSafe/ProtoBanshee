@@ -688,7 +688,7 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
             cb.gate(q_condition)
         });
 
-        println!("sha256 circuit degree: {}", meta.degree());
+        debug!("sha256 circuit degree: {}", meta.degree());
         debug!("minimum rows: {}", meta.minimum_rows());
 
         Sha256CircuitConfig {
