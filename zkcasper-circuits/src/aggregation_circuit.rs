@@ -303,9 +303,9 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         // Shift `a` three bits to the left (equivalent to a << 3 mod 256)
         let b_shifted = gate.mul(ctx, *b, QuantumCell::Constant(F::from(8)));
         // since b_shifted can at max be 255*8=2^4 we use 16 bits for modulo division.
-        let b_shifted = range.div_mod(ctx, b_shifted, BigUint::from(256u64), 16).1; 
+        let b_shifted = range.div_mod(ctx, b_shifted, BigUint::from(256u64), 16).1;
 
-       // Shift `s` three bits to the right (equivalent to s >> 3) to zeroing the first three bits (MSB) of `a`.
+        // Shift `s` three bits to the right (equivalent to s >> 3) to zeroing the first three bits (MSB) of `a`.
         range.div_mod(ctx, b_shifted, BigUint::from(8u64), 8).0
     }
 
@@ -426,7 +426,7 @@ mod tests {
                 &mut config.0,
                 &config.1.values(&mut layouter),
                 &mut layouter,
-                ()
+                (),
             )?;
             Ok(())
         }

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, marker::PhantomData, vec, ops::Neg};
+use std::{cell::RefCell, collections::HashMap, marker::PhantomData, ops::Neg, vec};
 
 use crate::{
     gadget::crypto::{

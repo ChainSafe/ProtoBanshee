@@ -1,6 +1,6 @@
 use super::Validator;
 use eth_types::Spec;
-pub use ethereum_consensus::phase0::{AttestationData, Attestation as SszAttestation};
+pub use ethereum_consensus::phase0::{Attestation as SszAttestation, AttestationData};
 use halo2curves::{
     bls12_381::{G1Affine, G2Affine},
     group::{prime::PrimeCurveAffine, Curve, GroupEncoding},

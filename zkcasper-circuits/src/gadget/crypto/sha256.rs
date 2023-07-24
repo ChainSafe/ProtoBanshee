@@ -317,7 +317,10 @@ mod test {
         _f: PhantomData<F>,
     }
 
-    impl<F: Field> Circuit<F> for TestCircuit<F> where [(); Self::MAX_BYTE_SIZE]: {
+    impl<F: Field> Circuit<F> for TestCircuit<F>
+    where
+        [(); Self::MAX_BYTE_SIZE]:,
+    {
         type Config = TestConfig<F>;
         type FloorPlanner = SimpleFloorPlanner;
 
