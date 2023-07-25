@@ -4,6 +4,7 @@ use halo2curves::bls12_381;
 
 use crate::curve::AppCurveExt;
 use crate::curve::HashCurveExt;
+use crate::Field;
 
 pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const VALIDATOR_REGISTRY_LIMIT: usize;
@@ -20,6 +21,11 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
 
     type PubKeysCurve: AppCurveExt;
     type SiganturesCurve: AppCurveExt<Fp = <Self::PubKeysCurve as AppCurveExt>::Fq> + HashCurveExt;
+
+    // Number of commitments to attestation bits per committee for a given field element.
+    fn attest_commits_len<F: Field>() -> usize {
+        (Self::MAX_VALIDATORS_PER_COMMITTEE as f64 / F::NUM_BITS as f64).ceil() as usize
+    }
 }
 
 /// Ethereum Foundation specifications.
@@ -28,7 +34,7 @@ pub struct Test;
 
 impl Spec for Test {
     const VALIDATOR_REGISTRY_LIMIT: usize = 100;
-    const MAX_VALIDATORS_PER_COMMITTEE: usize = 5;
+    const MAX_VALIDATORS_PER_COMMITTEE: usize = 10;
     const MAX_COMMITTEES_PER_SLOT: usize = 5;
     const SLOTS_PER_EPOCH: usize = 32;
     const VALIDATOR_0_G_INDEX: usize = 32;

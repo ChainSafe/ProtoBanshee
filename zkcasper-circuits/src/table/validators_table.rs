@@ -29,8 +29,13 @@ pub struct ValidatorsTable {
     pub exit_epoch: Column<Advice>,
     /// Public key of a validator/committee.
     pub pubkey: [Column<Advice>; 2],
+    /// Commitments to `is_attested` of validator per committee. Length = `Spec::attest_commits_len::<F>()`
+    pub attest_commits: Vec<Column<Advice>>,
+    /// Accumulated balance of a committee.
+    pub balance_acc: Column<Advice>,
 
     pub pubkey_cells: Vec<[Cell; 2]>,
+    pub attestation_bit_cells: Vec<Cell>,
 }
 
 impl<F: Field> LookupTable<F> for ValidatorsTable {
@@ -67,7 +72,7 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
 
 impl ValidatorsTable {
     /// Construct a new [`ValidatorsTable`]
-    pub fn construct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
+    pub fn construct<S: Spec, F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         let config = Self {
             id: meta.advice_column(),
             tag: meta.advice_column(),
@@ -81,7 +86,12 @@ impl ValidatorsTable {
                 meta.advice_column_in(SecondPhase),
                 meta.advice_column_in(SecondPhase),
             ],
+            attest_commits: (0..S::attest_commits_len::<F>())
+                .map(|_| meta.advice_column())
+                .collect(),
+            balance_acc: meta.advice_column(),
             pubkey_cells: vec![],
+            attestation_bit_cells: vec![],
         };
 
         for col in config.pubkey {
@@ -97,64 +107,63 @@ impl ValidatorsTable {
         offset: usize,
         row: &CasperEntityRow<F>,
     ) -> Result<(), Error> {
-        for (column, value) in [
+        let [attest_bit, pubkey_lo, pubkey_hi, ..] = [
+            (self.is_attested, row.is_attested),
+            (self.pubkey[0], row.pubkey[0]),
+            (self.pubkey[1], row.pubkey[1]),
             (self.id, row.id),
             (self.tag, row.tag),
             (self.is_active, row.is_active),
-            (self.is_attested, row.is_attested),
             (self.balance, row.balance),
             (self.slashed, row.slashed),
             (self.activation_epoch, row.activation_epoch),
             (self.exit_epoch, row.exit_epoch),
-        ] {
-            region.assign_advice(
-                || "assign validator row on state table",
-                column,
-                offset,
-                || value,
-            )?;
-        }
-
-        let assigned_cells = [
-            (self.pubkey[0], row.pubkey[0]),
-            (self.pubkey[1], row.pubkey[1]),
         ]
         .map(|(column, value)| {
             region
                 .assign_advice(
-                    || "assign state row on state table",
+                    || "assign validator row on state table",
                     column,
                     offset,
                     || value,
                 )
-                .expect("pubkey assign")
+                .expect("validator field assign")
                 .cell()
         });
 
         if row.row_type == CasperTag::Validator {
-            self.pubkey_cells.push(assigned_cells);
+            self.pubkey_cells.push([pubkey_lo, pubkey_hi]);
+            self.attestation_bit_cells.push(attest_bit);
         }
 
         Ok(())
     }
 
     /// Load the validators table into the circuit.
-    pub fn dev_load<F: Field>(
+    pub fn dev_load<S: Spec, F: Field>(
         &mut self,
         layouter: &mut impl Layouter<F>,
         validators: &[Validator],
         committees: &[Committee],
         challenge: Value<F>,
     ) -> Result<(), Error> {
-        let casper_entities = into_casper_entities(validators.iter(), committees.iter());
+        let casper_entities = into_casper_entities::<S>(validators.iter(), committees.iter());
 
         layouter.assign_region(
             || "dev load validators table",
             |mut region| {
                 self.annotate_columns_in_region(&mut region);
+                let mut committees_balances = Vec::with_capacity(committees.len());
+                let mut attest_commits = Vec::with_capacity(committees.len());
                 for (offset, row) in casper_entities
                     .iter()
-                    .flat_map(|e| e.table_assignment(challenge))
+                    .flat_map(|e| {
+                        e.table_assignment::<S, F>(
+                            challenge,
+                            &mut attest_commits,
+                            &mut committees_balances,
+                        )
+                    })
                     .enumerate()
                 {
                     self.assign_with_region(&mut region, offset, &row)?;

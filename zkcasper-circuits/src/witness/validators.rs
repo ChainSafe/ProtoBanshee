@@ -1,12 +1,14 @@
-use std::vec;
+use std::{iter, vec};
 
 use banshee_preprocessor::util::pad_to_ssz_chunk;
-use eth_types::Field;
+use eth_types::{AppCurveExt, Field, Spec};
 use ethereum_consensus::phase0::is_active_validator;
 use gadgets::util::rlc;
 
+use group::{Group, GroupEncoding};
 use halo2_proofs::circuit::Value;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
@@ -14,6 +16,7 @@ use strum_macros::EnumIter;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Validator {
     pub id: usize,
+    pub shuffle_pos: usize,
     pub committee: usize,
     pub is_active: bool,
     pub is_attested: bool,
@@ -33,11 +36,52 @@ pub struct Committee {
     pub aggregated_pubkey: Vec<u8>,
 }
 
+lazy_static! {
+    pub static ref DUMMY_VALIDATOR: Validator = Validator::default();
+}
+
+impl Default for Validator {
+    fn default() -> Self {
+        Validator {
+            id: 0,
+            shuffle_pos: 0,
+            committee: 0,
+            is_active: false,
+            is_attested: false,
+            effective_balance: 0,
+            activation_epoch: 0,
+            exit_epoch: 0,
+            slashed: false,
+            pubkey: iter::once(192).pad_using(48, |_| 0).rev().collect(),
+            pubkey_uncompressed: iter::once(64).pad_using(96, |_| 0).collect(),
+        }
+    }
+}
+
 impl Validator {
-    pub(crate) fn table_assignment<F: Field>(
+    /// Get validaotor table record.
+    /// `attest_commits` - commitments to attestation bits of validator's committee.
+    pub(crate) fn table_assignment<S: Spec, F: Field>(
         &self,
         randomness: Value<F>,
+        attest_commits: &mut [Vec<u64>],
+        committees_balances: &mut [u64],
     ) -> Vec<CasperEntityRow<F>> {
+        let committee_pos = self.committee_pos::<S>();
+        assert!(
+            committee_pos <= S::MAX_VALIDATORS_PER_COMMITTEE,
+            "validator position out of bounds"
+        );
+        let attest_commit_len = S::attest_commits_len::<F>();
+        let current_commit = (committee_pos as f64 / F::NUM_BITS as f64).ceil() as usize;
+
+        // accumulate bits into current commit
+        let committee_attest_commits = &mut attest_commits[self.committee];
+        let commit = committee_attest_commits.get_mut(current_commit).unwrap();
+        *commit = *commit * 2 + self.is_attested as u64;
+        // accumulate balance of the current committee
+        committees_balances[self.committee] += self.effective_balance;
+
         vec![CasperEntityRow {
             id: Value::known(F::from(self.id as u64)),
             tag: Value::known(F::one()),
@@ -51,6 +95,11 @@ impl Validator {
                 randomness.map(|rnd| rlc::value(&self.pubkey[0..32], rnd)),
                 randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.pubkey[32..48]), rnd)),
             ],
+            attest_commits: committee_attest_commits
+                .iter()
+                .take(attest_commit_len)
+                .map(|b| Value::known(F::from(*b)))
+                .collect(),
 
             row_type: CasperTag::Validator,
         }]
@@ -78,11 +127,11 @@ impl Validator {
             // TODO: figure out how to set this. This needs to be determined from
             // https://eth2book.info/capella/annotated-spec/#beaconblockbody
             let is_attested = true;
-            // TODO: how do I set this?
-            let committee = 0;
+
             let banshee_validator = Validator {
                 id,
-                committee,
+                shuffle_pos: 0, // TODO
+                committee: 0,   // TODO: shuffle_pos/S::MAX_VALIDATORS_PER_COMMITTEE
                 is_active,
                 is_attested,
                 effective_balance: eth_validator.effective_balance,
@@ -95,6 +144,11 @@ impl Validator {
             banshee_validators.push(banshee_validator);
         }
         banshee_validators
+    }
+
+    fn committee_pos<S: Spec>(&self) -> usize {
+        self.committee * S::MAX_VALIDATORS_PER_COMMITTEE
+            + self.shuffle_pos % S::MAX_VALIDATORS_PER_COMMITTEE
     }
 }
 
@@ -112,10 +166,9 @@ impl Committee {
             slashed: Value::known(F::zero()),
             activation_epoch: Value::known(F::zero()),
             exit_epoch: Value::known(F::zero()),
-            pubkey: [Value::known(F::zero()), Value::known(F::zero())], // TODO:
-            // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.x), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
-            // .chain(decompose_bigint_option(Value::known(self.aggregated_pubkey.y), 7, 55).into_iter().map(|limb| new_state_row(FieldTag::PubKeyAffineX, 0, limb)))
+            pubkey: [Value::known(F::zero()), Value::known(F::zero())],
             row_type: CasperTag::Committee,
+            attest_commits: todo!(),
         }]
     }
 }
@@ -126,15 +179,22 @@ pub enum CasperEntity<'a> {
 }
 
 impl<'a> CasperEntity<'a> {
-    pub fn table_assignment<F: Field>(&self, randomness: Value<F>) -> Vec<CasperEntityRow<F>> {
+    pub fn table_assignment<S: Spec, F: Field>(
+        &self,
+        randomness: Value<F>,
+        attest_commits: &mut [Vec<u64>],
+        committees_balances: &mut [u64],
+    ) -> Vec<CasperEntityRow<F>> {
         match self {
-            CasperEntity::Validator(v) => v.table_assignment(randomness),
+            CasperEntity::Validator(v) => {
+                v.table_assignment::<S, F>(randomness, attest_commits, committees_balances)
+            }
             CasperEntity::Committee(c) => c.table_assignment(randomness),
         }
     }
 }
 
-pub fn into_casper_entities<'a>(
+pub fn into_casper_entities<'a, S: Spec>(
     validators: impl Iterator<Item = &'a Validator>,
     committees: impl Iterator<Item = &'a Committee>,
 ) -> Vec<CasperEntity<'a>> {
@@ -145,7 +205,7 @@ pub fn into_casper_entities<'a>(
     let binding = validators.into_iter().group_by(|v| v.committee);
     let validators_per_committees = binding
         .into_iter()
-        .sorted_by_key(|(committee, _vs)| *committee)
+        .sorted_by_key(|(committee, _)| *committee)
         .map(|(committee, vs)| (committee, vs));
 
     assert_eq!(
@@ -157,7 +217,11 @@ pub fn into_casper_entities<'a>(
     committees.sort_by_key(|v| v.id);
 
     for (comm_idx, validators) in validators_per_committees {
-        casper_entity.extend(validators.map(CasperEntity::Validator));
+        casper_entity.extend(
+            validators
+                .pad_using(S::MAX_VALIDATORS_PER_COMMITTEE, |_| &DUMMY_VALIDATOR)
+                .map(CasperEntity::Validator),
+        );
         casper_entity.push(CasperEntity::Committee(committees[comm_idx]));
     }
 
@@ -183,4 +247,5 @@ pub struct CasperEntityRow<F: Field> {
     pub(crate) activation_epoch: Value<F>,
     pub(crate) exit_epoch: Value<F>,
     pub(crate) pubkey: [Value<F>; 2],
+    pub(crate) attest_commits: Vec<Value<F>>,
 }

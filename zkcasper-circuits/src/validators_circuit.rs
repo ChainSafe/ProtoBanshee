@@ -51,7 +51,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         let q_enabled = meta.fixed_column();
         let target_epoch = meta.advice_column();
         let state_tables = args.state_tables;
-        let validators_table: ValidatorsTable = ValidatorsTable::construct(meta);
+        let validators_table: ValidatorsTable = ValidatorsTable::construct::<S, F>(meta);
 
         let storage_phase1 = meta.advice_column_in(FirstPhase);
         let byte_lookup: [_; N_BYTE_LOOKUPS] = (0..N_BYTE_LOOKUPS)
@@ -233,7 +233,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 }
 
 impl<F: Field> ValidatorsCircuitConfig<F> {
-    fn assign(
+    fn assign<S: Spec>(
         &mut self,
         layouter: &mut impl Layouter<F>,
         validators: &[Validator],
@@ -244,7 +244,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
         layouter.assign_region(
             || "validators circuit",
             |mut region| {
-                self.assign_with_region(
+                self.assign_with_region::<S>(
                     &mut region,
                     validators,
                     committees,
@@ -255,7 +255,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
         )
     }
 
-    fn assign_with_region(
+    fn assign_with_region<S: Spec>(
         &mut self,
         region: &mut Region<'_, F>,
         validators: &[Validator],
@@ -263,7 +263,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
         target_epoch: u64,
         randomness: Value<F>,
     ) -> Result<(), Error> {
-        let casper_entities = into_casper_entities(validators.iter(), committees.iter());
+        let casper_entities = into_casper_entities::<S>(validators.iter(), committees.iter());
 
         let target_gte_activation = self
             .target_gte_activation
@@ -275,6 +275,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             .expect("target_lt_exited gadget is expected");
 
         let mut offset = 0;
+        let mut committees_balances = Vec::with_capacity(committees.len());
+        let mut attest_commits = Vec::with_capacity(committees.len());
         for entity in casper_entities.iter() {
             region.assign_advice(
                 || "assign target epoch",
@@ -306,7 +308,11 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                         F::from(validator.exit_epoch),
                     )?;
 
-                    let validator_rows = validator.table_assignment(randomness);
+                    let validator_rows = validator.table_assignment::<S, F>(
+                        randomness,
+                        &mut attest_commits,
+                        &mut committees_balances,
+                    );
                     for (i, row) in validator_rows.into_iter().enumerate() {
                         self.validators_table
                             .assign_with_region(region, offset + i, &row)?;
@@ -349,25 +355,27 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct ValidatorsCircuit<F> {
+pub struct ValidatorsCircuit<S: Spec, F> {
     pub(crate) validators: Vec<Validator>,
     pub(crate) committees: Vec<Committee>,
     target_epoch: u64,
     _f: PhantomData<F>,
+    _spec: PhantomData<S>,
 }
 
-impl<F: Field> ValidatorsCircuit<F> {
+impl<S: Spec, F: Field> ValidatorsCircuit<S, F> {
     pub fn new(validators: Vec<Validator>, committees: Vec<Committee>, target_epoch: u64) -> Self {
         Self {
             validators,
             committees,
             target_epoch,
             _f: PhantomData,
+            _spec: PhantomData,
         }
     }
 }
 
-impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
+impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
     type Config = ValidatorsCircuitConfig<F>;
     type SynthesisArgs = ();
 
@@ -398,7 +406,7 @@ impl<F: Field> SubCircuit<F> for ValidatorsCircuit<F> {
         layouter.assign_region(
             || "validators circuit",
             |mut region| {
-                config.assign_with_region(
+                config.assign_with_region::<S>(
                     &mut region,
                     &self.validators,
                     &self.committees,
@@ -440,13 +448,13 @@ mod tests {
     use eth_types::Test as S;
 
     #[derive(Debug, Clone)]
-    struct TestValidators<F: Field> {
-        inner: ValidatorsCircuit<F>,
+    struct TestValidators<S: Spec, F: Field> {
+        inner: ValidatorsCircuit<S, F>,
         state_tree_trace: MerkleTrace,
         _f: PhantomData<F>,
     }
 
-    impl<F: Field> Circuit<F> for TestValidators<F> {
+    impl<S: Spec, F: Field> Circuit<F> for TestValidators<S, F> {
         type Config = (ValidatorsCircuitConfig<F>, Challenges<F>);
         type FloorPlanner = SimpleFloorPlanner;
 
@@ -496,7 +504,7 @@ mod tests {
         let state_tree_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
-        let circuit = TestValidators::<Fr> {
+        let circuit = TestValidators::<Test, Fr> {
             inner: ValidatorsCircuit::new(validators, committees, 25),
             state_tree_trace,
             _f: PhantomData,

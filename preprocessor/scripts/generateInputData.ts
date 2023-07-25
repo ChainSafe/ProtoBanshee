@@ -165,7 +165,7 @@ attestations.push({
     aggregationBits: BitArray.fromBoolArray(Array(N).fill(1)),
     data: data,
     signature: sigBytes
-})
+});
 
 let attestationJson = ssz.phase0.BeaconBlockBody.fields.attestations.toJson(attestations);
 

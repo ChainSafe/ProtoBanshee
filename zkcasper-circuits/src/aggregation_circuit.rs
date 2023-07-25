@@ -1,23 +1,26 @@
 use crate::{
-    gadget::crypto::{FpPoint, G1Chip},
+    gadget::crypto::{FpPoint, G1Chip, G1Point},
     table::{LookupTable, ValidatorsTable},
     util::{decode_into_field, print_fq_dev, Challenges, SubCircuit, SubCircuitConfig},
-    witness::{self, Committee, Validator},
+    witness::{self, Committee, Validator, DUMMY_VALIDATOR},
 };
 use eth_types::{Spec, *};
+use ff::Field as FF;
 use gadgets::util::rlc;
+use group::prime::PrimeCurveAffine;
 use halo2_base::{
     gates::{
         builder::GateThreadBuilder,
         flex_gate::GateInstructions,
         range::{RangeChip, RangeConfig, RangeInstructions},
     },
+    utils::CurveAffineExt,
     AssignedValue, Context, QuantumCell,
 };
 use halo2_ecc::{
     bigint::{ProperCrtUint, ProperUint},
     ecc::{EcPoint, EccChip},
-    fields::FieldChip,
+    fields::{fp, FieldChip, Selectable},
 };
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
@@ -28,6 +31,7 @@ use halo2curves::{
     CurveAffine, CurveExt,
 };
 use itertools::Itertools;
+use num::Integer;
 use num_bigint::BigUint;
 use std::{cell::RefCell, marker::PhantomData};
 
@@ -124,7 +128,12 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
                     let mut pubkeys_compressed = vec![];
-                    let _aggregated_pubkeys = self.process_validators(ctx, &mut pubkeys_compressed);
+                    let mut aggregation_nums = vec![];
+                    let _aggregated_pubkeys = self.process_validators(
+                        ctx,
+                        &mut pubkeys_compressed,
+                        &mut aggregation_nums,
+                    );
 
                     let ctx = builder.main(1);
 
@@ -167,7 +176,9 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                             .get(i)
                             .expect("pubkey cells for validator id");
 
-                        // enforce equality
+                        // enforce equality and order
+                        // WARNING: the variable number of valdiators might cause issues in proof generation
+                        // FIXME: pad up to max (supported) valdiators count (?)
                         for (left, &right) in cells.zip_eq(vs_table_cells) {
                             region.constrain_equal(left, right)?;
                         }
@@ -179,8 +190,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
             .unwrap();
     }
 
-    // TODO: Change to +4 when we switch to BLS12-381
-    // Calculates y^2 = x^3 + 4 (the curve equation for bn254)
+    // Calculates y^2 = x^3 + 4 (the curve equation)
     fn calculate_ysquared<C: AppCurveExt>(
         ctx: &mut Context<F>,
         field_chip: &FpChip<'_, F, C>,
@@ -197,6 +207,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         &self,
         ctx: &mut Context<F>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
+        aggregation_nums: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let range = self.range();
         let gate = range.gate();
@@ -208,16 +219,30 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
         let mut aggregated_pubkeys = vec![];
 
-        for (_committee, validators) in self
+        // Set y = sqrt(B) for dummy validators to sutisfy curve equation
+        // Note: this only works for curves that have B exponent of 2, e.g. BLS12-381
+        let dymmy_y =
+            <S::PubKeysCurve as AppCurveExt>::Fq::from((S::PubKeysCurve::B as f64).sqrt() as u64);
+        let g1_identity = g1_chip.load_identity(ctx);
+
+        for (committee, validators) in self
             .validators
             .iter()
             .zip(self.validators_y.iter())
             .group_by(|v| v.0.committee)
             .into_iter()
         {
-            let mut in_committee_pubkeys = vec![];
+            let mut attested_pubkeys = vec![];
+            let mut aggregation_bits = vec![];
 
-            for (validator, y_coord) in validators {
+            for (validator, y_coord) in validators
+                .into_iter()
+                .pad_using(S::MAX_VALIDATORS_PER_COMMITTEE, |i| {
+                    (&DUMMY_VALIDATOR, &dymmy_y)
+                })
+            {
+                let is_attested = ctx.load_witness(F::from(validator.is_attested as u64));
+
                 let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
                     ctx.assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
 
@@ -255,18 +280,39 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
                 // Cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                 pubkeys_compressed.push(assigned_x_compressed_bytes);
-                // Normally, we would need to take into account the sign of the y coordinate, but
+
+                // *Note*: Normally, we would need to take into account the sign of the y coordinate, but
                 // because we are concerned only with signature forgery, if this is the wrong
                 // sign, the signature will be invalid anyway and thus verification fails.
-                in_committee_pubkeys.push(EcPoint::new(x_crt, y_crt));
+
+                attested_pubkeys.push(EcPoint::new(x_crt, y_crt));
+                aggregation_bits.push(is_attested);
             }
 
-            aggregated_pubkeys.push(
-                g1_chip.sum::<<S::PubKeysCurve as AppCurveExt>::Affine>(ctx, in_committee_pubkeys),
-            );
+            aggregated_pubkeys.push(Self::aggregate_pubkeys(
+                &g1_chip,
+                ctx,
+                attested_pubkeys,
+                aggregation_bits,
+            ));
         }
 
         aggregated_pubkeys
+    }
+
+    pub fn aggregate_pubkeys<'b>(
+        g1_chip: &G1Chip<'b, F, S::PubKeysCurve>,
+        ctx: &mut Context<F>,
+        pubkeys: impl IntoIterator<Item = G1Point<F>>,
+        aggregation_bits: impl IntoIterator<Item = AssignedValue<F>>,
+    ) -> G1Point<F> {
+        let rand_point = g1_chip.load_random_point::<<S::PubKeysCurve as AppCurveExt>::Affine>(ctx);
+        let mut acc = rand_point.clone();
+        for (bit, point) in aggregation_bits.into_iter().zip(pubkeys.into_iter()) {
+            let _acc = g1_chip.add_unequal(ctx, acc.clone(), point, true);
+            acc = g1_chip.select(ctx, _acc, acc, bit);
+        }
+        g1_chip.sub_unequal(ctx, acc, rand_point, false)
     }
 
     /// Calculates RLCs (1 for each of two chacks of BLS12-381) for compresed bytes of pubkey.
@@ -361,6 +407,7 @@ mod tests {
 
     use super::*;
     use eth_types::Test as S;
+    use group::{prime::PrimeCurveAffine, Group};
     use halo2_base::gates::range::RangeStrategy;
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
@@ -389,7 +436,7 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let validators_table = ValidatorsTable::construct(meta);
+            let validators_table = ValidatorsTable::construct::<S, F>(meta);
             let range = RangeConfig::configure(
                 meta,
                 RangeStrategy::Vertical,
@@ -416,7 +463,7 @@ mod tests {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let challenge = config.1.sha256_input();
-            config.0.validators_table.dev_load(
+            config.0.validators_table.dev_load::<S, _>(
                 &mut layouter,
                 self.inner.validators,
                 self.inner._committees,
@@ -467,5 +514,44 @@ mod tests {
 
         let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
+    }
+
+    #[test]
+    fn decompose_second_bit_and_compose() {
+        let a = 134u8;
+
+        let mut s = ((a as u64 * 2) % 256) as u8; // equivalent to a <<= 1 mod 256;
+
+        println!("s1 = {}", s);
+
+        // Decompose the second bit
+        let second_bit = (s as u64) / 128; // Extract the second bit
+
+        println!("second_bit = {}", second_bit);
+
+        s = ((s as u64 * 4) % 256) as u8;
+
+        println!("s2 = {}", s);
+
+        // Compose back to the original number but zeroing the second bit
+        let c = s / 8; // Shift bits one to the right
+
+        println!("c = {}", c);
+
+        assert_eq!(a & 31, c);
+    }
+
+    #[test]
+    fn test_affine_add() {
+        let iden = G1Affine::identity();
+        let rand1 = G1Affine::random(&mut rand::thread_rng());
+        let rand2 = G1Affine::random(&mut rand::thread_rng());
+
+        let sum = rand1 + rand2;
+        let sum2 = rand1 + rand2 + iden;
+
+        println!("sum: {:?}", sum);
+        println!("sum2: {:?}", sum2);
+        assert_eq!(sum, sum2);
     }
 }
