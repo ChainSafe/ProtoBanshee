@@ -131,7 +131,8 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
                     let mut pubkeys_compressed = vec![];
-                    let _aggregated_pubkeys = self.process_validators(ctx, &mut pubkeys_compressed);
+                    let _aggregated_pubkeys =
+                        self.process_validators(ctx.clone(), &mut pubkeys_compressed);
 
                     let ctx = builder.main(1);
 
@@ -204,7 +205,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
 
     fn process_validators(
         &self,
-        ctx: &mut Context<F>,
+        ctx: Context<F>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let range = self.range();
@@ -232,13 +233,16 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         let aggregated_pubkeys = grouped_validators
             .into_par_iter()
             .map(|validators| {
+                // TODO: Nothing within here can take `&mut self`.
                 let mut in_committee_pubkeys = vec![];
+                let mut ctx_clone = ctx.clone();
 
                 for (validator, y_coord) in validators.into_iter() {
                     let pk_compressed = validator.pubkey[..S::G1_BYTES_COMPRESSED].to_vec();
 
                     let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
-                        ctx.assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
+                        // TODO: change to not use &mut self
+                        ctx_clone.assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
 
                     // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
                     assert_eq!(assigned_x_compressed_bytes.len(), S::G1_BYTES_COMPRESSED);
@@ -252,7 +256,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     // masked byte from compressed representation
                     let masked_byte = &assigned_x_compressed_bytes[S::G1_BYTES_COMPRESSED - 1];
                     // clear the sign bit from masked byte
-                    let cleared_byte = Self::clear_ysign_mask(range, masked_byte, ctx);
+                    let cleared_byte = Self::clear_ysign_mask(range, masked_byte, &mut ctx_clone);
                     // Use the cleared byte to construct the x coordinate
                     let assigned_x_bytes_cleared = [
                         &assigned_x_compressed_bytes.as_slice()[..S::G1_BYTES_COMPRESSED - 1],
@@ -263,17 +267,17 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                         assigned_x_bytes_cleared,
                         &fp_chip.limb_bases,
                         gate,
-                        ctx,
+                        &mut ctx_clone,
                     );
 
                     // Load private witness y coordinate
-                    let y_crt = fp_chip.load_private(ctx, *y_coord);
+                    let y_crt = fp_chip.load_private(&mut ctx_clone, *y_coord);
                     // Square y coordinate
-                    let ysq = fp_chip.mul(ctx, y_crt.clone(), y_crt.clone());
+                    let ysq = fp_chip.mul(&mut ctx_clone, y_crt.clone(), y_crt.clone());
                     // Calculate y^2 using the elliptic curve equation
-                    let ysq_calc = Self::calculate_ysquared(ctx, fp_chip, x_crt.clone());
+                    let ysq_calc = Self::calculate_ysquared(&mut ctx_clone, fp_chip, x_crt.clone());
                     // Constrain witness y^2 to be equal to calculated y^2
-                    fp_chip.assert_equal(ctx, ysq, ysq_calc);
+                    fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
 
                     // constraint that the loaded masked byte is consistent with the assigned bytes used to construct the point.
                     // ctx.constrain_equal(&cleared_byte, &assigned_x_bytes[S::G1_BYTES_COMPRESSED - 1]);
@@ -287,7 +291,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                 }
 
                 // let pk_affine = G1Affine::random(&mut rand::thread_rng());
-                (g1_chip.sum::<G1Affine>(ctx, in_committee_pubkeys))
+                (g1_chip.sum::<G1Affine>(&mut ctx_clone, in_committee_pubkeys))
             })
             .collect();
 
