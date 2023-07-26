@@ -10,7 +10,7 @@ use gadgets::util::rlc;
 use group::prime::PrimeCurveAffine;
 use halo2_base::{
     gates::{
-        builder::GateThreadBuilder,
+        builder::{parallelize_in, GateThreadBuilder},
         flex_gate::GateInstructions,
         range::{RangeChip, RangeConfig, RangeInstructions},
     },
@@ -33,7 +33,12 @@ use halo2curves::{
 use itertools::Itertools;
 use num::Integer;
 use num_bigint::BigUint;
-use std::{cell::RefCell, marker::PhantomData};
+use rayon::prelude::*;
+use std::{
+    cell::{RefCell, RefMut},
+    iter,
+    marker::PhantomData,
+};
 
 #[allow(type_alias_bounds)]
 type FpChip<'chip, F, C: AppCurveExt> = halo2_ecc::fields::fp::FpChip<'chip, F, C::Fq>;
@@ -68,7 +73,7 @@ impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec> {
+pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec + Sync> {
     builder: RefCell<GateThreadBuilder<F>>,
     range: &'a RangeChip<F>,
     fp_chip: FpChip<'a, F, S::PubKeysCurve>,
@@ -79,7 +84,7 @@ pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec> {
     _spec: PhantomData<S>,
 }
 
-impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
+impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
     pub fn new(
         builder: GateThreadBuilder<F>,
         validators: &'a [Validator],
@@ -126,14 +131,9 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                     }
 
                     let builder = &mut self.builder.borrow_mut();
-                    let ctx = builder.main(0);
                     let mut pubkeys_compressed = vec![];
-                    let mut aggregation_nums = vec![];
-                    let _aggregated_pubkeys = self.process_validators(
-                        ctx,
-                        &mut pubkeys_compressed,
-                        &mut aggregation_nums,
-                    );
+                    let _aggregated_pubkeys =
+                        self.process_validators(builder, &mut pubkeys_compressed);
 
                     let ctx = builder.main(1);
 
@@ -203,12 +203,15 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
         field_chip.carry_mod(ctx, plus_b)
     }
 
+    /// takes a list of validators and groups them by committees
+    /// aggregates them by committee, and appends `pubkeys_compressed` with assigned pubkeys
+    /// of validators in compressed byte form.
     fn process_validators(
         &self,
-        ctx: &mut Context<F>,
+        builder: &mut GateThreadBuilder<F>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
-        aggregation_nums: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
+        let witness_gen_only = builder.witness_gen_only();
         let range = self.range();
         let gate = range.gate();
 
@@ -217,21 +220,36 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
         let pubkey_compressed_len = S::PubKeysCurve::BYTES_FQ;
 
-        let mut aggregated_pubkeys = vec![];
-
         // Set y = sqrt(B) for dummy validators to sutisfy curve equation
         // Note: this only works for curves that have B exponent of 2, e.g. BLS12-381
         let dymmy_y =
             <S::PubKeysCurve as AppCurveExt>::Fq::from((S::PubKeysCurve::B as f64).sqrt() as u64);
-        let g1_identity = g1_chip.load_identity(ctx);
 
-        for (committee, validators) in self
+        let grouped_validators = self
             .validators
             .iter()
             .zip(self.validators_y.iter())
             .group_by(|v| v.0.committee)
             .into_iter()
-        {
+            .map(|(_committee, validator_coord_group)| {
+                // NOTE: This needs to be a plain vector instead of the `Group` object that
+                // isn't ParIter.
+                validator_coord_group.into_iter().collect_vec()
+            })
+            .collect_vec();
+
+        // NOTE: We convert the grouped validators into Rayon-provided `ParIter` so that we can use
+        // parallel threads. But because of this, we can't use &mut self or any other mutable
+        // types, so instead we return a vector of tuples from this `.map`, which we process later.
+        type ParallelizedOutput<F> = (
+            EcPoint<F, FpPoint<F>>,
+            Context<F>,
+            Vec<Vec<AssignedValue<F>>>,
+        );
+
+        let result = parallelize_in(0, builder, grouped_validators, |ctx, validators| {
+            // Note: Nothing within here can take `self`.
+            let mut pubkeys_compressed_thread = vec![];
             let mut attested_pubkeys = vec![];
             let mut aggregation_bits = vec![];
 
@@ -246,20 +264,19 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                 let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
                     ctx.assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
 
-                // Assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
+                // assertion check for assigned_uncompressed vector to be equal to S::PubKeyCurve::BYTES_UNCOMPRESSED from specification
                 assert_eq!(assigned_x_compressed_bytes.len(), pubkey_compressed_len);
 
-                // Masked byte from compressed representation
+                // masked byte from compressed representation
                 let masked_byte = &assigned_x_compressed_bytes[pubkey_compressed_len - 1];
-                // Clear the sign bit from masked byte
-                let cleared_byte = self.clear_flag_bits(masked_byte, ctx);
+                // clear the sign bit from masked byte
+                let cleared_byte = Self::clear_flag_bits(range, masked_byte, ctx);
                 // Use the cleared byte to construct the x coordinate
                 let assigned_x_bytes_cleared = [
                     &assigned_x_compressed_bytes.as_slice()[..pubkey_compressed_len - 1],
                     &[cleared_byte],
                 ]
                 .concat();
-
                 let x_crt = decode_into_field::<F, S::PubKeysCurve>(
                     assigned_x_bytes_cleared,
                     &fp_chip.limb_bases,
@@ -269,7 +286,6 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
                 // Load private witness y coordinate
                 let y_crt = fp_chip.load_private(ctx, *y_coord);
-
                 // Square y coordinate
                 let ysq = fp_chip.mul(ctx, y_crt.clone(), y_crt.clone());
                 // Calculate y^2 using the elliptic curve equation
@@ -278,23 +294,30 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
                 // Constrain witness y^2 to be equal to calculated y^2
                 fp_chip.assert_equal(ctx, ysq, ysq_calc);
 
-                // Cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
-                pubkeys_compressed.push(assigned_x_compressed_bytes);
-
-                // *Note*: Normally, we would need to take into account the sign of the y coordinate, but
+                // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
+                // push this to the returnable and then use that
+                pubkeys_compressed_thread.push(assigned_x_compressed_bytes);
+                // Normally, we would need to take into account the sign of the y coordinate, but
                 // because we are concerned only with signature forgery, if this is the wrong
                 // sign, the signature will be invalid anyway and thus verification fails.
 
                 attested_pubkeys.push(EcPoint::new(x_crt, y_crt));
                 aggregation_bits.push(is_attested);
             }
+            (
+                Self::aggregate_pubkeys(&g1_chip, ctx, attested_pubkeys, aggregation_bits),
+                ctx.clone(),
+                pubkeys_compressed_thread,
+            )
+        });
 
-            aggregated_pubkeys.push(Self::aggregate_pubkeys(
-                &g1_chip,
-                ctx,
-                attested_pubkeys,
-                aggregation_bits,
-            ));
+        let mut aggregated_pubkeys = vec![];
+        for (aggregated_pubkey, context, pubkeys_compressed_thread) in result.iter() {
+            aggregated_pubkeys.push(aggregated_pubkey.clone());
+            builder.threads[0].push(context.clone());
+            for item in pubkeys_compressed_thread {
+                pubkeys_compressed.push(item.clone());
+            }
         }
 
         aggregated_pubkeys
@@ -342,10 +365,12 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
 
     /// Clears the 3 first least significat bits used for flags from a last byte of compressed pubkey.
     /// This function emulates bitwise and on 00011111 (0x1F): `b & 0b00011111` = c
-    fn clear_flag_bits(&self, b: &AssignedValue<F>, ctx: &mut Context<F>) -> AssignedValue<F> {
-        let range = self.range();
+    fn clear_flag_bits(
+        range: &RangeChip<F>,
+        b: &AssignedValue<F>,
+        ctx: &mut Context<F>,
+    ) -> AssignedValue<F> {
         let gate = range.gate();
-
         // Shift `a` three bits to the left (equivalent to a << 3 mod 256)
         let b_shifted = gate.mul(ctx, *b, QuantumCell::Constant(F::from(8)));
         // since b_shifted can at max be 255*8=2^4 we use 16 bits for modulo division.
@@ -368,7 +393,7 @@ impl<'a, F: Field, S: Spec> AggregationCircuitBuilder<'a, F, S> {
     }
 }
 
-impl<'a, F: Field, S: Spec> SubCircuit<F> for AggregationCircuitBuilder<'a, F, S> {
+impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'a, F, S> {
     type Config = AggregationCircuitConfig<F>;
     type SynthesisArgs = ();
 
@@ -415,19 +440,19 @@ mod tests {
     use halo2curves::bls12_381::G1Affine;
 
     #[derive(Debug, Clone)]
-    struct TestCircuit<'a, F: Field, S: Spec> {
+    struct TestCircuit<'a, F: Field, S: Spec + Sync> {
         inner: AggregationCircuitBuilder<'a, F, S>,
     }
 
-    impl<'a, F: Field, S: Spec> TestCircuit<'a, F, S> {
+    impl<'a, F: Field, S: Spec + Sync> TestCircuit<'a, F, S> {
         const NUM_ADVICE: &[usize] = &[6, 1];
         const NUM_FIXED: usize = 1;
-        const NUM_LOOKUP_ADVICE: usize = 1;
+        const NUM_LOOKUP_ADVICE: usize = 2;
         const LOOKUP_BITS: usize = 8;
         const K: usize = 14;
     }
 
-    impl<'a, F: Field, S: Spec> Circuit<F> for TestCircuit<'a, F, S> {
+    impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S> {
         type Config = (AggregationCircuitConfig<F>, Challenges<F>);
         type FloorPlanner = SimpleFloorPlanner;
 

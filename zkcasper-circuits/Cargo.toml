@@ -36,7 +36,7 @@ pasta_curves = "0.4.1"
 hex = "0.4"
 ff = "0.12"
 group = "0.12"
-
+rayon = "1.7.0"
 # snark-verifier = { git = "https://github.com/privacy-scaling-explorations/snark-verifier", tag = "v2023_02_02", default-features = false, features = [
 #     "loader_halo2",
 #     "system_halo2",
