@@ -273,7 +273,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                 let ysq_calc =
                     Self::calculate_ysquared::<S::PubKeysCurve>(ctx, fp_chip, x_crt.clone());
                 // Constrain witness y^2 to be equal to calculated y^2
-                fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
+                fp_chip.assert_equal(ctx, ysq, ysq_calc);
 
                 // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                 // push this to the returnable and then use that
