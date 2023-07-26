@@ -204,6 +204,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let ctx = builder.main(0);
+        let ctx = Context::<F>::new(ctx.witness_gen_only(), ctx.context_id);
         let range = self.range();
         let gate = range.gate();
 
@@ -212,14 +213,18 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
 
         let pubkey_compressed_len = S::PubKeysCurve::BYTES_FQ;
         let grouped_validators = self
-
             .validators
             .iter()
             .zip(self.validators_y.iter())
             .group_by(|v| v.0.committee);
         // convert the `itertools::GroupBy` into a plain vector so that `rayon::par_iter`
         // can use it.
-        let grouped_validators: Vec<Vec<(&Validator, &Fq)>> = grouped_validators
+        let grouped_validators: Vec<
+            Vec<(
+                &Validator,
+                &<<S as eth_types::Spec>::PubKeysCurve as eth_types::AppCurveExt>::Fq,
+            )>,
+        > = grouped_validators
             .into_iter()
             .map(|(_committee, validator_coord_group)| {
                 // NOTE: This needs to be a plain vector instead of the `Group` object that
@@ -241,29 +246,20 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             .map(|validators| {
                 // TODO: Nothing within here can take `&mut self`.
                 let mut in_committee_pubkeys = vec![];
-                let mut ctx_clone = ctx.clone();
+                let mut ctx_clone = Context::<F>::new(ctx.witness_gen_only(), ctx.context_id);
                 let mut pubkeys_compressed_thread: Vec<Vec<AssignedValue<F>>> = vec![];
 
                 for (validator, y_coord) in validators.into_iter() {
-                    let pk_compressed = validator.pubkey[..S::G1_BYTES_COMPRESSED].to_vec();
-
                     let assigned_x_compressed_bytes: Vec<AssignedValue<F>> = ctx_clone
-                        .assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
+                        .assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
 
                     // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
                     assert_eq!(assigned_x_compressed_bytes.len(), pubkey_compressed_len);
-                    
-                    // Clear the sign bit from the last byte of the compressed representation to construct the x coordinate in Fq
-                    let mut pk_compressed_cleared = pk_compressed;
-                    pk_compressed_cleared[S::G1_BYTES_COMPRESSED - 1] &= 0b0011_1111;
-                    let x_coord =
-                        Fq::from_bytes(&pk_compressed_cleared.as_slice().try_into().unwrap())
-                            .unwrap();
 
                     // masked byte from compressed representation
                     let masked_byte = &assigned_x_compressed_bytes[pubkey_compressed_len - 1];
                     // clear the sign bit from masked byte
-                    let cleared_byte = Self::clear_ysign_mask(range, masked_byte, &mut ctx_clone);
+                    let cleared_byte = Self::clear_flag_bits(range, masked_byte, &mut ctx_clone);
                     // Use the cleared byte to construct the x coordinate
                     let assigned_x_bytes_cleared = [
                         &assigned_x_compressed_bytes.as_slice()[..pubkey_compressed_len - 1],
@@ -282,7 +278,11 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     // Square y coordinate
                     let ysq = fp_chip.mul(&mut ctx_clone, y_crt.clone(), y_crt.clone());
                     // Calculate y^2 using the elliptic curve equation
-                    let ysq_calc = Self::calculate_ysquared(&mut ctx_clone, fp_chip, x_crt.clone());
+                    let ysq_calc = Self::calculate_ysquared::<S::PubKeysCurve>(
+                        &mut ctx_clone,
+                        fp_chip,
+                        x_crt.clone(),
+                    );
                     // Constrain witness y^2 to be equal to calculated y^2
                     fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
 
@@ -300,7 +300,10 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
 
                 // let pk_affine = G1Affine::random(&mut rand::thread_rng());
                 (
-                    g1_chip.sum::<<S::PubKeysCurve as AppCurveExt>::Affine>(ctx, in_committee_pubkeys),
+                    g1_chip.sum::<<S::PubKeysCurve as AppCurveExt>::Affine>(
+                        &mut ctx_clone,
+                        in_committee_pubkeys,
+                    ),
                     ctx_clone,
                     pubkeys_compressed_thread,
                 )
@@ -343,13 +346,14 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             .unwrap()
     }
 
-
     /// Clears the 3 first least significat bits used for flags from a last byte of compressed pubkey.
     /// This function emulates bitwise and on 00011111 (0x1F): `b & 0b00011111` = c
-    fn clear_flag_bits(&self, b: &AssignedValue<F>, ctx: &mut Context<F>) -> AssignedValue<F> {
-        let range = self.range();
+    fn clear_flag_bits(
+        range: &RangeChip<F>,
+        b: &AssignedValue<F>,
+        ctx: &mut Context<F>,
+    ) -> AssignedValue<F> {
         let gate = range.gate();
-
         // Shift `a` three bits to the left (equivalent to a << 3 mod 256)
         let b_shifted = gate.mul(ctx, *b, QuantumCell::Constant(F::from(8)));
         // since b_shifted can at max be 255*8=2^4 we use 16 bits for modulo division.
