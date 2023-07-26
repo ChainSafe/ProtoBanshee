@@ -198,6 +198,8 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         field_chip.carry_mod(ctx, plus_b)
     }
 
+    /// takes a list of validators and groups them by committees
+    ///
     fn process_validators(
         &self,
         builder: &mut RefMut<GateThreadBuilder<F>>,
@@ -217,22 +219,14 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             .iter()
             .zip(self.validators_y.iter())
             .group_by(|v| v.0.committee);
-        // convert the `itertools::GroupBy` into a plain vector so that `rayon::par_iter`
-        // can use it.
-        // TODO: clippy recommends converting this to a named `type`.
-        let grouped_validators: Vec<
-            Vec<(
-                &Validator,
-                &<<S as eth_types::Spec>::PubKeysCurve as eth_types::AppCurveExt>::Fq,
-            )>,
-        > = grouped_validators
+        let grouped_validators = grouped_validators
             .into_iter()
             .map(|(_committee, validator_coord_group)| {
                 // NOTE: This needs to be a plain vector instead of the `Group` object that
                 // isn't ParIter.
-                validator_coord_group.into_iter().collect()
+                validator_coord_group.into_iter().collect_vec()
             })
-            .collect();
+            .collect_vec();
 
         // NOTE: We convert the grouped validators into Rayon-provided `ParIter` so that we can use
         // parallel threads. But because of this, we can't use &mut self or any other mutable
@@ -254,7 +248,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     let assigned_x_compressed_bytes: Vec<AssignedValue<F>> = ctx_clone
                         .assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
 
-                    // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
+                    // assertion check for assigned_uncompressed vector to be equal to S::PubKeyCurve::BYTES_UNCOMPRESSED from specification
                     assert_eq!(assigned_x_compressed_bytes.len(), pubkey_compressed_len);
 
                     // masked byte from compressed representation
@@ -287,9 +281,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     // Constrain witness y^2 to be equal to calculated y^2
                     fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
 
-                    // constraint that the loaded masked byte is consistent with the assigned bytes used to construct the point.
-                    // ctx.constrain_equal(&cleared_byte, &assigned_x_bytes[S::G1_BYTES_COMPRESSED - 1]);
-
                     // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                     // push this to the returnable and then use that
                     pubkeys_compressed_thread.push(assigned_x_compressed_bytes);
@@ -299,7 +290,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     in_committee_pubkeys.push(EcPoint::new(x_crt, y_crt));
                 }
 
-                // let pk_affine = G1Affine::random(&mut rand::thread_rng());
                 (
                     g1_chip.sum::<<S::PubKeysCurve as AppCurveExt>::Affine>(
                         &mut ctx_clone,
@@ -432,7 +422,7 @@ mod tests {
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 1;
         const LOOKUP_BITS: usize = 8;
-        const K: usize = 14;
+        const K: usize = 15;
     }
 
     impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S> {
@@ -489,6 +479,7 @@ mod tests {
 
     #[test]
     fn test_aggregation_circuit() {
+        // let k = TestCircuit::<Fr, S>::K;
         let k = TestCircuit::<Fr, S>::K;
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
