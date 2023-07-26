@@ -15,6 +15,7 @@ use cell_manager::CellManager;
 use constraint_builder::*;
 use eth_types::*;
 
+use gadgets::util::{and, not, select, Expr};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
     plonk::{Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells},
@@ -28,10 +29,15 @@ pub(crate) const MAX_DEGREE: usize = 5;
 
 #[derive(Clone, Debug)]
 pub struct ValidatorsCircuitConfig<F: Field> {
+    max_rows: usize,
     q_enabled: Column<Fixed>,
+    q_first: Column<Fixed>,
+    q_last: Column<Fixed>,
+    q_committee_first: Column<Fixed>,
+    q_attest_commits: Vec<Column<Fixed>>,
     state_tables: StateTables,
     pub validators_table: ValidatorsTable,
-    storage_phase1: Column<Advice>,
+    storage_phase1: [Column<Advice>; 2], // one per `LtGadget`
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
     target_epoch: Column<Advice>, // TODO: should be an instance or assigned from instance
     cell_manager: CellManager<F>,
@@ -49,25 +55,37 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
     fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let q_enabled = meta.fixed_column();
+        let q_first = meta.fixed_column();
+        let q_last = meta.fixed_column();
+        let q_committee_first = meta.fixed_column();
+        let q_attest_commits = iter::repeat_with(|| meta.fixed_column())
+            .take(S::attest_commits_len::<F>())
+            .collect_vec();
+
         let target_epoch = meta.advice_column();
         let state_tables = args.state_tables;
         let validators_table: ValidatorsTable = ValidatorsTable::construct::<S, F>(meta);
 
-        let storage_phase1 = meta.advice_column_in(FirstPhase);
-        let byte_lookup: [_; N_BYTE_LOOKUPS] = (0..N_BYTE_LOOKUPS)
-            .map(|_| meta.advice_column_in(FirstPhase))
-            .collect_vec()
-            .try_into()
-            .unwrap();
+        let storage_phase1 = array_init::array_init(|_| meta.advice_column());
+        let byte_lookup = array_init::array_init(|_| meta.advice_column());
 
-        let cm_advices = iter::once(storage_phase1)
+        let cm_advices = storage_phase1
+            .iter()
+            .copied()
             .chain(byte_lookup.iter().copied())
             .collect_vec();
 
         let cell_manager = CellManager::new(meta, S::VALIDATOR_REGISTRY_LIMIT, &cm_advices);
 
         let mut config = Self {
+            max_rows: S::MAX_VALIDATORS_PER_COMMITTEE
+                * S::MAX_COMMITTEES_PER_SLOT
+                * S::SLOTS_PER_EPOCH,
             q_enabled,
+            q_first,
+            q_last,
+            q_committee_first,
+            q_attest_commits,
             target_epoch,
             state_tables,
             validators_table,
@@ -88,7 +106,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
         meta.create_gate("validators constraints", |meta| {
             let q = queries::<S, F>(meta, &config);
-            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE, q.selector());
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
 
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_boolean("is_active is boolean", q.table.is_active());
@@ -131,7 +149,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     meta,
                     StateTreeLevel::Validators,
                     true,
-                    q.table.is_validator(),
+                    q.table.is_active(),
                     q.table.balance_gindex(),
                     q.table.balance(),
                 ),
@@ -143,7 +161,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     meta,
                     StateTreeLevel::Validators,
                     false,
-                    q.table.is_validator(),
+                    q.table.is_active(),
                     q.table.slashed_gindex(),
                     q.table.slashed(),
                 ),
@@ -155,7 +173,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     meta,
                     StateTreeLevel::Validators,
                     false,
-                    q.table.is_validator(),
+                    q.table.is_active(),
                     q.table.activation_epoch_gindex(),
                     q.table.activation_epoch(),
                 ),
@@ -167,7 +185,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     meta,
                     StateTreeLevel::Validators,
                     true,
-                    q.table.is_validator(),
+                    q.table.is_active(),
                     q.table.exit_epoch_gindex(),
                     q.table.exit_epoch(),
                 ),
@@ -179,7 +197,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     meta,
                     StateTreeLevel::PubKeys,
                     true,
-                    q.table.is_validator(),
+                    q.table.is_active(),
                     q.table.pubkey_lo_gindex(),
                     q.table.pubkey_lo_rlc(),
                 ),
@@ -191,23 +209,46 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                     meta,
                     StateTreeLevel::PubKeys,
                     false,
-                    q.table.is_validator(),
+                    q.table.is_active(),
                     q.table.pubkey_hi_gindex(),
                     q.table.pubkey_hi_rlc(),
                 ),
             );
 
             lookups = cb.lookups();
-            cb.gate(q.table.is_validator())
+            cb.gate(and::expr(vec![q.q_enabled(), q.table.is_validator()]))
         });
 
         for (name, lookup) in lookups {
             meta.lookup_any(name, |_| lookup);
         }
 
+        meta.create_gate("balance accumulation: first row", |meta| {
+            let q = queries::<S, F>(meta, &config);
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
+            cb.require_equal("init balance_acc", q.table.balance(), q.table.balance_acc());
+            cb.gate(q.q_first())
+        });
+
+        meta.create_gate("balance accumulation", |meta| {
+            let q = queries::<S, F>(meta, &config);
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
+            let new_balance_acc = select::expr(
+                q.table.is_attested(),
+                q.table.balance_acc_prev() + q.table.balance(),
+                q.table.balance_acc(),
+            );
+            cb.require_equal(
+                "balance_acc = balance_acc_prev + balance",
+                q.table.balance_acc(),
+                new_balance_acc,
+            );
+            cb.gate(and::expr(vec![q.q_enabled(), not::expr(q.q_first())]))
+        });
+
         meta.create_gate("committee constraints", |meta| {
             let q = queries::<S, F>(meta, &config);
-            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE, q.selector());
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
 
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_zero("is_active is 0 for committees", q.table.is_active());
@@ -216,7 +257,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.require_zero("activation epoch is 0 for committees", q.table.exit_epoch());
             cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch());
 
-            cb.gate(q.selector() * q.table.is_committee())
+            cb.gate(and::expr(vec![q.q_enabled(), q.table.is_committee()]))
         });
 
         println!("validators circuit degree={}", meta.degree());
@@ -229,10 +270,13 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         self.annotations()
             .into_iter()
             .for_each(|(col, ann)| region.name_column(|| &ann, col));
+        self.validators_table.annotate_columns_in_region(region);
     }
 }
 
 impl<F: Field> ValidatorsCircuitConfig<F> {
+    // const MAX_ROWS: usize = S::MAX_VALIDATORS_PER_COMMITTEE * S::MAX_COMMITTEES_PER_SLOT * S::SLOTS_PER_EPOCH;
+
     fn assign<S: Spec>(
         &mut self,
         layouter: &mut impl Layouter<F>,
@@ -275,17 +319,20 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             .expect("target_lt_exited gadget is expected");
 
         let mut offset = 0;
-        let mut committees_balances = Vec::with_capacity(committees.len());
-        let mut attest_commits = Vec::with_capacity(committees.len());
-        for entity in casper_entities.iter() {
-            region.assign_advice(
-                || "assign target epoch",
-                self.target_epoch,
-                offset,
-                || Value::known(F::from(target_epoch)),
-            )?; // TODO: assign from instance instead
+        let mut committees_balances = vec![0; committees.len()];
+        let mut attest_commits = vec![vec![0; S::attest_commits_len::<F>()]; committees.len()];
+        let vs_per_committee = S::MAX_VALIDATORS_PER_COMMITTEE;
+        let f_bits = F::NUM_BITS as usize;
+        let attest_commits_len = S::attest_commits_len::<F>();
 
-            // TODO: enable selector to max_rows
+        region.assign_fixed(
+            || "assign q_first",
+            self.q_first,
+            0,
+            || Value::known(F::one()),
+        )?;
+
+        for i in 0..self.max_rows {
             region.assign_fixed(
                 || "assign q_enabled",
                 self.q_enabled,
@@ -293,45 +340,68 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 || Value::known(F::one()),
             )?;
 
-            match entity {
-                CasperEntity::Validator(validator) => {
-                    target_gte_activation.assign(
-                        region,
-                        offset,
-                        F::from(validator.activation_epoch),
-                        F::from(target_epoch + 1),
-                    )?;
-                    target_lt_exit.assign(
-                        region,
-                        offset,
-                        F::from(target_epoch),
-                        F::from(validator.exit_epoch),
-                    )?;
+            region.assign_fixed(
+                || "assign q_attest_commits",
+                self.q_attest_commits[((i % vs_per_committee) / f_bits) % attest_commits_len],
+                offset,
+                || Value::known(F::one()),
+            )?;
 
-                    let validator_rows = validator.table_assignment::<S, F>(
-                        randomness,
-                        &mut attest_commits,
-                        &mut committees_balances,
-                    );
-                    for (i, row) in validator_rows.into_iter().enumerate() {
-                        self.validators_table
-                            .assign_with_region(region, offset + i, &row)?;
+            if let Some(entity) = casper_entities.get(i) {
+                region.assign_advice(
+                    || "assign target epoch",
+                    self.target_epoch,
+                    offset,
+                    || Value::known(F::from(target_epoch)),
+                )?; // TODO: assign from instance instead
+
+                match entity {
+                    CasperEntity::Validator(validator) => {
+                        target_gte_activation.assign(
+                            region,
+                            offset,
+                            F::from(validator.activation_epoch),
+                            F::from(target_epoch + 1),
+                        )?;
+                        target_lt_exit.assign(
+                            region,
+                            offset,
+                            F::from(target_epoch),
+                            F::from(validator.exit_epoch),
+                        )?;
+
+                        let validator_rows = validator.table_assignment::<S, F>(
+                            randomness,
+                            &mut attest_commits,
+                            &mut committees_balances,
+                        );
+                        for (i, row) in validator_rows.into_iter().enumerate() {
+                            self.validators_table
+                                .assign_with_region(region, offset + i, &row)?;
+                        }
+
+                        offset += 1;
                     }
+                    CasperEntity::Committee(committee) => {
+                        // let committee_rows = committee.table_assignment(randomness);
 
-                    offset += 1;
-                }
-                CasperEntity::Committee(committee) => {
-                    let committee_rows = committee.table_assignment(randomness);
+                        // for (i, row) in committee_rows.into_iter().enumerate() {
+                        //     self.validators_table
+                        //         .assign_with_region(region, offset + i, &row)?;
+                        // }
 
-                    for (i, row) in committee_rows.into_iter().enumerate() {
-                        self.validators_table
-                            .assign_with_region(region, offset + i, &row)?;
+                        // offset += 1;
                     }
-
-                    offset += 1;
                 }
             }
         }
+
+        region.assign_fixed(
+            || "assign q_last",
+            self.q_last,
+            self.max_rows,
+            || Value::known(F::one()),
+        )?;
 
         // annotate circuit
         self.annotate_columns_in_region(region);
@@ -340,17 +410,32 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
     }
 
     pub fn annotations(&self) -> Vec<(Column<Any>, String)> {
-        let mut annotations = vec![
-            (self.q_enabled.into(), "q_enabled".to_string()),
-            (self.storage_phase1.into(), "storage_phase1".to_string()),
-            (self.target_epoch.into(), "epoch".to_string()),
-        ];
-
-        for (i, col) in self.byte_lookup.iter().copied().enumerate() {
-            annotations.push((col.into(), format!("byte_lookup_{}", i)));
-        }
-
-        annotations
+        itertools::chain!(
+            vec![
+                (self.q_enabled.into(), "q_enabled".to_string()),
+                (self.q_first.into(), "q_first".to_string()),
+                (self.q_last.into(), "is_last".to_string()),
+                (
+                    self.q_committee_first.into(),
+                    "q_committee_first".to_string(),
+                ),
+                (
+                    self.storage_phase1[0].into(),
+                    "activation_lte_target".to_string(),
+                ),
+                (self.storage_phase1[1].into(), "exit_gt_target".to_string()),
+                (self.target_epoch.into(), "target_epoch".to_string()),
+            ],
+            self.q_attest_commits
+                .iter()
+                .enumerate()
+                .map(|(i, &col)| { (col.into(), format!("q_attest_commits_{}", i)) }),
+            self.byte_lookup
+                .iter()
+                .enumerate()
+                .map(|(i, &col)| { (col.into(), format!("byte_lookup_{}", i)) }),
+        )
+        .collect()
     }
 }
 
@@ -429,6 +514,8 @@ fn queries<S: Spec, F: Field>(
 ) -> Queries<S, F> {
     Queries {
         q_enabled: meta.query_fixed(config.q_enabled, Rotation::cur()),
+        q_first: meta.query_fixed(config.q_first, Rotation::cur()),
+        q_last: meta.query_fixed(config.q_last, Rotation::cur()),
         target_epoch: meta.query_advice(config.target_epoch, Rotation::cur()),
         table: config.validators_table.queries(meta),
     }

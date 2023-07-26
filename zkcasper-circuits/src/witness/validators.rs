@@ -72,15 +72,15 @@ impl Validator {
             committee_pos <= S::MAX_VALIDATORS_PER_COMMITTEE,
             "validator position out of bounds"
         );
-        let attest_commit_len = S::attest_commits_len::<F>();
-        let current_commit = (committee_pos as f64 / F::NUM_BITS as f64).ceil() as usize;
 
+        let attest_commit_len = S::attest_commits_len::<F>();
+        let current_commit = committee_pos / F::NUM_BITS as usize;
         // accumulate bits into current commit
         let committee_attest_commits = &mut attest_commits[self.committee];
         let commit = committee_attest_commits.get_mut(current_commit).unwrap();
         *commit = *commit * 2 + self.is_attested as u64;
         // accumulate balance of the current committee
-        committees_balances[self.committee] += self.effective_balance;
+        committees_balances[self.committee] += self.effective_balance * self.is_active as u64;
 
         vec![CasperEntityRow {
             id: Value::known(F::from(self.id as u64)),
@@ -100,7 +100,7 @@ impl Validator {
                 .take(attest_commit_len)
                 .map(|b| Value::known(F::from(*b)))
                 .collect(),
-
+            total_balance_acc: Value::known(F::from(committees_balances[self.committee])),
             row_type: CasperTag::Validator,
         }]
     }
@@ -169,6 +169,7 @@ impl Committee {
             pubkey: [Value::known(F::zero()), Value::known(F::zero())],
             row_type: CasperTag::Committee,
             attest_commits: todo!(),
+            total_balance_acc: todo!(),
         }]
     }
 }
@@ -222,7 +223,7 @@ pub fn into_casper_entities<'a, S: Spec>(
                 .pad_using(S::MAX_VALIDATORS_PER_COMMITTEE, |_| &DUMMY_VALIDATOR)
                 .map(CasperEntity::Validator),
         );
-        casper_entity.push(CasperEntity::Committee(committees[comm_idx]));
+        // casper_entity.push(CasperEntity::Committee(committees[comm_idx]));
     }
 
     casper_entity
@@ -248,4 +249,5 @@ pub struct CasperEntityRow<F: Field> {
     pub(crate) exit_epoch: Value<F>,
     pub(crate) pubkey: [Value<F>; 2],
     pub(crate) attest_commits: Vec<Value<F>>,
+    pub(crate) total_balance_acc: Value<F>,
 }

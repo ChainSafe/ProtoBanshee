@@ -92,6 +92,7 @@ fs.writeFileSync(
     `../test_data/validators.json`,
     serialize(Array.from(validators.entries()).map(([i, validator]) => ({
         id: i,
+        shufflePos: i,
         committee: 0,
         isActive: !validator.slashed && validator.activationEpoch <= target_epoch && target_epoch < validator.exitEpoch,
         isAttested: true,

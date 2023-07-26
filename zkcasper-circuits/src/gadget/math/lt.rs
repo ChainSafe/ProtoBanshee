@@ -4,6 +4,7 @@ use halo2_proofs::{
     circuit::{Region, Value},
     plonk::{Error, Expression},
 };
+use itertools::Itertools;
 
 /// Returns `1` when `lhs < rhs`, and returns `0` otherwise.
 /// lhs and rhs `< 256**N_BYTES`
