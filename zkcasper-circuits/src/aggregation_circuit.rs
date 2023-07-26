@@ -131,8 +131,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
                     let mut pubkeys_compressed = vec![];
-                    let _aggregated_pubkeys =
-                        self.process_validators(ctx.clone(), &mut pubkeys_compressed);
+                    let _aggregated_pubkeys = self.process_validators(ctx, &mut pubkeys_compressed);
 
                     let ctx = builder.main(1);
 
@@ -205,7 +204,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
 
     fn process_validators(
         &self,
-        ctx: Context<F>,
+        ctx: &Context<F>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let range = self.range();
@@ -230,19 +229,27 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             })
             .collect();
 
-        let aggregated_pubkeys = grouped_validators
+        // NOTE: We convert the grouped validators into Rayon-provided `ParIter` so that we can use
+        // parallel threads. But because of this, we can't use &mut self or any other mutable
+        // types, so instead we return a vector of tuples from this `.map`, which we process later.
+        type ParallelizedOutput<F> = (
+            EcPoint<F, FpPoint<F>>,
+            Context<F>,
+            Vec<Vec<AssignedValue<F>>>,
+        );
+        let result: Vec<ParallelizedOutput<F>> = grouped_validators
             .into_par_iter()
             .map(|validators| {
                 // TODO: Nothing within here can take `&mut self`.
                 let mut in_committee_pubkeys = vec![];
                 let mut ctx_clone = ctx.clone();
+                let mut pubkeys_compressed_thread: Vec<Vec<AssignedValue<F>>> = vec![];
 
                 for (validator, y_coord) in validators.into_iter() {
                     let pk_compressed = validator.pubkey[..S::G1_BYTES_COMPRESSED].to_vec();
 
-                    let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
-                        // TODO: change to not use &mut self
-                        ctx_clone.assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
+                    let assigned_x_compressed_bytes: Vec<AssignedValue<F>> = ctx_clone
+                        .assign_witnesses(pk_compressed.iter().map(|&b| F::from(b as u64)));
 
                     // assertion check for assigned_uncompressed vector to be equal to S::G1_BYTES_UNCOMPRESSED from specification
                     assert_eq!(assigned_x_compressed_bytes.len(), S::G1_BYTES_COMPRESSED);
@@ -283,7 +290,8 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     // ctx.constrain_equal(&cleared_byte, &assigned_x_bytes[S::G1_BYTES_COMPRESSED - 1]);
 
                     // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
-                    pubkeys_compressed.push(assigned_x_compressed_bytes);
+                    // push this to the returnable and then use that
+                    pubkeys_compressed_thread.push(assigned_x_compressed_bytes);
                     // Normally, we would need to take into account the sign of the y coordinate, but
                     // because we are concerned only with signature forgery, if this is the wrong
                     // sign, the signature will be invalid anyway and thus verification fails.
@@ -291,9 +299,21 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                 }
 
                 // let pk_affine = G1Affine::random(&mut rand::thread_rng());
-                (g1_chip.sum::<G1Affine>(&mut ctx_clone, in_committee_pubkeys))
+                (
+                    g1_chip.sum::<G1Affine>(&mut ctx_clone, in_committee_pubkeys),
+                    ctx_clone,
+                    pubkeys_compressed_thread,
+                )
             })
             .collect();
+        let mut aggregated_pubkeys = vec![];
+        for (aggregated_pubkey, context, pubkeys_compressed_thread) in result.iter() {
+            aggregated_pubkeys.push(aggregated_pubkey.clone());
+            self.builder.borrow_mut().threads[0].push(context.clone());
+            for item in pubkeys_compressed_thread {
+                pubkeys_compressed.push(item.clone());
+            }
+        }
 
         return aggregated_pubkeys;
     }
@@ -401,11 +421,11 @@ mod tests {
     };
 
     #[derive(Debug, Clone)]
-    struct TestCircuit<'a, F: Field, S: Spec> {
+    struct TestCircuit<'a, F: Field, S: Spec + Sync> {
         inner: AggregationCircuitBuilder<'a, F, S>,
     }
 
-    impl<'a, F: Field, S: Spec> TestCircuit<'a, F, S> {
+    impl<'a, F: Field, S: Spec + Sync> TestCircuit<'a, F, S> {
         const NUM_ADVICE: &[usize] = &[6, 1];
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 1;
@@ -413,7 +433,7 @@ mod tests {
         const K: usize = 14;
     }
 
-    impl<'a, F: Field, S: Spec> Circuit<F> for TestCircuit<'a, F, S> {
+    impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S> {
         type Config = (AggregationCircuitConfig<F>, Challenges<F>);
         type FloorPlanner = SimpleFloorPlanner;
 

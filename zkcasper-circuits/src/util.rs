@@ -227,7 +227,7 @@ pub fn log2_ceil(n: usize) -> u32 {
 /// Converts assigned bytes into biginterger
 /// Warning: method does not perfrom any checks on input `bytes`.
 pub fn decode_into_field<S: Spec, F: Field>(
-    bytes: impl IntoIterator<Item=AssignedValue<F>>,
+    bytes: impl IntoIterator<Item = AssignedValue<F>>,
     limb_bases: &[F],
     gate: &impl GateInstructions<F>,
     ctx: &mut Context<F>,
