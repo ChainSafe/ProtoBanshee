@@ -180,6 +180,7 @@ impl<F: Field> StateSSZCircuit<F> {
 
 impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
     type Config = StateSSZCircuitConfig<F>;
+    type SynthesisArgs = ();
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
         Self::new(block.merkle_trace.clone())
@@ -198,6 +199,7 @@ impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
         config: &mut Self::Config,
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
+        _: Self::SynthesisArgs,
     ) -> Result<(), Error> {
         let num_rows = config.assign(layouter, &self.trace, challenges.sha256_input())?;
 
@@ -250,11 +252,12 @@ mod tests {
             config
                 .0
                 .sha256_table
-                .dev_load(&mut layouter, &hash_inputs, challenge.clone())?;
+                .dev_load(&mut layouter, &hash_inputs, challenge)?;
             self.state_circuit.synthesize_sub(
                 &mut config.0,
                 &config.1.values(&mut layouter),
                 &mut layouter,
+                (),
             )?;
             Ok(())
         }

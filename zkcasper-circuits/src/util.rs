@@ -10,13 +10,22 @@ mod conversion;
 pub use conversion::*;
 use halo2_base::{
     safe_types::{GateInstructions, RangeInstructions},
+    utils::ScalarField,
     AssignedValue, Context, QuantumCell,
 };
-use halo2_ecc::bigint::{ProperCrtUint, ProperUint};
+use halo2_ecc::{
+    bigint::{ProperCrtUint, ProperUint},
+    fields::{fp::FpChip, FieldChip},
+};
+
 use itertools::Itertools;
 use num_bigint::BigUint;
 
-use crate::{sha256_circuit::Sha256CircuitConfig, witness};
+use crate::{
+    gadget::crypto::{Fp2Point, FpPoint},
+    sha256_circuit::Sha256CircuitConfig,
+    witness,
+};
 use eth_types::*;
 pub use gadgets::util::{and, not, or, rlc, select, sum, xor, Expr};
 use halo2_proofs::{
@@ -96,6 +105,9 @@ pub trait SubCircuit<F: Field> {
     /// Configuration of the SubCircuit.
     type Config: SubCircuitConfig<F>;
 
+    /// Arguments for [`synthesize_sub`].
+    type SynthesisArgs;
+
     /// Returns number of unusable rows of the SubCircuit, which should be
     /// `meta.blinding_factors() + 1`.
     fn unusable_rows() -> usize;
@@ -116,6 +128,7 @@ pub trait SubCircuit<F: Field> {
         config: &mut Self::Config,
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
+        args: Self::SynthesisArgs,
     ) -> Result<(), Error>;
 
     /// Return the minimum number of rows required to prove the block.
@@ -226,15 +239,15 @@ pub fn log2_ceil(n: usize) -> u32 {
 
 /// Converts assigned bytes into biginterger
 /// Warning: method does not perfrom any checks on input `bytes`.
-pub fn decode_into_field<S: Spec, F: Field>(
+pub fn decode_into_field<F: Field, C: AppCurveExt>(
     bytes: impl IntoIterator<Item = AssignedValue<F>>,
     limb_bases: &[F],
     gate: &impl GateInstructions<F>,
     ctx: &mut Context<F>,
 ) -> ProperCrtUint<F> {
     let bytes = bytes.into_iter().collect_vec();
-    let limb_bytes = S::LIMB_BITS / 8;
-    let bits = S::NUM_LIMBS * S::LIMB_BITS;
+    let limb_bytes = C::LIMB_BITS / 8;
+    let bits = C::NUM_LIMBS * C::LIMB_BITS;
 
     let value = BigUint::from_bytes_le(
         &bytes
@@ -257,5 +270,58 @@ pub fn decode_into_field<S: Spec, F: Field>(
         ProperUint::new(limbs)
     };
 
-    assigned_uint.into_crt(ctx, gate, value, limb_bases, S::LIMB_BITS)
+
+    assigned_uint.into_crt(ctx, gate, value, limb_bases, C::LIMB_BITS)
+}
+
+pub fn decode_into_field_be<F: Field, C: AppCurveExt, I: IntoIterator<Item = AssignedValue<F>>>(
+    bytes: I,
+    limb_bases: &[F],
+    gate: &impl GateInstructions<F>,
+    ctx: &mut Context<F>,
+) -> ProperCrtUint<F>
+where
+    I::IntoIter: DoubleEndedIterator,
+{
+    let bytes = bytes.into_iter().rev().collect_vec();
+    decode_into_field::<F, C>(bytes, limb_bases, gate, ctx)
+}
+
+pub fn bigint_to_le_bytes<F: Field>(
+    limbs: impl IntoIterator<Item = F>,
+    limb_bits: usize,
+    total_bytes: usize,
+) -> Vec<u8> {
+    let limb_bytes = limb_bits / 8;
+    limbs
+        .into_iter()
+        .flat_map(|x| x.to_bytes_le()[..limb_bytes].to_vec())
+        .take(total_bytes)
+        .collect()
+}
+
+pub fn print_fq_dev<C: AppCurveExt, F: Field>(x: &FpPoint<F>, label: &str) {
+    let bytes = bigint_to_le_bytes(
+        x.limbs().iter().map(|e| *e.value()),
+        C::LIMB_BITS,
+        C::BYTES_FQ,
+    );
+    let bn = BigUint::from_bytes_le(&bytes);
+    println!("{label}: {}", bn);
+}
+
+pub fn print_fq2_dev<C: AppCurveExt, F: Field>(u: &Fp2Point<F>, label: &str) {
+    let c0_bytes = bigint_to_le_bytes(
+        u.0[0].limbs().iter().map(|e| *e.value()),
+        C::LIMB_BITS,
+        C::BYTES_FQ / 2,
+    );
+    let c1_bytes = bigint_to_le_bytes(
+        u.0[1].limbs().iter().map(|e| *e.value()),
+        C::LIMB_BITS,
+        C::BYTES_FQ / 2,
+    );
+    let c0 = BigUint::from_bytes_le(&c0_bytes);
+    let c1 = BigUint::from_bytes_le(&c1_bytes);
+    println!("{label}: ({}, {})", c0, c1);
 }
