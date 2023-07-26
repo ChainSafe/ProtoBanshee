@@ -8,7 +8,7 @@ use crate::{
         LookupTable, ValidatorsTable,
     },
     util::{Challenges, ConstrainBuilderCommon, SubCircuit, SubCircuitConfig},
-    witness::{self, into_casper_entities, CasperEntity, Committee, Validator},
+    witness::{self, pad_to_max_per_committee, Committee, Validator},
     N_BYTES_U64,
 };
 use cell_manager::CellManager;
@@ -108,7 +108,6 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             let q = queries::<S, F>(meta, &config);
             let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
 
-            cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_boolean("is_active is boolean", q.table.is_active());
             cb.require_boolean("is_attested is boolean", q.table.attest_bit());
             cb.require_boolean("slashed is boolean", q.table.slashed());
@@ -216,7 +215,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             );
 
             lookups = cb.lookups();
-            cb.gate(and::expr(vec![q.q_enabled(), q.table.is_validator()]))
+            cb.gate(q.q_enabled())
         });
 
         for (name, lookup) in lookups {
@@ -280,20 +279,6 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             ]))
         });
 
-        meta.create_gate("committee constraints", |meta| {
-            let q = queries::<S, F>(meta, &config);
-            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
-
-            cb.require_boolean("tag in [validator/committee]", q.table.tag());
-            cb.require_zero("is_active is 0 for committees", q.table.is_active());
-            cb.require_zero("is_attested is 0 for committees", q.table.attest_bit());
-            cb.require_zero("slashed is 0 for committees", q.table.slashed());
-            cb.require_zero("activation epoch is 0 for committees", q.table.exit_epoch());
-            cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch());
-
-            cb.gate(and::expr(vec![q.q_enabled(), q.table.is_committee()]))
-        });
-
         println!("validators circuit degree={}", meta.degree());
 
         config
@@ -341,7 +326,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
         target_epoch: u64,
         randomness: Value<F>,
     ) -> Result<(), Error> {
-        let casper_entities = into_casper_entities::<S>(validators.iter(), committees.iter());
+        let padded_validators = pad_to_max_per_committee::<S>(validators.iter());
 
         let target_gte_activation = self
             .target_gte_activation
@@ -388,7 +373,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 || Value::known(F::one()),
             )?;
 
-            if let Some(entity) = casper_entities.get(i) {
+            if let Some(&validator) = padded_validators.get(i) {
                 region.assign_advice(
                     || "assign target epoch",
                     self.target_epoch,
@@ -396,47 +381,33 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     || Value::known(F::from(target_epoch)),
                 )?; // TODO: assign from instance instead
 
-                match entity {
-                    CasperEntity::Validator(validator) => {
-                        target_gte_activation.assign(
-                            region,
-                            offset,
-                            F::from(validator.activation_epoch),
-                            F::from(target_epoch + 1),
-                        )?;
-                        target_lt_exit.assign(
-                            region,
-                            offset,
-                            F::from(target_epoch),
-                            F::from(validator.exit_epoch),
-                        )?;
+                target_gte_activation.assign(
+                    region,
+                    offset,
+                    F::from(validator.activation_epoch),
+                    F::from(target_epoch + 1),
+                )?;
+                target_lt_exit.assign(
+                    region,
+                    offset,
+                    F::from(target_epoch),
+                    F::from(validator.exit_epoch),
+                )?;
 
-                        let validator_rows = validator.table_assignment::<S, F>(
-                            randomness,
-                            &mut attest_digits,
-                            &mut committees_balances,
-                        );
-                        for (i, row) in validator_rows.into_iter().enumerate() {
-                            self.validators_table.assign_with_region::<S, F>(
-                                region,
-                                offset + i,
-                                &row,
-                            )?;
-                        }
-
-                        offset += 1;
-                    }
-                    CasperEntity::Committee(committee) => {
-                        // let committee_rows = committee.table_assignment(randomness);
-
-                        // for (i, row) in committee_rows.into_iter().enumerate() {
-                        //     self.validators_table
-                        //         .assign_with_region(region, offset + i, &row)?;
-                        // }
-
-                        // offset += 1;
-                    }
+                let validator_rows = validator.table_assignment::<S, F>(
+                    randomness,
+                    &mut attest_digits,
+                    &mut committees_balances,
+                );
+                for (i, row) in validator_rows.into_iter().enumerate() {
+                    self.validators_table.assign_with_region::<S, F>(
+                        region,
+                        offset + i,
+                        &row,
+                    )?;
                 }
+
+                offset += 1;
             }
         }
 

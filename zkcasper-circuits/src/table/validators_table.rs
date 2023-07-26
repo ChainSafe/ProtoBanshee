@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use gadgets::util::{not, Expr};
 use halo2_proofs::circuit::Cell;
 
-use crate::witness::{into_casper_entities, CasperEntityRow, CasperTag, Committee, Validator};
+use crate::witness::{pad_to_max_per_committee, Committee, Validator, ValidatorRow};
 
 use super::*;
 use eth_types::Spec;
@@ -11,15 +11,13 @@ use eth_types::Spec;
 /// The StateTable contains records of the state of the beacon chain.
 #[derive(Clone, Debug)]
 pub struct ValidatorsTable {
-    /// ValidatorIndex when tag == 'Validator', CommitteeIndex otherwise.
+    /// ValidatorIndex when tag == 'Validator'.
     pub id: Column<Advice>,
-    /// Validator or Committee
-    pub tag: Column<Advice>,
     /// Signals whether validator is active during that epoch.
     pub is_active: Column<Advice>,
     /// Signals whether validator have attested during that epoch.
     pub attest_bit: Column<Advice>,
-    /// Effective balance of validator/committee.
+    /// Effective balance of validator.
     pub balance: Column<Advice>,
     /// Signals whether validator is slashed.
     pub slashed: Column<Advice>,
@@ -43,7 +41,6 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
         itertools::chain!(
             vec![
                 self.id.into(),
-                self.tag.into(),
                 self.is_active.into(),
                 self.attest_bit.into(),
                 self.balance.into(),
@@ -63,7 +60,6 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
         itertools::chain!(
             vec![
                 String::from("id"),
-                String::from("tag"),
                 String::from("is_active"),
                 String::from("is_attested"),
                 String::from("balance"),
@@ -85,7 +81,6 @@ impl ValidatorsTable {
     pub fn construct<S: Spec, F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         let config = Self {
             id: meta.advice_column(),
-            tag: meta.advice_column(),
             is_active: meta.advice_column(),
             attest_bit: meta.advice_column(),
             balance: meta.advice_column_in(SecondPhase),
@@ -114,14 +109,13 @@ impl ValidatorsTable {
         &mut self,
         region: &mut Region<'_, F>,
         offset: usize,
-        row: &CasperEntityRow<F>,
+        row: &ValidatorRow<F>,
     ) -> Result<(), Error> {
         let [attest_bit, pubkey_lo, pubkey_hi, ..] = [
             (self.attest_bit, row.is_attested),
             (self.pubkey[0], row.pubkey[0]),
             (self.pubkey[1], row.pubkey[1]),
             (self.id, row.id),
-            (self.tag, row.tag),
             (self.is_active, row.is_active),
             (self.balance, row.balance),
             (self.slashed, row.slashed),
@@ -158,11 +152,9 @@ impl ValidatorsTable {
             })
             .collect();
 
-        if row.row_type == CasperTag::Validator {
-            self.pubkey_cells.push([pubkey_lo, pubkey_hi]);
-            if (offset + 1) % S::MAX_VALIDATORS_PER_COMMITTEE == 0 {
-                self.attest_digits_cells.push(attest_digits_cells);
-            }
+        self.pubkey_cells.push([pubkey_lo, pubkey_hi]);
+        if (offset + 1) % S::MAX_VALIDATORS_PER_COMMITTEE == 0 {
+            self.attest_digits_cells.push(attest_digits_cells);
         }
 
         Ok(())
@@ -176,7 +168,7 @@ impl ValidatorsTable {
         committees: &[Committee],
         challenge: Value<F>,
     ) -> Result<(), Error> {
-        let casper_entities = into_casper_entities::<S>(validators.iter(), committees.iter());
+        let padded_validators = pad_to_max_per_committee::<S>(validators.iter());
 
         layouter.assign_region(
             || "dev load validators table",
@@ -185,10 +177,10 @@ impl ValidatorsTable {
                 let mut committees_balances = vec![0; committees.len()];
                 let mut attest_digits =
                     vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
-                for (offset, row) in casper_entities
+                for (offset, row) in padded_validators
                     .iter()
-                    .flat_map(|e| {
-                        e.table_assignment::<S, F>(
+                    .flat_map(|&v| {
+                        v.table_assignment::<S, F>(
                             challenge,
                             &mut attest_digits,
                             &mut committees_balances,
@@ -210,7 +202,6 @@ impl ValidatorsTable {
     ) -> ValidatorTableQueries<S, F> {
         ValidatorTableQueries {
             id: meta.query_advice(self.id, Rotation::cur()),
-            tag: meta.query_advice(self.tag, Rotation::cur()),
             is_active: meta.query_advice(self.is_active, Rotation::cur()),
             attest_bit: meta.query_advice(self.attest_bit, Rotation::cur()),
             balance: meta.query_advice(self.balance, Rotation::cur()),
@@ -241,7 +232,6 @@ impl ValidatorsTable {
 #[derive(Clone)]
 pub struct ValidatorTableQueries<S: Spec, F: Field> {
     id: Expression<F>,
-    tag: Expression<F>,
     is_active: Expression<F>,
     attest_bit: Expression<F>,
     balance: Expression<F>,
@@ -257,20 +247,8 @@ pub struct ValidatorTableQueries<S: Spec, F: Field> {
 }
 
 impl<S: Spec, F: Field> ValidatorTableQueries<S, F> {
-    pub fn is_validator(&self) -> Expression<F> {
-        self.tag.clone()
-    }
-
-    pub fn is_committee(&self) -> Expression<F> {
-        not::expr(self.tag.clone())
-    }
-
     pub fn id(&self) -> Expression<F> {
         self.id.clone()
-    }
-
-    pub fn tag(&self) -> Expression<F> {
-        self.tag.clone()
     }
 
     pub fn is_active(&self) -> Expression<F> {
