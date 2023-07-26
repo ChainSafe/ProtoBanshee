@@ -8,7 +8,7 @@ use eth_types::{Spec, *};
 use gadgets::util::rlc;
 use halo2_base::{
     gates::{
-        builder::GateThreadBuilder,
+        builder::{parallelize_in, GateThreadBuilder},
         flex_gate::GateInstructions,
         range::{RangeChip, RangeConfig, RangeInstructions},
     },
@@ -217,8 +217,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             .validators
             .iter()
             .zip(self.validators_y.iter())
-            .group_by(|v| v.0.committee);
-        let grouped_validators = grouped_validators
+            .group_by(|v| v.0.committee)
             .into_iter()
             .map(|(_committee, validator_coord_group)| {
                 // NOTE: This needs to be a plain vector instead of the `Group` object that
@@ -239,71 +238,62 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         let ctx_ids = iter::repeat_with(|| builder.get_new_thread_id())
             .take(grouped_validators.len())
             .collect_vec();
+        let result = parallelize_in(0, builder, grouped_validators, |ctx, validators| {
+            // Note: Nothing within here can take `self`.
+            let mut in_committee_pubkeys = vec![];
+            let mut pubkeys_compressed_thread = vec![];
 
-        let result: Vec<ParallelizedOutput<F>> = grouped_validators
-            .into_par_iter()
-            .zip(ctx_ids.into_par_iter())
-            .map(|(validators, ctx_id)| {
-                // Note: Nothing within here can take `self`.
-                let mut in_committee_pubkeys = vec![];
-                let mut ctx = Context::<F>::new(witness_gen_only, ctx_id);
-                let mut pubkeys_compressed_thread = vec![];
+            for (validator, y_coord) in validators.into_iter() {
+                let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
+                    ctx.assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
 
-                for (validator, y_coord) in validators.into_iter() {
-                    let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
-                        ctx.assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
+                // assertion check for assigned_uncompressed vector to be equal to S::PubKeyCurve::BYTES_UNCOMPRESSED from specification
+                assert_eq!(assigned_x_compressed_bytes.len(), pubkey_compressed_len);
 
-                    // assertion check for assigned_uncompressed vector to be equal to S::PubKeyCurve::BYTES_UNCOMPRESSED from specification
-                    assert_eq!(assigned_x_compressed_bytes.len(), pubkey_compressed_len);
-
-                    // masked byte from compressed representation
-                    let masked_byte = &assigned_x_compressed_bytes[pubkey_compressed_len - 1];
-                    // clear the sign bit from masked byte
-                    let cleared_byte = Self::clear_flag_bits(range, masked_byte, &mut ctx);
-                    // Use the cleared byte to construct the x coordinate
-                    let assigned_x_bytes_cleared = [
-                        &assigned_x_compressed_bytes.as_slice()[..pubkey_compressed_len - 1],
-                        &[cleared_byte],
-                    ]
-                    .concat();
-                    let x_crt = decode_into_field::<F, S::PubKeysCurve>(
-                        assigned_x_bytes_cleared,
-                        &fp_chip.limb_bases,
-                        gate,
-                        &mut ctx,
-                    );
-
-                    // Load private witness y coordinate
-                    let y_crt = fp_chip.load_private(&mut ctx, *y_coord);
-                    // Square y coordinate
-                    let ysq = fp_chip.mul(&mut ctx, y_crt.clone(), y_crt.clone());
-                    // Calculate y^2 using the elliptic curve equation
-                    let ysq_calc = Self::calculate_ysquared::<S::PubKeysCurve>(
-                        &mut ctx,
-                        fp_chip,
-                        x_crt.clone(),
-                    );
-                    // Constrain witness y^2 to be equal to calculated y^2
-                    //fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
-
-                    // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
-                    // push this to the returnable and then use that
-                    pubkeys_compressed_thread.push(assigned_x_compressed_bytes);
-                    // Normally, we would need to take into account the sign of the y coordinate, but
-                    // because we are concerned only with signature forgery, if this is the wrong
-                    // sign, the signature will be invalid anyway and thus verification fails.
-                    in_committee_pubkeys.push(EcPoint::new(x_crt, y_crt));
-                }
-                (
-                    g1_chip.sum::<<S::PubKeysCurve as AppCurveExt>::Affine>(
-                        &mut ctx,
-                        in_committee_pubkeys,
-                    ),
+                // masked byte from compressed representation
+                let masked_byte = &assigned_x_compressed_bytes[pubkey_compressed_len - 1];
+                // clear the sign bit from masked byte
+                let cleared_byte = Self::clear_flag_bits(range, masked_byte, ctx);
+                // Use the cleared byte to construct the x coordinate
+                let assigned_x_bytes_cleared = [
+                    &assigned_x_compressed_bytes.as_slice()[..pubkey_compressed_len - 1],
+                    &[cleared_byte],
+                ]
+                .concat();
+                let x_crt = decode_into_field::<F, S::PubKeysCurve>(
+                    assigned_x_bytes_cleared,
+                    &fp_chip.limb_bases,
+                    gate,
                     ctx,
-                    pubkeys_compressed_thread,
-                )
-            })
-            .collect();
+                );
+
+                // Load private witness y coordinate
+                let y_crt = fp_chip.load_private(ctx, *y_coord);
+                // Square y coordinate
+                let ysq = fp_chip.mul(ctx, y_crt.clone(), y_crt.clone());
+                // Calculate y^2 using the elliptic curve equation
+                let ysq_calc =
+                    Self::calculate_ysquared::<S::PubKeysCurve>(ctx, fp_chip, x_crt.clone());
+                // Constrain witness y^2 to be equal to calculated y^2
+                //fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
+
+                // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
+                // push this to the returnable and then use that
+                pubkeys_compressed_thread.push(assigned_x_compressed_bytes);
+                // Normally, we would need to take into account the sign of the y coordinate, but
+                // because we are concerned only with signature forgery, if this is the wrong
+                // sign, the signature will be invalid anyway and thus verification fails.
+                in_committee_pubkeys.push(EcPoint::new(x_crt, y_crt));
+            }
+            (
+                g1_chip.sum::<<S::PubKeysCurve as AppCurveExt>::Affine>(
+                    &mut ctx.clone(),
+                    in_committee_pubkeys,
+                ),
+                ctx.clone(),
+                pubkeys_compressed_thread,
+            )
+        });
         let mut aggregated_pubkeys = vec![];
         for (aggregated_pubkey, context, pubkeys_compressed_thread) in result.iter() {
             aggregated_pubkeys.push(aggregated_pubkey.clone());
