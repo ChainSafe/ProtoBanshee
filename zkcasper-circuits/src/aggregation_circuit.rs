@@ -547,12 +547,7 @@ mod tests {
         let builder = GateThreadBuilder::new(false);
         builder.config(k, None);
         let circuit = TestCircuit::<'_, Fr, S> {
-            inner: AggregationCircuitBuilder::new(
-                builder,
-                &validators,
-                validators_y,
-                &range,
-            ),
+            inner: AggregationCircuitBuilder::new(builder, &validators, validators_y, &range),
         };
 
         let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();

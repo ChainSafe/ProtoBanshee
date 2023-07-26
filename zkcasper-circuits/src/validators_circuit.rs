@@ -304,12 +304,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
         layouter.assign_region(
             || "validators circuit",
             |mut region| {
-                self.assign_with_region::<S>(
-                    &mut region,
-                    validators,
-                    target_epoch,
-                    challange,
-                )
+                self.assign_with_region::<S>(&mut region, validators, target_epoch, challange)
             },
         )
     }
@@ -396,11 +391,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     &mut committees_balances,
                 );
                 for (i, row) in validator_rows.into_iter().enumerate() {
-                    self.validators_table.assign_with_region::<S, F>(
-                        region,
-                        offset + i,
-                        &row,
-                    )?;
+                    self.validators_table
+                        .assign_with_region::<S, F>(region, offset + i, &row)?;
                 }
 
                 offset += 1;
@@ -474,10 +466,7 @@ impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
     type SynthesisArgs = ();
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
-        Self::new(
-            block.validators.clone(),
-            block.target_epoch,
-        )
+        Self::new(block.validators.clone(), block.target_epoch)
     }
 
     fn unusable_rows() -> usize {
