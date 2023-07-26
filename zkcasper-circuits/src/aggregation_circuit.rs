@@ -235,9 +235,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             Vec<Vec<AssignedValue<F>>>,
         );
 
-        let ctx_ids = iter::repeat_with(|| builder.get_new_thread_id())
-            .take(grouped_validators.len())
-            .collect_vec();
         let result = parallelize_in(0, builder, grouped_validators, |ctx, validators| {
             // Note: Nothing within here can take `self`.
             let mut in_committee_pubkeys = vec![];
@@ -275,7 +272,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                 let ysq_calc =
                     Self::calculate_ysquared::<S::PubKeysCurve>(ctx, fp_chip, x_crt.clone());
                 // Constrain witness y^2 to be equal to calculated y^2
-                //fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
+                fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
 
                 // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                 // push this to the returnable and then use that
