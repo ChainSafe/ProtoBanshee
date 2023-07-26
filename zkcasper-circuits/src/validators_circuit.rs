@@ -110,10 +110,10 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_boolean("is_active is boolean", q.table.is_active());
-            cb.require_boolean("is_attested is boolean", q.table.is_attested());
+            cb.require_boolean("is_attested is boolean", q.table.attest_bit());
             cb.require_boolean("slashed is boolean", q.table.slashed());
 
-            cb.condition(q.table.is_attested(), |cb| {
+            cb.condition(q.table.attest_bit(), |cb| {
                 cb.require_true(
                     "is_active is true when is_attested is true",
                     q.table.is_active(),
@@ -234,7 +234,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             let q = queries::<S, F>(meta, &config);
             let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
             let new_balance_acc = select::expr(
-                q.table.is_attested(),
+                q.table.attest_bit(),
                 q.table.balance_acc_prev() + q.table.balance(),
                 q.table.balance_acc(),
             );
@@ -246,13 +246,47 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.gate(and::expr(vec![q.q_enabled(), not::expr(q.q_first())]))
         });
 
+        meta.create_gate("attetsation commits: first committe rows", |meta| {
+            let q = queries::<S, F>(meta, &config);
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
+            cb.require_equal(
+                "attest_commit[0] = is_attested",
+                q.table.attest_commit(0),
+                q.table.attest_bit(),
+            );
+            for i in 1..S::attest_commits_len::<F>() {
+                cb.require_zero("attest_commit[1..] are zero", q.table.attest_commit(i));
+            }
+            cb.gate(q.q_committee_first())
+        });
+
+        meta.create_gate("attetsation commits", |meta| {
+            let q = queries::<S, F>(meta, &config);
+            let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
+
+            for i in 0..S::attest_commits_len::<F>() {
+                // bit = q_attest_commits[0] ? attest_bit : 0
+                let bit = and::expr(vec![q.q_attest_commits(i), q.table.attest_bit()]);
+                cb.require_equal(
+                    "attest_commit += attest_bit",
+                    q.table.attest_commit(i),
+                    q.table.attest_commit_prev(i) * 2.expr() + bit,
+                );
+            }
+
+            cb.gate(and::expr(vec![
+                q.q_enabled(),
+                not::expr(q.q_committee_first()),
+            ]))
+        });
+
         meta.create_gate("committee constraints", |meta| {
             let q = queries::<S, F>(meta, &config);
             let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
 
             cb.require_boolean("tag in [validator/committee]", q.table.tag());
             cb.require_zero("is_active is 0 for committees", q.table.is_active());
-            cb.require_zero("is_attested is 0 for committees", q.table.is_attested());
+            cb.require_zero("is_attested is 0 for committees", q.table.attest_bit());
             cb.require_zero("slashed is 0 for committees", q.table.slashed());
             cb.require_zero("activation epoch is 0 for committees", q.table.exit_epoch());
             cb.require_zero("exit epoch is 0 for committees", q.table.exit_epoch());
@@ -341,6 +375,13 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             )?;
 
             region.assign_fixed(
+                || "assign q_committee_first",
+                self.q_committee_first,
+                offset,
+                || Value::known(F::from((i % vs_per_committee == 0) as u64)),
+            )?;
+
+            region.assign_fixed(
                 || "assign q_attest_commits",
                 self.q_attest_commits[((i % vs_per_committee) / f_bits) % attest_commits_len],
                 offset,
@@ -414,7 +455,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             vec![
                 (self.q_enabled.into(), "q_enabled".to_string()),
                 (self.q_first.into(), "q_first".to_string()),
-                (self.q_last.into(), "is_last".to_string()),
+                (self.q_last.into(), "q_last".to_string()),
                 (
                     self.q_committee_first.into(),
                     "q_committee_first".to_string(),
@@ -516,6 +557,12 @@ fn queries<S: Spec, F: Field>(
         q_enabled: meta.query_fixed(config.q_enabled, Rotation::cur()),
         q_first: meta.query_fixed(config.q_first, Rotation::cur()),
         q_last: meta.query_fixed(config.q_last, Rotation::cur()),
+        q_committee_first: meta.query_fixed(config.q_committee_first, Rotation::cur()),
+        q_attest_commits: config
+            .q_attest_commits
+            .iter()
+            .map(|col| meta.query_fixed(*col, Rotation::cur()))
+            .collect_vec(),
         target_epoch: meta.query_advice(config.target_epoch, Rotation::cur()),
         table: config.validators_table.queries(meta),
     }

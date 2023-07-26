@@ -18,7 +18,7 @@ pub struct ValidatorsTable {
     /// Signals whether validator is active during that epoch.
     pub is_active: Column<Advice>,
     /// Signals whether validator have attested during that epoch.
-    pub is_attested: Column<Advice>,
+    pub attest_bit: Column<Advice>,
     /// Effective balance of validator/committee.
     pub balance: Column<Advice>,
     /// Signals whether validator is slashed.
@@ -35,7 +35,7 @@ pub struct ValidatorsTable {
     pub total_balance_acc: Column<Advice>,
 
     pub pubkey_cells: Vec<[Cell; 2]>,
-    pub attestation_bit_cells: Vec<Cell>,
+    pub attest_commits_cells: Vec<Vec<Cell>>,
 }
 
 impl<F: Field> LookupTable<F> for ValidatorsTable {
@@ -45,7 +45,7 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
                 self.id.into(),
                 self.tag.into(),
                 self.is_active.into(),
-                self.is_attested.into(),
+                self.attest_bit.into(),
                 self.balance.into(),
                 self.slashed.into(),
                 self.activation_epoch.into(),
@@ -87,7 +87,7 @@ impl ValidatorsTable {
             id: meta.advice_column(),
             tag: meta.advice_column(),
             is_active: meta.advice_column(),
-            is_attested: meta.advice_column(),
+            attest_bit: meta.advice_column(),
             balance: meta.advice_column_in(SecondPhase),
             slashed: meta.advice_column_in(SecondPhase),
             activation_epoch: meta.advice_column_in(SecondPhase),
@@ -101,12 +101,11 @@ impl ValidatorsTable {
                 .collect(),
             total_balance_acc: meta.advice_column(),
             pubkey_cells: vec![],
-            attestation_bit_cells: vec![],
+            attest_commits_cells: vec![],
         };
 
-        for col in config.pubkey {
-            meta.enable_equality(col)
-        }
+        itertools::chain![&config.pubkey, &config.attest_commits,]
+            .for_each(|&col| meta.enable_equality(col));
 
         config
     }
@@ -118,7 +117,7 @@ impl ValidatorsTable {
         row: &CasperEntityRow<F>,
     ) -> Result<(), Error> {
         let [attest_bit, pubkey_lo, pubkey_hi, ..] = [
-            (self.is_attested, row.is_attested),
+            (self.attest_bit, row.is_attested),
             (self.pubkey[0], row.pubkey[0]),
             (self.pubkey[1], row.pubkey[1]),
             (self.id, row.id),
@@ -142,21 +141,26 @@ impl ValidatorsTable {
                 .cell()
         });
 
-        self.attest_commits
+        let attest_commits_cells = self
+            .attest_commits
             .iter()
             .zip(row.attest_commits.iter().copied())
-            .for_each(|(column, value)| {
-                region.assign_advice(
-                    || "assign attest commit into validators table",
-                    *column,
-                    offset,
-                    || value,
-                );
-            });
+            .map(|(column, value)| {
+                region
+                    .assign_advice(
+                        || "assign attest commit into validators table",
+                        *column,
+                        offset,
+                        || value,
+                    )
+                    .expect("attest commit assign")
+                    .cell()
+            })
+            .collect();
 
         if row.row_type == CasperTag::Validator {
             self.pubkey_cells.push([pubkey_lo, pubkey_hi]);
-            self.attestation_bit_cells.push(attest_bit);
+            self.attest_commits_cells.push(attest_commits_cells);
         }
 
         Ok(())
@@ -206,7 +210,7 @@ impl ValidatorsTable {
             id: meta.query_advice(self.id, Rotation::cur()),
             tag: meta.query_advice(self.tag, Rotation::cur()),
             is_active: meta.query_advice(self.is_active, Rotation::cur()),
-            is_attested: meta.query_advice(self.is_attested, Rotation::cur()),
+            attest_bit: meta.query_advice(self.attest_bit, Rotation::cur()),
             balance: meta.query_advice(self.balance, Rotation::cur()),
             slashed: meta.query_advice(self.slashed, Rotation::cur()),
             activation_epoch: meta.query_advice(self.activation_epoch, Rotation::cur()),
@@ -222,6 +226,11 @@ impl ValidatorsTable {
                 .iter()
                 .map(|col| meta.query_advice(*col, Rotation::cur()))
                 .collect(),
+            attest_commits_prev: self
+                .attest_commits
+                .iter()
+                .map(|col| meta.query_advice(*col, Rotation::prev()))
+                .collect(),
             _spec: PhantomData,
         }
     }
@@ -232,7 +241,7 @@ pub struct ValidatorTableQueries<S: Spec, F: Field> {
     id: Expression<F>,
     tag: Expression<F>,
     is_active: Expression<F>,
-    is_attested: Expression<F>,
+    attest_bit: Expression<F>,
     balance: Expression<F>,
     activation_epoch: Expression<F>,
     exit_epoch: Expression<F>,
@@ -241,6 +250,7 @@ pub struct ValidatorTableQueries<S: Spec, F: Field> {
     balance_acc: Expression<F>,
     balance_acc_prev: Expression<F>,
     attest_commits: Vec<Expression<F>>,
+    attest_commits_prev: Vec<Expression<F>>,
     _spec: PhantomData<S>,
 }
 
@@ -265,8 +275,8 @@ impl<S: Spec, F: Field> ValidatorTableQueries<S, F> {
         self.is_active.clone()
     }
 
-    pub fn is_attested(&self) -> Expression<F> {
-        self.is_attested.clone()
+    pub fn attest_bit(&self) -> Expression<F> {
+        self.attest_bit.clone()
     }
 
     pub fn balance_gindex(&self) -> Expression<F> {
@@ -331,5 +341,9 @@ impl<S: Spec, F: Field> ValidatorTableQueries<S, F> {
 
     pub fn attest_commit(&self, index: usize) -> Expression<F> {
         self.attest_commits[index].clone()
+    }
+
+    pub fn attest_commit_prev(&self, index: usize) -> Expression<F> {
+        self.attest_commits_prev[index].clone()
     }
 }
