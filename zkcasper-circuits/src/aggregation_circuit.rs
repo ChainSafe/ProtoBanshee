@@ -30,7 +30,10 @@ use halo2curves::{
 use itertools::Itertools;
 use num_bigint::BigUint;
 use rayon::prelude::*;
-use std::{cell::RefCell, marker::PhantomData};
+use std::{
+    cell::{RefCell, RefMut},
+    marker::PhantomData,
+};
 
 // TODO: Use halo2_ccc::bls12_381::FpChip after carry mod issue is resolved in halo2-lib.
 // for details see: https://github.com/flyingnobita/halo2-lib-no-fork/blob/bls12-381/halo2-ecc/src/bls12_381/notes.md
@@ -131,7 +134,8 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     let builder = &mut self.builder.borrow_mut();
                     let ctx = builder.main(0);
                     let mut pubkeys_compressed = vec![];
-                    let _aggregated_pubkeys = self.process_validators(ctx, &mut pubkeys_compressed);
+                    let _aggregated_pubkeys =
+                        self.process_validators(builder, &mut pubkeys_compressed);
 
                     let ctx = builder.main(1);
 
@@ -204,9 +208,10 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
 
     fn process_validators(
         &self,
-        ctx: &Context<F>,
+        builder: &mut RefMut<GateThreadBuilder<F>>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
+        let ctx = builder.main(0);
         let range = self.range();
         let gate = range.gate();
 
@@ -309,7 +314,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         let mut aggregated_pubkeys = vec![];
         for (aggregated_pubkey, context, pubkeys_compressed_thread) in result.iter() {
             aggregated_pubkeys.push(aggregated_pubkey.clone());
-            self.builder.borrow_mut().threads[0].push(context.clone());
+            builder.threads[0].push(context.clone());
             for item in pubkeys_compressed_thread {
                 pubkeys_compressed.push(item.clone());
             }
