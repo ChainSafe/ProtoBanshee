@@ -28,14 +28,6 @@ pub struct Validator {
     pub pubkey_uncompressed: Vec<u8>,
 }
 
-/// Committee
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Committee {
-    pub id: usize,
-    pub accumulated_balance: u64,
-    pub aggregated_pubkey: Vec<u8>,
-}
-
 lazy_static! {
     pub static ref DUMMY_VALIDATOR: Validator = Validator::default();
 }

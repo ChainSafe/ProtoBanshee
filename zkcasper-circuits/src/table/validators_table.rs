@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use gadgets::util::{not, Expr};
 use halo2_proofs::circuit::Cell;
 
-use crate::witness::{pad_to_max_per_committee, Committee, Validator, ValidatorRow};
+use crate::witness::{pad_to_max_per_committee, Validator, ValidatorRow};
 
 use super::*;
 use eth_types::Spec;
@@ -165,18 +165,17 @@ impl ValidatorsTable {
         &mut self,
         layouter: &mut impl Layouter<F>,
         validators: &[Validator],
-        committees: &[Committee],
         challenge: Value<F>,
     ) -> Result<(), Error> {
         let padded_validators = pad_to_max_per_committee::<S>(validators.iter());
+        let num_committees = padded_validators.len() / S::MAX_VALIDATORS_PER_COMMITTEE;
 
         layouter.assign_region(
             || "dev load validators table",
             |mut region| {
                 self.annotate_columns_in_region(&mut region);
-                let mut committees_balances = vec![0; committees.len()];
-                let mut attest_digits =
-                    vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
+                let mut committees_balances = vec![0; num_committees];
+                let mut attest_digits = vec![vec![0; S::attest_digits_len::<F>()]; num_committees];
                 for (offset, row) in padded_validators
                     .iter()
                     .flat_map(|&v| {

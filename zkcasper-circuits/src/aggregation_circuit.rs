@@ -2,7 +2,7 @@ use crate::{
     gadget::crypto::{FpPoint, G1Chip, G1Point},
     table::{LookupTable, ValidatorsTable},
     util::{decode_into_field, print_fq_dev, Challenges, SubCircuit, SubCircuitConfig},
-    witness::{self, Committee, Validator, DUMMY_VALIDATOR},
+    witness::{self, Validator, DUMMY_VALIDATOR},
 };
 use eth_types::{Spec, *};
 use ff::Field as FF;
@@ -79,7 +79,6 @@ pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec + Sync> {
     fp_chip: FpChip<'a, F, S::PubKeysCurve>,
     // Witness
     validators: &'a [Validator],
-    _committees: &'a [Committee],
     validators_y: Vec<<S::PubKeysCurve as AppCurveExt>::Fq>,
     _spec: PhantomData<S>,
 }
@@ -88,7 +87,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
     pub fn new(
         builder: GateThreadBuilder<F>,
         validators: &'a [Validator],
-        committees: &'a [Committee],
         validators_y: Vec<<S::PubKeysCurve as AppCurveExt>::Fq>,
         range: &'a RangeChip<F>,
     ) -> Self {
@@ -102,7 +100,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             range,
             fp_chip,
             validators,
-            _committees: committees,
             validators_y,
             _spec: PhantomData,
         }
@@ -516,7 +513,6 @@ mod tests {
             config.0.validators_table.dev_load::<S, _>(
                 &mut layouter,
                 self.inner.validators,
-                self.inner._committees,
                 challenge,
             )?;
             self.inner.synthesize_sub(
@@ -534,8 +530,6 @@ mod tests {
         let k = TestCircuit::<Fr, S>::K;
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
-        let committees: Vec<Committee> =
-            serde_json::from_slice(&fs::read("../test_data/committees.json").unwrap()).unwrap();
 
         let validators_y = validators
             .iter()
@@ -556,7 +550,6 @@ mod tests {
             inner: AggregationCircuitBuilder::new(
                 builder,
                 &validators,
-                &committees,
                 validators_y,
                 &range,
             ),
@@ -564,44 +557,5 @@ mod tests {
 
         let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
-    }
-
-    #[test]
-    fn decompose_second_bit_and_compose() {
-        let a = 134u8;
-
-        let mut s = ((a as u64 * 2) % 256) as u8; // equivalent to a <<= 1 mod 256;
-
-        println!("s1 = {}", s);
-
-        // Decompose the second bit
-        let second_bit = (s as u64) / 128; // Extract the second bit
-
-        println!("second_bit = {}", second_bit);
-
-        s = ((s as u64 * 4) % 256) as u8;
-
-        println!("s2 = {}", s);
-
-        // Compose back to the original number but zeroing the second bit
-        let c = s / 8; // Shift bits one to the right
-
-        println!("c = {}", c);
-
-        assert_eq!(a & 31, c);
-    }
-
-    #[test]
-    fn test_affine_add() {
-        let iden = G1Affine::identity();
-        let rand1 = G1Affine::random(&mut rand::thread_rng());
-        let rand2 = G1Affine::random(&mut rand::thread_rng());
-
-        let sum = rand1 + rand2;
-        let sum2 = rand1 + rand2 + iden;
-
-        println!("sum: {:?}", sum);
-        println!("sum2: {:?}", sum2);
-        assert_eq!(sum, sum2);
     }
 }

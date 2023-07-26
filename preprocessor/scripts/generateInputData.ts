@@ -111,17 +111,13 @@ fs.writeFileSync(
 const aggregatedPubKey = bls12_381.aggregatePublicKeys(pubKeyPoints);
 const aggPubkeyBytes = g1PointToBytesLE(aggregatedPubKey, false);
 
-let committees = [
-    {
-        id: 0,
-        accumulatedBalance: Array.from(validators).reduce((acc, validator) => acc + validator.effectiveBalance, 0),
-        aggregatedPubkey: aggPubkeyBytes, // TODO: aggregate pubkeys
-    }
+let bytesPubkeys = [
+    Array.from(aggPubkeyBytes),
 ];
 
 fs.writeFileSync(
-    `../test_data/committees.json`,
-    serialize(committees)
+    `../test_data/aggregated_pubkeys.json`,
+    serialize(bytesPubkeys)
 );
 
 // //-----------------Attestations ----------------//

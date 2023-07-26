@@ -8,7 +8,7 @@ use crate::{
         LookupTable, ValidatorsTable,
     },
     util::{Challenges, ConstrainBuilderCommon, SubCircuit, SubCircuitConfig},
-    witness::{self, pad_to_max_per_committee, Committee, Validator},
+    witness::{self, pad_to_max_per_committee, Validator},
     N_BYTES_U64,
 };
 use cell_manager::CellManager;
@@ -294,13 +294,10 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 }
 
 impl<F: Field> ValidatorsCircuitConfig<F> {
-    // const MAX_ROWS: usize = S::MAX_VALIDATORS_PER_COMMITTEE * S::MAX_COMMITTEES_PER_SLOT * S::SLOTS_PER_EPOCH;
-
     fn assign<S: Spec>(
         &mut self,
         layouter: &mut impl Layouter<F>,
         validators: &[Validator],
-        committees: &[Committee],
         target_epoch: u64,
         challange: Value<F>,
     ) -> Result<(), Error> {
@@ -310,7 +307,6 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 self.assign_with_region::<S>(
                     &mut region,
                     validators,
-                    committees,
                     target_epoch,
                     challange,
                 )
@@ -322,11 +318,11 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
         &mut self,
         region: &mut Region<'_, F>,
         validators: &[Validator],
-        committees: &[Committee],
         target_epoch: u64,
         randomness: Value<F>,
     ) -> Result<(), Error> {
         let padded_validators = pad_to_max_per_committee::<S>(validators.iter());
+        let num_committees = padded_validators.len() / S::MAX_VALIDATORS_PER_COMMITTEE;
 
         let target_gte_activation = self
             .target_gte_activation
@@ -338,8 +334,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             .expect("target_lt_exited gadget is expected");
 
         let mut offset = 0;
-        let mut committees_balances = vec![0; committees.len()];
-        let mut attest_digits = vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
+        let mut committees_balances = vec![0; num_committees];
+        let mut attest_digits = vec![vec![0; S::attest_digits_len::<F>()]; num_committees];
         let vs_per_committee = S::MAX_VALIDATORS_PER_COMMITTEE;
         let f_bits = F::NUM_BITS as usize;
         let attest_digits_len = S::attest_digits_len::<F>();
@@ -457,17 +453,15 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 #[derive(Clone, Debug)]
 pub struct ValidatorsCircuit<S: Spec, F> {
     pub(crate) validators: Vec<Validator>,
-    pub(crate) committees: Vec<Committee>,
     target_epoch: u64,
     _f: PhantomData<F>,
     _spec: PhantomData<S>,
 }
 
 impl<S: Spec, F: Field> ValidatorsCircuit<S, F> {
-    pub fn new(validators: Vec<Validator>, committees: Vec<Committee>, target_epoch: u64) -> Self {
+    pub fn new(validators: Vec<Validator>, target_epoch: u64) -> Self {
         Self {
             validators,
-            committees,
             target_epoch,
             _f: PhantomData,
             _spec: PhantomData,
@@ -482,7 +476,6 @@ impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
     fn new_from_block(block: &witness::Block<F>) -> Self {
         Self::new(
             block.validators.clone(),
-            block.committees.clone(),
             block.target_epoch,
         )
     }
@@ -509,7 +502,6 @@ impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
                 config.assign_with_region::<S>(
                     &mut region,
                     &self.validators,
-                    &self.committees,
                     self.target_epoch,
                     challenges.sha256_input(),
                 )?;
@@ -607,13 +599,11 @@ mod tests {
         let k = 10;
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
-        let committees: Vec<Committee> =
-            serde_json::from_slice(&fs::read("../test_data/committees.json").unwrap()).unwrap();
         let state_tree_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
         let circuit = TestValidators::<Test, Fr> {
-            inner: ValidatorsCircuit::new(validators, committees, 25),
+            inner: ValidatorsCircuit::new(validators, 25),
             state_tree_trace,
             _f: PhantomData,
         };
