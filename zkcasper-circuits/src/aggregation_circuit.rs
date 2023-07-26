@@ -199,7 +199,8 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
     }
 
     /// takes a list of validators and groups them by committees
-    ///
+    /// aggregates them by committee, and appends `pubkeys_compressed` with assigned pubkeys
+    /// of validators in compressed byte form.
     fn process_validators(
         &self,
         builder: &mut GateThreadBuilder<F>,
