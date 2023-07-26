@@ -219,6 +219,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             .group_by(|v| v.0.committee);
         // convert the `itertools::GroupBy` into a plain vector so that `rayon::par_iter`
         // can use it.
+        // TODO: clippy recommends converting this to a named `type`.
         let grouped_validators: Vec<
             Vec<(
                 &Validator,
@@ -244,7 +245,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         let result: Vec<ParallelizedOutput<F>> = grouped_validators
             .into_par_iter()
             .map(|validators| {
-                // TODO: Nothing within here can take `&mut self`.
+                // Note: Nothing within here can take `self`.
                 let mut in_committee_pubkeys = vec![];
                 let mut ctx_clone = Context::<F>::new(ctx.witness_gen_only(), ctx.context_id);
                 let mut pubkeys_compressed_thread: Vec<Vec<AssignedValue<F>>> = vec![];
@@ -318,7 +319,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             }
         }
 
-        return aggregated_pubkeys;
+        aggregated_pubkeys
     }
 
     /// Calculates RLCs (1 for each of two chacks of BLS12-381) for compresed bytes of pubkey.
