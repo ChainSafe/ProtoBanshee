@@ -445,9 +445,9 @@ mod tests {
     }
 
     impl<'a, F: Field, S: Spec + Sync> TestCircuit<'a, F, S> {
-        const NUM_ADVICE: &[usize] = &[6, 1];
+        const NUM_ADVICE: &[usize] = &[10, 1];
         const NUM_FIXED: usize = 1;
-        const NUM_LOOKUP_ADVICE: usize = 2;
+        const NUM_LOOKUP_ADVICE: usize = 5;
         const LOOKUP_BITS: usize = 8;
         const K: usize = 14;
     }

@@ -69,7 +69,7 @@ impl Validator {
     ) -> Vec<CasperEntityRow<F>> {
         let committee_pos = self.committee_pos::<S>();
         assert!(
-            committee_pos <= S::MAX_VALIDATORS_PER_COMMITTEE,
+            committee_pos <= S::VALIDATOR_REGISTRY_LIMIT,
             "validator position out of bounds"
         );
 
