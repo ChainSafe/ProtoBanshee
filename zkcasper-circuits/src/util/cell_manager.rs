@@ -12,10 +12,10 @@ use std::hash::Hash;
 pub struct Cell<F> {
     // expression for constraint
     expression: Expression<F>,
-    pub(crate) column: Column<Advice>,
+    column: Column<Advice>,
     // relative position to selector for synthesis
-    pub(crate) rotation: usize,
-    pub(crate) cell_column_index: usize,
+    rotation: usize,
+    cell_column_index: usize,
 }
 
 impl<F: Field> Cell<F> {

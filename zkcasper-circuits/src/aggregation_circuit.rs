@@ -31,7 +31,6 @@ use halo2curves::{
     CurveAffine, CurveExt,
 };
 use itertools::Itertools;
-use num::Integer;
 use num_bigint::BigUint;
 use rayon::prelude::*;
 use std::{
