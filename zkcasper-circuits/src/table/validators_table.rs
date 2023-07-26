@@ -35,7 +35,7 @@ pub struct ValidatorsTable {
     pub total_balance_acc: Column<Advice>,
 
     pub pubkey_cells: Vec<[Cell; 2]>,
-    pub attest_commits_cells: Vec<Vec<Cell>>,
+    pub attest_digits_cells: Vec<Vec<Cell>>,
 }
 
 impl<F: Field> LookupTable<F> for ValidatorsTable {
@@ -96,12 +96,12 @@ impl ValidatorsTable {
                 meta.advice_column_in(SecondPhase),
                 meta.advice_column_in(SecondPhase),
             ],
-            attest_commits: (0..S::attest_commits_len::<F>())
+            attest_commits: (0..S::attest_digits_len::<F>())
                 .map(|_| meta.advice_column())
                 .collect(),
             total_balance_acc: meta.advice_column(),
             pubkey_cells: vec![],
-            attest_commits_cells: vec![],
+            attest_digits_cells: vec![],
         };
 
         itertools::chain![&config.pubkey, &config.attest_commits,]
@@ -110,7 +110,7 @@ impl ValidatorsTable {
         config
     }
 
-    pub fn assign_with_region<F: Field>(
+    pub fn assign_with_region<S: Spec, F: Field>(
         &mut self,
         region: &mut Region<'_, F>,
         offset: usize,
@@ -160,7 +160,9 @@ impl ValidatorsTable {
 
         if row.row_type == CasperTag::Validator {
             self.pubkey_cells.push([pubkey_lo, pubkey_hi]);
-            self.attest_commits_cells.push(attest_commits_cells);
+            if (offset + 1) % S::MAX_VALIDATORS_PER_COMMITTEE == 0 {
+                self.attest_digits_cells.push(attest_commits_cells);
+            }
         }
 
         Ok(())
@@ -182,7 +184,7 @@ impl ValidatorsTable {
                 self.annotate_columns_in_region(&mut region);
                 let mut committees_balances = vec![0; committees.len()];
                 let mut attest_commits =
-                    vec![vec![0; S::attest_commits_len::<F>()]; committees.len()];
+                    vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
                 for (offset, row) in casper_entities
                     .iter()
                     .flat_map(|e| {
@@ -194,7 +196,7 @@ impl ValidatorsTable {
                     })
                     .enumerate()
                 {
-                    self.assign_with_region(&mut region, offset, &row)?;
+                    self.assign_with_region::<S, F>(&mut region, offset, &row)?;
                 }
 
                 Ok(())

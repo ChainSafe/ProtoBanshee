@@ -22,9 +22,9 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
     type PubKeysCurve: AppCurveExt;
     type SiganturesCurve: AppCurveExt<Fp = <Self::PubKeysCurve as AppCurveExt>::Fq> + HashCurveExt;
 
-    // Number of commitments to attestation bits per committee for a given field element.
+    // Number of digits to attestation bits per committee for a given field element.
     // ceil(Self::MAX_VALIDATORS_PER_COMMITTEE / F::NUM_BITS)
-    fn attest_commits_len<F: Field>() -> usize {
+    fn attest_digits_len<F: Field>() -> usize {
         (Self::MAX_VALIDATORS_PER_COMMITTEE + F::NUM_BITS as usize - 1) / F::NUM_BITS as usize
     }
 }

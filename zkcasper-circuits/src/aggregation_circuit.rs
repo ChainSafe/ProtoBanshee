@@ -113,81 +113,103 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         config: &AggregationCircuitConfig<F>,
         challenges: &Challenges<F, Value<F>>,
         layouter: &mut impl Layouter<F>,
-    ) {
+    ) -> Result<Vec<EcPoint<F, FpPoint<F>>>, Error> {
         config
             .range
             .load_lookup_table(layouter)
             .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
 
-        layouter
-            .assign_region(
-                || "AggregationCircuitBuilder generated circuit",
-                |mut region| {
-                    config.annotate_columns_in_region(&mut region);
-                    if first_pass {
-                        first_pass = false;
-                        return Ok(());
-                    }
+        layouter.assign_region(
+            || "AggregationCircuitBuilder generated circuit",
+            |mut region| {
+                config.annotate_columns_in_region(&mut region);
+                if first_pass {
+                    first_pass = false;
+                    return Ok(vec![]);
+                }
 
-                    let builder = &mut self.builder.borrow_mut();
-                    let mut pubkeys_compressed = vec![];
-                    let _aggregated_pubkeys =
-                        self.process_validators(builder, &mut pubkeys_compressed);
+                let builder = &mut self.builder.borrow_mut();
+                let mut pubkeys_compressed = vec![];
+                let mut attest_digits = vec![];
+                let aggregated_pubkeys =
+                    self.process_validators(builder, &mut pubkeys_compressed, &mut attest_digits);
 
-                    let ctx = builder.main(1);
+                let ctx = builder.main(1);
 
-                    let randomness = QuantumCell::Constant(
-                        halo2_base::utils::value_to_option(challenges.sha256_input()).unwrap(),
-                    );
+                let randomness = QuantumCell::Constant(
+                    halo2_base::utils::value_to_option(challenges.sha256_input()).unwrap(),
+                );
 
-                    let pubkey_rlcs = pubkeys_compressed
+                let pubkey_rlcs = pubkeys_compressed
+                    .into_iter()
+                    .map(|compressed| self.get_rlc(&compressed, &randomness, ctx))
+                    .collect_vec();
+
+                let halo2_base::gates::builder::KeygenAssignments::<F> {
+                    assigned_advices, ..
+                } = builder.assign_all(
+                    &config.range.gate,
+                    &config.range.lookup_advice,
+                    &config.range.q_lookup,
+                    &mut region,
+                    Default::default(),
+                );
+
+                // check that the assigned compressed encoding of pubkey used for constructiong affine point
+                // is consistent with bytes used in validators table
+                // assumption: order of self.validators is same as in BeaconState.validators so we treat iterator index as validator id
+                for (i, assigned_rlc) in pubkey_rlcs.into_iter().enumerate() {
+                    // convert halo2lib `AssignedValue` into vanilla Halo2 `Cell`
+                    let cells = assigned_rlc
                         .into_iter()
-                        .map(|compressed| self.get_rlc(&compressed, &randomness, ctx))
-                        .collect_vec();
+                        .filter_map(|c| c.cell)
+                        .filter_map(|ctx_cell| {
+                            assigned_advices.get(&(ctx_cell.context_id, ctx_cell.offset))
+                        })
+                        .map(|&(cell, _)| cell);
 
-                    let halo2_base::gates::builder::KeygenAssignments::<F> {
-                        assigned_advices, ..
-                    } = builder.assign_all(
-                        &config.range.gate,
-                        &config.range.lookup_advice,
-                        &config.range.q_lookup,
-                        &mut region,
-                        Default::default(),
-                    );
+                    // get the corresponding cached cells from the validators table
+                    let vs_table_cells = config
+                        .validators_table
+                        .pubkey_cells
+                        .get(i)
+                        .expect("pubkey cells for validator id");
 
-                    // check that the assigned compressed encoding of pubkey used for constructiong affine point
-                    // is consistent with bytes used in validators table
-                    // assumption: order of self.validators is same as in BeaconState.validators so we treat iterator index as validator id
-                    for (i, assigned_rlc) in pubkey_rlcs.into_iter().enumerate() {
-                        // convert halo2lib `AssignedValue` into vanilla Halo2 `Cell`
-                        let cells = assigned_rlc
-                            .into_iter()
-                            .filter_map(|c| c.cell)
-                            .filter_map(|ctx_cell| {
-                                assigned_advices.get(&(ctx_cell.context_id, ctx_cell.offset))
-                            })
-                            .map(|&(cell, _)| cell);
-
-                        // get the corresponding cached cells from the validators table
-                        let vs_table_cells = config
-                            .validators_table
-                            .pubkey_cells
-                            .get(i)
-                            .expect("pubkey cells for validator id");
-
-                        // enforce equality and order
-                        // WARNING: the variable number of valdiators might cause issues in proof generation
-                        // FIXME: pad up to max (supported) valdiators count (?)
-                        for (left, &right) in cells.zip_eq(vs_table_cells) {
-                            region.constrain_equal(left, right)?;
-                        }
+                    // enforce equality and order
+                    // WARNING: the variable number of valdiators might cause issues in proof generation
+                    // FIXME: pad up to max (supported) valdiators count (?)
+                    for (left, &right) in cells.zip_eq(vs_table_cells) {
+                        region.constrain_equal(left, right)?;
                     }
+                }
 
-                    Ok(())
-                },
-            )
-            .unwrap();
+                // check that attestation bits used during pubkey aggregation are consistent validators table
+                // to reduce the number of equility constraints we check commitments to those bits
+                // commit is a simply 
+                for (i, commit) in attest_digits.into_iter().enumerate() {
+                    let cells = commit
+                        .into_iter()
+                        .filter_map(|c| c.cell)
+                        .filter_map(|ctx_cell| {
+                            assigned_advices.get(&(ctx_cell.context_id, ctx_cell.offset))
+                        })
+                        .map(|&(cell, _)| cell);
+
+                    let vs_table_cells = config
+                        .validators_table
+                        .attest_digits_cells
+                        .get(i)
+                        .expect("attest commit cells for validator id");
+
+                    for (left, &right) in cells.zip_eq(vs_table_cells) {
+                        region.constrain_equal(left, right)?;
+                    }
+                }
+
+                Ok(aggregated_pubkeys)
+            },
+        )
     }
 
     // Calculates y^2 = x^3 + 4 (the curve equation)
@@ -210,6 +232,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         &self,
         builder: &mut GateThreadBuilder<F>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
+        attest_commits: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let witness_gen_only = builder.witness_gen_only();
         let range = self.range();
@@ -231,33 +254,28 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             .zip(self.validators_y.iter())
             .group_by(|v| v.0.committee)
             .into_iter()
-            .map(|(_committee, validator_coord_group)| {
-                // NOTE: This needs to be a plain vector instead of the `Group` object that
-                // isn't ParIter.
-                validator_coord_group.into_iter().collect_vec()
-            })
+            .map(|(_, g)| g.into_iter().collect_vec())
             .collect_vec();
 
         // NOTE: We convert the grouped validators into Rayon-provided `ParIter` so that we can use
         // parallel threads. But because of this, we can't use &mut self or any other mutable
         // types, so instead we return a vector of tuples from this `.map`, which we process later.
-        type ParallelizedOutput<F> = (
-            EcPoint<F, FpPoint<F>>,
-            Context<F>,
-            Vec<Vec<AssignedValue<F>>>,
-        );
 
-        let result = parallelize_in(0, builder, grouped_validators, |ctx, validators| {
+        parallelize_in(0, builder, grouped_validators, |ctx, validators| {
             // Note: Nothing within here can take `self`.
             let mut pubkeys_compressed_thread = vec![];
             let mut attested_pubkeys = vec![];
             let mut aggregation_bits = vec![];
+            let mut attest_commits_thread = iter::repeat_with(|| ctx.load_zero())
+                .take(S::attest_digits_len::<F>())
+                .collect_vec();
 
-            for (validator, y_coord) in validators
+            for (committee_idx, (validator, y_coord)) in validators
                 .into_iter()
-                .pad_using(S::MAX_VALIDATORS_PER_COMMITTEE, |i| {
+                .pad_using(S::MAX_VALIDATORS_PER_COMMITTEE, |_| {
                     (&DUMMY_VALIDATOR, &dymmy_y)
                 })
+                .enumerate()
             {
                 let is_attested = ctx.load_witness(F::from(validator.is_attested as u64));
 
@@ -297,30 +315,37 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                 // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                 // push this to the returnable and then use that
                 pubkeys_compressed_thread.push(assigned_x_compressed_bytes);
-                // Normally, we would need to take into account the sign of the y coordinate, but
+
+                // *Note:* normally, we would need to take into account the sign of the y coordinate, but
                 // because we are concerned only with signature forgery, if this is the wrong
                 // sign, the signature will be invalid anyway and thus verification fails.
 
                 attested_pubkeys.push(EcPoint::new(x_crt, y_crt));
                 aggregation_bits.push(is_attested);
+
+                // accumulate bits into current commit
+                let current_commit = committee_idx / F::NUM_BITS as usize;
+                attest_commits_thread[current_commit] = gate.mul_add(
+                    ctx,
+                    attest_commits_thread[current_commit],
+                    QuantumCell::Constant(F::from(2u64)),
+                    is_attested,
+                );
             }
             (
                 Self::aggregate_pubkeys(&g1_chip, ctx, attested_pubkeys, aggregation_bits),
-                ctx.clone(),
                 pubkeys_compressed_thread,
+                attest_commits_thread,
             )
-        });
+        })
+        .into_iter()
+        .map(|(agg_pk, mut encoded_pubkeys, commits)| {
+            pubkeys_compressed.append(&mut encoded_pubkeys);
 
-        let mut aggregated_pubkeys = vec![];
-        for (aggregated_pubkey, context, pubkeys_compressed_thread) in result.iter() {
-            aggregated_pubkeys.push(aggregated_pubkey.clone());
-            builder.threads[0].push(context.clone());
-            for item in pubkeys_compressed_thread {
-                pubkeys_compressed.push(item.clone());
-            }
-        }
-
-        aggregated_pubkeys
+            attest_commits.push(commits);
+            agg_pk
+        })
+        .collect()
     }
 
     pub fn aggregate_pubkeys<'b>(

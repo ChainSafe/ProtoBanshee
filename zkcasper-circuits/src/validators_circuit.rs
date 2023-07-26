@@ -59,7 +59,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         let q_last = meta.fixed_column();
         let q_committee_first = meta.fixed_column();
         let q_attest_commits = iter::repeat_with(|| meta.fixed_column())
-            .take(S::attest_commits_len::<F>())
+            .take(S::attest_digits_len::<F>())
             .collect_vec();
 
         let target_epoch = meta.advice_column();
@@ -254,7 +254,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                 q.table.attest_commit(0),
                 q.table.attest_bit(),
             );
-            for i in 1..S::attest_commits_len::<F>() {
+            for i in 1..S::attest_digits_len::<F>() {
                 cb.require_zero("attest_commit[1..] are zero", q.table.attest_commit(i));
             }
             cb.gate(q.q_committee_first())
@@ -264,7 +264,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             let q = queries::<S, F>(meta, &config);
             let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
 
-            for i in 0..S::attest_commits_len::<F>() {
+            for i in 0..S::attest_digits_len::<F>() {
                 // bit = q_attest_commits[0] ? attest_bit : 0
                 let bit = and::expr(vec![q.q_attest_commits(i), q.table.attest_bit()]);
                 cb.require_equal(
@@ -354,10 +354,10 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 
         let mut offset = 0;
         let mut committees_balances = vec![0; committees.len()];
-        let mut attest_commits = vec![vec![0; S::attest_commits_len::<F>()]; committees.len()];
+        let mut attest_commits = vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
         let vs_per_committee = S::MAX_VALIDATORS_PER_COMMITTEE;
         let f_bits = F::NUM_BITS as usize;
-        let attest_commits_len = S::attest_commits_len::<F>();
+        let attest_commits_len = S::attest_digits_len::<F>();
 
         region.assign_fixed(
             || "assign q_first",
@@ -418,7 +418,7 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                         );
                         for (i, row) in validator_rows.into_iter().enumerate() {
                             self.validators_table
-                                .assign_with_region(region, offset + i, &row)?;
+                                .assign_with_region::<S, F>(region, offset + i, &row)?;
                         }
 
                         offset += 1;

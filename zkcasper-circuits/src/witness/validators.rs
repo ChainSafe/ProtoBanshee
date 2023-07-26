@@ -73,7 +73,7 @@ impl Validator {
             "validator position out of bounds"
         );
 
-        let attest_commit_len = S::attest_commits_len::<F>();
+        let attest_commit_len = S::attest_digits_len::<F>();
         let current_commit = committee_pos / F::NUM_BITS as usize;
         // accumulate bits into current commit
         let committee_attest_commits = &mut attest_commits[self.committee];
