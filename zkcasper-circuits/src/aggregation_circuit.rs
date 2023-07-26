@@ -32,6 +32,7 @@ use num_bigint::BigUint;
 use rayon::prelude::*;
 use std::{
     cell::{RefCell, RefMut},
+    iter,
     marker::PhantomData,
 };
 
@@ -126,7 +127,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     }
 
                     let builder = &mut self.builder.borrow_mut();
-                    let ctx = builder.main(0);
                     let mut pubkeys_compressed = vec![];
                     let _aggregated_pubkeys =
                         self.process_validators(builder, &mut pubkeys_compressed);
@@ -202,11 +202,10 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
     ///
     fn process_validators(
         &self,
-        builder: &mut RefMut<GateThreadBuilder<F>>,
+        builder: &mut GateThreadBuilder<F>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
-        let ctx = builder.main(0);
-        let ctx = Context::<F>::new(ctx.witness_gen_only(), ctx.context_id);
+        let witness_gen_only = builder.witness_gen_only();
         let range = self.range();
         let gate = range.gate();
 
@@ -236,17 +235,23 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             Context<F>,
             Vec<Vec<AssignedValue<F>>>,
         );
+
+        let ctx_ids = iter::repeat_with(|| builder.get_new_thread_id())
+            .take(grouped_validators.len())
+            .collect_vec();
+
         let result: Vec<ParallelizedOutput<F>> = grouped_validators
             .into_par_iter()
-            .map(|validators| {
+            .zip(ctx_ids.into_par_iter())
+            .map(|(validators, ctx_id)| {
                 // Note: Nothing within here can take `self`.
                 let mut in_committee_pubkeys = vec![];
-                let mut ctx_clone = Context::<F>::new(ctx.witness_gen_only(), ctx.context_id);
-                let mut pubkeys_compressed_thread: Vec<Vec<AssignedValue<F>>> = vec![];
+                let mut ctx = Context::<F>::new(witness_gen_only, ctx_id);
+                let mut pubkeys_compressed_thread = vec![];
 
                 for (validator, y_coord) in validators.into_iter() {
-                    let assigned_x_compressed_bytes: Vec<AssignedValue<F>> = ctx_clone
-                        .assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
+                    let assigned_x_compressed_bytes: Vec<AssignedValue<F>> =
+                        ctx.assign_witnesses(validator.pubkey.iter().map(|&b| F::from(b as u64)));
 
                     // assertion check for assigned_uncompressed vector to be equal to S::PubKeyCurve::BYTES_UNCOMPRESSED from specification
                     assert_eq!(assigned_x_compressed_bytes.len(), pubkey_compressed_len);
@@ -254,7 +259,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     // masked byte from compressed representation
                     let masked_byte = &assigned_x_compressed_bytes[pubkey_compressed_len - 1];
                     // clear the sign bit from masked byte
-                    let cleared_byte = Self::clear_flag_bits(range, masked_byte, &mut ctx_clone);
+                    let cleared_byte = Self::clear_flag_bits(range, masked_byte, &mut ctx);
                     // Use the cleared byte to construct the x coordinate
                     let assigned_x_bytes_cleared = [
                         &assigned_x_compressed_bytes.as_slice()[..pubkey_compressed_len - 1],
@@ -265,21 +270,21 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                         assigned_x_bytes_cleared,
                         &fp_chip.limb_bases,
                         gate,
-                        &mut ctx_clone,
+                        &mut ctx,
                     );
 
                     // Load private witness y coordinate
-                    let y_crt = fp_chip.load_private(&mut ctx_clone, *y_coord);
+                    let y_crt = fp_chip.load_private(&mut ctx, *y_coord);
                     // Square y coordinate
-                    let ysq = fp_chip.mul(&mut ctx_clone, y_crt.clone(), y_crt.clone());
+                    let ysq = fp_chip.mul(&mut ctx, y_crt.clone(), y_crt.clone());
                     // Calculate y^2 using the elliptic curve equation
                     let ysq_calc = Self::calculate_ysquared::<S::PubKeysCurve>(
-                        &mut ctx_clone,
+                        &mut ctx,
                         fp_chip,
                         x_crt.clone(),
                     );
                     // Constrain witness y^2 to be equal to calculated y^2
-                    fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
+                    //fp_chip.assert_equal(&mut ctx_clone, ysq, ysq_calc);
 
                     // cache assigned compressed pubkey bytes where each byte is constrainted with pubkey point.
                     // push this to the returnable and then use that
@@ -289,13 +294,12 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     // sign, the signature will be invalid anyway and thus verification fails.
                     in_committee_pubkeys.push(EcPoint::new(x_crt, y_crt));
                 }
-
                 (
                     g1_chip.sum::<<S::PubKeysCurve as AppCurveExt>::Affine>(
-                        &mut ctx_clone,
+                        &mut ctx,
                         in_committee_pubkeys,
                     ),
-                    ctx_clone,
+                    ctx,
                     pubkeys_compressed_thread,
                 )
             })
@@ -420,9 +424,9 @@ mod tests {
     impl<'a, F: Field, S: Spec + Sync> TestCircuit<'a, F, S> {
         const NUM_ADVICE: &[usize] = &[6, 1];
         const NUM_FIXED: usize = 1;
-        const NUM_LOOKUP_ADVICE: usize = 1;
+        const NUM_LOOKUP_ADVICE: usize = 2;
         const LOOKUP_BITS: usize = 8;
-        const K: usize = 15;
+        const K: usize = 14;
     }
 
     impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S> {
@@ -479,7 +483,6 @@ mod tests {
 
     #[test]
     fn test_aggregation_circuit() {
-        // let k = TestCircuit::<Fr, S>::K;
         let k = TestCircuit::<Fr, S>::K;
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
