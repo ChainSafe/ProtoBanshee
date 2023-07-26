@@ -29,8 +29,8 @@ pub struct ValidatorsTable {
     pub exit_epoch: Column<Advice>,
     /// Public key of a validator/committee.
     pub pubkey: [Column<Advice>; 2],
-    /// Commitments to `is_attested` of validator per committee. Length = `Spec::attest_commits_len::<F>()`
-    pub attest_commits: Vec<Column<Advice>>,
+    /// Commitments to `is_attested` of validator per committee. Length = `Spec::attest_digits_len::<F>()`
+    pub attest_digits: Vec<Column<Advice>>,
     /// Accumulated balance for *all* committees.
     pub total_balance_acc: Column<Advice>,
 
@@ -54,7 +54,7 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
                 self.pubkey[1].into(),
                 self.total_balance_acc.into(),
             ],
-            self.attest_commits.iter().map(|c| (*c).into()),
+            self.attest_digits.iter().map(|c| (*c).into()),
         )
         .collect()
     }
@@ -74,7 +74,7 @@ impl<F: Field> LookupTable<F> for ValidatorsTable {
                 String::from("pubkey[1]"),
                 String::from("total_balance_acc"),
             ],
-            (0..self.attest_commits.len()).map(|i| format!("attest_commits[{i}]")),
+            (0..self.attest_digits.len()).map(|i| format!("attest_digits[{i}]")),
         )
         .collect()
     }
@@ -96,7 +96,7 @@ impl ValidatorsTable {
                 meta.advice_column_in(SecondPhase),
                 meta.advice_column_in(SecondPhase),
             ],
-            attest_commits: (0..S::attest_digits_len::<F>())
+            attest_digits: (0..S::attest_digits_len::<F>())
                 .map(|_| meta.advice_column())
                 .collect(),
             total_balance_acc: meta.advice_column(),
@@ -104,7 +104,7 @@ impl ValidatorsTable {
             attest_digits_cells: vec![],
         };
 
-        itertools::chain![&config.pubkey, &config.attest_commits,]
+        itertools::chain![&config.pubkey, &config.attest_digits,]
             .for_each(|&col| meta.enable_equality(col));
 
         config
@@ -141,19 +141,19 @@ impl ValidatorsTable {
                 .cell()
         });
 
-        let attest_commits_cells = self
-            .attest_commits
+        let attest_digits_cells = self
+            .attest_digits
             .iter()
-            .zip(row.attest_commits.iter().copied())
+            .zip(row.attest_digits.iter().copied())
             .map(|(column, value)| {
                 region
                     .assign_advice(
-                        || "assign attest commit into validators table",
+                        || "assign attest digit into validators table",
                         *column,
                         offset,
                         || value,
                     )
-                    .expect("attest commit assign")
+                    .expect("attest digit assign")
                     .cell()
             })
             .collect();
@@ -161,7 +161,7 @@ impl ValidatorsTable {
         if row.row_type == CasperTag::Validator {
             self.pubkey_cells.push([pubkey_lo, pubkey_hi]);
             if (offset + 1) % S::MAX_VALIDATORS_PER_COMMITTEE == 0 {
-                self.attest_digits_cells.push(attest_commits_cells);
+                self.attest_digits_cells.push(attest_digits_cells);
             }
         }
 
@@ -183,14 +183,14 @@ impl ValidatorsTable {
             |mut region| {
                 self.annotate_columns_in_region(&mut region);
                 let mut committees_balances = vec![0; committees.len()];
-                let mut attest_commits =
+                let mut attest_digits =
                     vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
                 for (offset, row) in casper_entities
                     .iter()
                     .flat_map(|e| {
                         e.table_assignment::<S, F>(
                             challenge,
-                            &mut attest_commits,
+                            &mut attest_digits,
                             &mut committees_balances,
                         )
                     })
@@ -223,13 +223,13 @@ impl ValidatorsTable {
             ],
             balance_acc: meta.query_advice(self.total_balance_acc, Rotation::cur()),
             balance_acc_prev: meta.query_advice(self.total_balance_acc, Rotation::prev()),
-            attest_commits: self
-                .attest_commits
+            attest_digits: self
+                .attest_digits
                 .iter()
                 .map(|col| meta.query_advice(*col, Rotation::cur()))
                 .collect(),
-            attest_commits_prev: self
-                .attest_commits
+            attest_digits_prev: self
+                .attest_digits
                 .iter()
                 .map(|col| meta.query_advice(*col, Rotation::prev()))
                 .collect(),
@@ -251,8 +251,8 @@ pub struct ValidatorTableQueries<S: Spec, F: Field> {
     pubkey_rlc: [Expression<F>; 2],
     balance_acc: Expression<F>,
     balance_acc_prev: Expression<F>,
-    attest_commits: Vec<Expression<F>>,
-    attest_commits_prev: Vec<Expression<F>>,
+    attest_digits: Vec<Expression<F>>,
+    attest_digits_prev: Vec<Expression<F>>,
     _spec: PhantomData<S>,
 }
 
@@ -341,11 +341,11 @@ impl<S: Spec, F: Field> ValidatorTableQueries<S, F> {
         self.balance_acc_prev.clone()
     }
 
-    pub fn attest_commit(&self, index: usize) -> Expression<F> {
-        self.attest_commits[index].clone()
+    pub fn attest_digit(&self, index: usize) -> Expression<F> {
+        self.attest_digits[index].clone()
     }
 
-    pub fn attest_commit_prev(&self, index: usize) -> Expression<F> {
-        self.attest_commits_prev[index].clone()
+    pub fn attest_digit_prev(&self, index: usize) -> Expression<F> {
+        self.attest_digits_prev[index].clone()
     }
 }

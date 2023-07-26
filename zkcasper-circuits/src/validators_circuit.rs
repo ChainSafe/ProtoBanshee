@@ -34,7 +34,7 @@ pub struct ValidatorsCircuitConfig<F: Field> {
     q_first: Column<Fixed>,
     q_last: Column<Fixed>,
     q_committee_first: Column<Fixed>,
-    q_attest_commits: Vec<Column<Fixed>>,
+    q_attest_digits: Vec<Column<Fixed>>,
     state_tables: StateTables,
     pub validators_table: ValidatorsTable,
     storage_phase1: [Column<Advice>; 2], // one per `LtGadget`
@@ -58,7 +58,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         let q_first = meta.fixed_column();
         let q_last = meta.fixed_column();
         let q_committee_first = meta.fixed_column();
-        let q_attest_commits = iter::repeat_with(|| meta.fixed_column())
+        let q_attest_digits = iter::repeat_with(|| meta.fixed_column())
             .take(S::attest_digits_len::<F>())
             .collect_vec();
 
@@ -85,7 +85,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             q_first,
             q_last,
             q_committee_first,
-            q_attest_commits,
+            q_attest_digits,
             target_epoch,
             state_tables,
             validators_table,
@@ -246,31 +246,31 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             cb.gate(and::expr(vec![q.q_enabled(), not::expr(q.q_first())]))
         });
 
-        meta.create_gate("attetsation commits: first committe rows", |meta| {
+        meta.create_gate("attetsation digits: first committe rows", |meta| {
             let q = queries::<S, F>(meta, &config);
             let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
             cb.require_equal(
-                "attest_commit[0] = is_attested",
-                q.table.attest_commit(0),
+                "attest_digit[0] = is_attested",
+                q.table.attest_digit(0),
                 q.table.attest_bit(),
             );
             for i in 1..S::attest_digits_len::<F>() {
-                cb.require_zero("attest_commit[1..] are zero", q.table.attest_commit(i));
+                cb.require_zero("attest_digit[1..] are zero", q.table.attest_digit(i));
             }
             cb.gate(q.q_committee_first())
         });
 
-        meta.create_gate("attetsation commits", |meta| {
+        meta.create_gate("attetsation digits", |meta| {
             let q = queries::<S, F>(meta, &config);
             let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
 
             for i in 0..S::attest_digits_len::<F>() {
-                // bit = q_attest_commits[0] ? attest_bit : 0
-                let bit = and::expr(vec![q.q_attest_commits(i), q.table.attest_bit()]);
+                // bit = q_attest_digits[0] ? attest_bit : 0
+                let bit = and::expr(vec![q.q_attest_digits(i), q.table.attest_bit()]);
                 cb.require_equal(
-                    "attest_commit += attest_bit",
-                    q.table.attest_commit(i),
-                    q.table.attest_commit_prev(i) * 2.expr() + bit,
+                    "attest_digits += attest_bit",
+                    q.table.attest_digit(i),
+                    q.table.attest_digit_prev(i) * 2.expr() + bit,
                 );
             }
 
@@ -354,10 +354,10 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 
         let mut offset = 0;
         let mut committees_balances = vec![0; committees.len()];
-        let mut attest_commits = vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
+        let mut attest_digits = vec![vec![0; S::attest_digits_len::<F>()]; committees.len()];
         let vs_per_committee = S::MAX_VALIDATORS_PER_COMMITTEE;
         let f_bits = F::NUM_BITS as usize;
-        let attest_commits_len = S::attest_digits_len::<F>();
+        let attest_digits_len = S::attest_digits_len::<F>();
 
         region.assign_fixed(
             || "assign q_first",
@@ -382,8 +382,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             )?;
 
             region.assign_fixed(
-                || "assign q_attest_commits",
-                self.q_attest_commits[((i % vs_per_committee) / f_bits) % attest_commits_len],
+                || "assign q_attest_digits",
+                self.q_attest_digits[((i % vs_per_committee) / f_bits) % attest_digits_len],
                 offset,
                 || Value::known(F::one()),
             )?;
@@ -413,12 +413,15 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 
                         let validator_rows = validator.table_assignment::<S, F>(
                             randomness,
-                            &mut attest_commits,
+                            &mut attest_digits,
                             &mut committees_balances,
                         );
                         for (i, row) in validator_rows.into_iter().enumerate() {
-                            self.validators_table
-                                .assign_with_region::<S, F>(region, offset + i, &row)?;
+                            self.validators_table.assign_with_region::<S, F>(
+                                region,
+                                offset + i,
+                                &row,
+                            )?;
                         }
 
                         offset += 1;
@@ -467,10 +470,10 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 (self.storage_phase1[1].into(), "exit_gt_target".to_string()),
                 (self.target_epoch.into(), "target_epoch".to_string()),
             ],
-            self.q_attest_commits
+            self.q_attest_digits
                 .iter()
                 .enumerate()
-                .map(|(i, &col)| { (col.into(), format!("q_attest_commits_{}", i)) }),
+                .map(|(i, &col)| { (col.into(), format!("q_attest_digits_{}", i)) }),
             self.byte_lookup
                 .iter()
                 .enumerate()
@@ -558,8 +561,8 @@ fn queries<S: Spec, F: Field>(
         q_first: meta.query_fixed(config.q_first, Rotation::cur()),
         q_last: meta.query_fixed(config.q_last, Rotation::cur()),
         q_committee_first: meta.query_fixed(config.q_committee_first, Rotation::cur()),
-        q_attest_commits: config
-            .q_attest_commits
+        q_attest_digits: config
+            .q_attest_digits
             .iter()
             .map(|col| meta.query_fixed(*col, Rotation::cur()))
             .collect_vec(),

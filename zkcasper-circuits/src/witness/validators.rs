@@ -60,11 +60,11 @@ impl Default for Validator {
 
 impl Validator {
     /// Get validaotor table record.
-    /// `attest_commits` - commitments to attestation bits of validator's committee.
+    /// `attest_digits` - digits composed from attestation bits of validator's committee.
     pub(crate) fn table_assignment<S: Spec, F: Field>(
         &self,
         randomness: Value<F>,
-        attest_commits: &mut [Vec<u64>],
+        attest_digits: &mut [Vec<u64>],
         committees_balances: &mut [u64],
     ) -> Vec<CasperEntityRow<F>> {
         let committee_pos = self.committee_pos::<S>();
@@ -73,12 +73,12 @@ impl Validator {
             "validator position out of bounds"
         );
 
-        let attest_commit_len = S::attest_digits_len::<F>();
-        let current_commit = committee_pos / F::NUM_BITS as usize;
-        // accumulate bits into current commit
-        let committee_attest_commits = &mut attest_commits[self.committee];
-        let commit = committee_attest_commits.get_mut(current_commit).unwrap();
-        *commit = *commit * 2 + self.is_attested as u64;
+        let attest_digit_len = S::attest_digits_len::<F>();
+        let current_digit = committee_pos / F::NUM_BITS as usize;
+        // accumulate bits into current digit
+        let committee_attest_digits = &mut attest_digits[self.committee];
+        let digit = committee_attest_digits.get_mut(current_digit).unwrap();
+        *digit = *digit * 2 + self.is_attested as u64;
         // accumulate balance of the current committee
         committees_balances[self.committee] += self.effective_balance * self.is_active as u64;
 
@@ -95,9 +95,9 @@ impl Validator {
                 randomness.map(|rnd| rlc::value(&self.pubkey[0..32], rnd)),
                 randomness.map(|rnd| rlc::value(&pad_to_ssz_chunk(&self.pubkey[32..48]), rnd)),
             ],
-            attest_commits: committee_attest_commits
+            attest_digits: committee_attest_digits
                 .iter()
-                .take(attest_commit_len)
+                .take(attest_digit_len)
                 .map(|b| Value::known(F::from(*b)))
                 .collect(),
             total_balance_acc: Value::known(F::from(committees_balances[self.committee])),
@@ -168,7 +168,7 @@ impl Committee {
             exit_epoch: Value::known(F::zero()),
             pubkey: [Value::known(F::zero()), Value::known(F::zero())],
             row_type: CasperTag::Committee,
-            attest_commits: todo!(),
+            attest_digits: todo!(),
             total_balance_acc: todo!(),
         }]
     }
@@ -183,12 +183,12 @@ impl<'a> CasperEntity<'a> {
     pub fn table_assignment<S: Spec, F: Field>(
         &self,
         randomness: Value<F>,
-        attest_commits: &mut [Vec<u64>],
+        attest_digits: &mut [Vec<u64>],
         committees_balances: &mut [u64],
     ) -> Vec<CasperEntityRow<F>> {
         match self {
             CasperEntity::Validator(v) => {
-                v.table_assignment::<S, F>(randomness, attest_commits, committees_balances)
+                v.table_assignment::<S, F>(randomness, attest_digits, committees_balances)
             }
             CasperEntity::Committee(c) => c.table_assignment(randomness),
         }
@@ -248,6 +248,6 @@ pub struct CasperEntityRow<F: Field> {
     pub(crate) activation_epoch: Value<F>,
     pub(crate) exit_epoch: Value<F>,
     pub(crate) pubkey: [Value<F>; 2],
-    pub(crate) attest_commits: Vec<Value<F>>,
+    pub(crate) attest_digits: Vec<Value<F>>,
     pub(crate) total_balance_acc: Value<F>,
 }

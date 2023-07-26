@@ -95,7 +95,7 @@ pub struct Queries<S: Spec, F: Field> {
     pub q_enabled: Expression<F>,
     pub q_first: Expression<F>,
     pub q_last: Expression<F>,
-    pub q_attest_commits: Vec<Expression<F>>,
+    pub q_attest_digits: Vec<Expression<F>>,
     pub q_committee_first: Expression<F>,
     pub target_epoch: Expression<F>,
     pub table: ValidatorTableQueries<S, F>,
@@ -114,8 +114,8 @@ impl<S: Spec, F: Field> Queries<S, F> {
         self.q_last.clone()
     }
 
-    pub fn q_attest_commits(&self, i: usize) -> Expression<F> {
-        self.q_attest_commits[i].clone()
+    pub fn q_attest_digits(&self, i: usize) -> Expression<F> {
+        self.q_attest_digits[i].clone()
     }
 
     pub fn q_committee_first(&self) -> Expression<F> {

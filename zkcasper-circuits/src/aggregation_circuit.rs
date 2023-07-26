@@ -184,9 +184,9 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                     }
                 }
 
-                // check that attestation bits used during pubkey aggregation are consistent validators table
-                // to reduce the number of equility constraints we check commitments to those bits
-                // commit is a simply 
+                // Check that attestation bits used during pubkey aggregation are consistent validators table
+                // to reduce the number of equility constraints we check digits composed from those bits.
+                // There will be S::MAX_VALIDATORS_PER_COMMITTEE / 254 digits per committee
                 for (i, commit) in attest_digits.into_iter().enumerate() {
                     let cells = commit
                         .into_iter()
@@ -200,7 +200,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                         .validators_table
                         .attest_digits_cells
                         .get(i)
-                        .expect("attest commit cells for validator id");
+                        .expect("attest digit cells for validator id");
 
                     for (left, &right) in cells.zip_eq(vs_table_cells) {
                         region.constrain_equal(left, right)?;
@@ -232,7 +232,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
         &self,
         builder: &mut GateThreadBuilder<F>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
-        attest_commits: &mut Vec<Vec<AssignedValue<F>>>,
+        attest_digits: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let witness_gen_only = builder.witness_gen_only();
         let range = self.range();
@@ -266,7 +266,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             let mut pubkeys_compressed_thread = vec![];
             let mut attested_pubkeys = vec![];
             let mut aggregation_bits = vec![];
-            let mut attest_commits_thread = iter::repeat_with(|| ctx.load_zero())
+            let mut attest_digits_thread = iter::repeat_with(|| ctx.load_zero())
                 .take(S::attest_digits_len::<F>())
                 .collect_vec();
 
@@ -324,10 +324,10 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
                 aggregation_bits.push(is_attested);
 
                 // accumulate bits into current commit
-                let current_commit = committee_idx / F::NUM_BITS as usize;
-                attest_commits_thread[current_commit] = gate.mul_add(
+                let current_digit = committee_idx / F::NUM_BITS as usize;
+                attest_digits_thread[current_digit] = gate.mul_add(
                     ctx,
-                    attest_commits_thread[current_commit],
+                    attest_digits_thread[current_digit],
                     QuantumCell::Constant(F::from(2u64)),
                     is_attested,
                 );
@@ -335,14 +335,14 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
             (
                 Self::aggregate_pubkeys(&g1_chip, ctx, attested_pubkeys, aggregation_bits),
                 pubkeys_compressed_thread,
-                attest_commits_thread,
+                attest_digits_thread,
             )
         })
         .into_iter()
-        .map(|(agg_pk, mut encoded_pubkeys, commits)| {
+        .map(|(agg_pk, mut encoded_pubkeys, digits)| {
             pubkeys_compressed.append(&mut encoded_pubkeys);
 
-            attest_commits.push(commits);
+            attest_digits.push(digits);
             agg_pk
         })
         .collect()
