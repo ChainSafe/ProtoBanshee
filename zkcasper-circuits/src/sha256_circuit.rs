@@ -1092,6 +1092,7 @@ pub struct Sha256Circuit<F: Field> {
 impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
     type Config = Sha256CircuitConfig<F>;
     type SynthesisArgs = ();
+    type Output = ();
 
     fn unusable_rows() -> usize {
         todo!()
@@ -1125,7 +1126,7 @@ impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
     /// Make the assignments to the KeccakCircuit
     fn synthesize_sub(
         &self,
-        config: &mut Self::Config,
+        config: &Self::Config,
         challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
@@ -1191,7 +1192,7 @@ mod tests {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             self.inner
-                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())
+                .synthesize_sub(&config.0, &config.1, &mut layouter, ())
         }
     }
 

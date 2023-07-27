@@ -17,7 +17,7 @@ use eth_types::*;
 
 use gadgets::util::{and, not, select, Expr};
 use halo2_proofs::{
-    circuit::{Layouter, Region, Value},
+    circuit::{Layouter, Region, Value, Cell},
     plonk::{Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells},
     poly::Rotation,
 };
@@ -294,27 +294,14 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 }
 
 impl<F: Field> ValidatorsCircuitConfig<F> {
-    fn assign<S: Spec>(
-        &mut self,
-        layouter: &mut impl Layouter<F>,
-        validators: &[Validator],
-        target_epoch: u64,
-        challange: Value<F>,
-    ) -> Result<(), Error> {
-        layouter.assign_region(
-            || "validators circuit",
-            |mut region| {
-                self.assign_with_region::<S>(&mut region, validators, target_epoch, challange)
-            },
-        )
-    }
-
     fn assign_with_region<S: Spec>(
-        &mut self,
+        &self,
         region: &mut Region<'_, F>,
         validators: &[Validator],
         target_epoch: u64,
         randomness: Value<F>,
+        pubkey_cells: &mut Vec<[Cell; 2]>,
+        attest_digits_cells: &mut Vec<Vec<Cell>>,
     ) -> Result<(), Error> {
         let padded_validators = pad_to_max_per_committee::<S>(validators.iter());
         let num_committees = padded_validators.len() / S::MAX_VALIDATORS_PER_COMMITTEE;
@@ -341,6 +328,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             0,
             || Value::known(F::one()),
         )?;
+
+       
 
         for i in 0..self.max_rows {
             region.assign_fixed(
@@ -391,8 +380,13 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                     &mut committees_balances,
                 );
                 for (i, row) in validator_rows.into_iter().enumerate() {
-                    self.validators_table
-                        .assign_with_region::<S, F>(region, offset + i, &row)?;
+                    self.validators_table.assign_with_region::<S, F>(
+                        region,
+                        offset + i,
+                        &row,
+                        pubkey_cells,
+                        attest_digits_cells,
+                    )?;
                 }
 
                 offset += 1;
@@ -450,6 +444,11 @@ pub struct ValidatorsCircuit<S: Spec, F> {
     _spec: PhantomData<S>,
 }
 
+pub struct ValidatorsCircuitOutput {
+    pub pubkey_cells: Vec<[Cell; 2]>,
+    pub attest_digits_cells: Vec<Vec<Cell>>
+}
+
 impl<S: Spec, F: Field> ValidatorsCircuit<S, F> {
     pub fn new(validators: Vec<Validator>, target_epoch: u64) -> Self {
         Self {
@@ -464,6 +463,7 @@ impl<S: Spec, F: Field> ValidatorsCircuit<S, F> {
 impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
     type Config = ValidatorsCircuitConfig<F>;
     type SynthesisArgs = ();
+    type Output = ValidatorsCircuitOutput;
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
         Self::new(block.validators.clone(), block.target_epoch)
@@ -480,21 +480,30 @@ impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
     /// Make the assignments to the ValidatorsCircuit
     fn synthesize_sub(
         &self,
-        config: &mut Self::Config,
+        config: &Self::Config,
         challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
-    ) -> Result<(), Error> {
+    ) -> Result<Self::Output, Error> {
         layouter.assign_region(
             || "validators circuit",
             |mut region| {
+                let mut pubkey_cells = vec![];
+                let mut attest_digits_cells = vec![];
+
                 config.assign_with_region::<S>(
                     &mut region,
                     &self.validators,
                     self.target_epoch,
                     challenges.sha256_input(),
+                    &mut pubkey_cells,
+                    &mut attest_digits_cells,
                 )?;
-                Ok(())
+
+                Ok(ValidatorsCircuitOutput{
+                    pubkey_cells,
+                    attest_digits_cells,
+                })
             },
         )
     }
@@ -576,7 +585,7 @@ mod tests {
                 challenge,
             )?;
             self.inner
-                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())?;
+                .synthesize_sub(&config.0, &config.1, &mut layouter, ())?;
             Ok(())
         }
     }

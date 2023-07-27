@@ -2,6 +2,7 @@ use crate::{
     gadget::crypto::{FpPoint, G1Chip, G1Point},
     table::{LookupTable, ValidatorsTable},
     util::{decode_into_field, print_fq_dev, Challenges, SubCircuit, SubCircuitConfig},
+    validators_circuit::ValidatorsCircuitOutput,
     witness::{self, Validator, DUMMY_VALIDATOR},
 };
 use eth_types::{Spec, *};
@@ -43,35 +44,6 @@ use std::{
 type FpChip<'chip, F, C: AppCurveExt> = halo2_ecc::fields::fp::FpChip<'chip, F, C::Fq>;
 
 #[derive(Clone, Debug)]
-pub struct AggregationCircuitConfig<F: Field> {
-    validators_table: ValidatorsTable,
-    range: RangeConfig<F>,
-}
-
-pub struct AggregationCircuitArgs<F: Field> {
-    pub validators_table: ValidatorsTable,
-    pub range: RangeConfig<F>,
-}
-
-impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
-    type ConfigArgs = AggregationCircuitArgs<F>;
-
-    fn new<S: Spec>(_meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
-        let validators_table = args.validators_table;
-        let range = args.range;
-
-        Self {
-            validators_table,
-            range,
-        }
-    }
-
-    fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-        self.validators_table.annotate_columns_in_region(region);
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct AggregationCircuitBuilder<'a, S: Spec + Sync, F: Field> {
     builder: RefCell<GateThreadBuilder<F>>,
     range: &'a RangeChip<F>,
@@ -82,36 +54,26 @@ pub struct AggregationCircuitBuilder<'a, S: Spec + Sync, F: Field> {
     _spec: PhantomData<S>,
 }
 
-impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
-    pub fn new(
-        builder: GateThreadBuilder<F>,
-        validators: &'a [Validator],
-        validators_y: Vec<<S::PubKeysCurve as AppCurveExt>::Fq>,
-        range: &'a RangeChip<F>,
-    ) -> Self {
-        let fp_chip = FpChip::<F, S::PubKeysCurve>::new(
-            range,
-            S::PubKeysCurve::LIMB_BITS,
-            S::PubKeysCurve::NUM_LIMBS,
-        );
-        Self {
-            builder: RefCell::new(builder),
-            range,
-            fp_chip,
-            validators,
-            validators_y,
-            _spec: PhantomData,
-        }
+impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'a, S, F> {
+    type Config = RangeConfig<F>;
+    type SynthesisArgs = ValidatorsCircuitOutput;
+    type Output = Vec<EcPoint<F, FpPoint<F>>>;
+
+    fn new_from_block(_block: &witness::Block<F>) -> Self {
+        todo!()
     }
 
-    pub fn synthesize(
+    fn synthesize_sub(
         &self,
-        config: &AggregationCircuitConfig<F>,
+        config: &Self::Config,
         challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
-    ) -> Result<Vec<EcPoint<F, FpPoint<F>>>, Error> {
+        ValidatorsCircuitOutput {
+            pubkey_cells,
+            attest_digits_cells,
+        }: Self::SynthesisArgs,
+    ) -> Result<Self::Output, Error> {
         config
-            .range
             .load_lookup_table(layouter)
             .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
@@ -119,7 +81,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
         layouter.assign_region(
             || "AggregationCircuitBuilder generated circuit",
             |mut region| {
-                config.annotate_columns_in_region(&mut region);
                 if first_pass {
                     first_pass = false;
                     return Ok(vec![]);
@@ -145,9 +106,9 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
                 let halo2_base::gates::builder::KeygenAssignments::<F> {
                     assigned_advices, ..
                 } = builder.assign_all(
-                    &config.range.gate,
-                    &config.range.lookup_advice,
-                    &config.range.q_lookup,
+                    &config.gate,
+                    &config.lookup_advice,
+                    &config.q_lookup,
                     &mut region,
                     Default::default(),
                 );
@@ -166,11 +127,8 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
                         .map(|&(cell, _)| cell);
 
                     // get the corresponding cached cells from the validators table
-                    let vs_table_cells = config
-                        .validators_table
-                        .pubkey_cells
-                        .get(i)
-                        .expect("pubkey cells for validator id");
+                    let vs_table_cells =
+                        pubkey_cells.get(i).expect("pubkey cells for validator id");
 
                     // enforce equality and order
                     // WARNING: the variable number of valdiators might cause issues in proof generation
@@ -192,9 +150,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
                         })
                         .map(|&(cell, _)| cell);
 
-                    let vs_table_cells = config
-                        .validators_table
-                        .attest_digits_cells
+                    let vs_table_cells = attest_digits_cells
                         .get(i)
                         .expect("attest digit cells for validator id");
 
@@ -206,6 +162,41 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
                 Ok(aggregated_pubkeys)
             },
         )
+    }
+
+    fn instance(&self) -> Vec<Vec<F>> {
+        vec![]
+    }
+
+    fn unusable_rows() -> usize {
+        todo!()
+    }
+
+    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
+        todo!()
+    }
+}
+
+impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
+    pub fn new(
+        builder: GateThreadBuilder<F>,
+        validators: &'a [Validator],
+        validators_y: Vec<<S::PubKeysCurve as AppCurveExt>::Fq>,
+        range: &'a RangeChip<F>,
+    ) -> Self {
+        let fp_chip = FpChip::<F, S::PubKeysCurve>::new(
+            range,
+            S::PubKeysCurve::LIMB_BITS,
+            S::PubKeysCurve::NUM_LIMBS,
+        );
+        Self {
+            builder: RefCell::new(builder),
+            range,
+            fp_chip,
+            validators,
+            validators_y,
+            _spec: PhantomData,
+        }
     }
 
     // Calculates y^2 = x^3 + 4 (the curve equation)
@@ -414,39 +405,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
     }
 }
 
-impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'a, S, F> {
-    type Config = AggregationCircuitConfig<F>;
-    type SynthesisArgs = ();
-
-    fn new_from_block(_block: &witness::Block<F>) -> Self {
-        todo!()
-    }
-
-    fn unusable_rows() -> usize {
-        todo!()
-    }
-
-    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
-        todo!()
-    }
-
-    fn synthesize_sub(
-        &self,
-        config: &mut Self::Config,
-        challenges: &Challenges<Value<F>>,
-        layouter: &mut impl Layouter<F>,
-        _: Self::SynthesisArgs,
-    ) -> Result<(), Error> {
-        self.synthesize(config, challenges, layouter);
-
-        Ok(())
-    }
-
-    fn instance(&self) -> Vec<Vec<F>> {
-        vec![]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -476,7 +434,11 @@ mod tests {
     }
 
     impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S> {
-        type Config = (AggregationCircuitConfig<F>, Challenges<Value<F>>);
+        type Config = (
+            RangeConfig<F>,
+            ValidatorsTable,
+            Challenges<Value<F>>,
+        );
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -494,16 +456,10 @@ mod tests {
                 Self::LOOKUP_BITS,
                 Self::K,
             );
-            let config = AggregationCircuitConfig::new::<S>(
-                meta,
-                AggregationCircuitArgs {
-                    validators_table,
-                    range,
-                },
-            );
 
             (
-                config,
+                range,
+                validators_table,
                 Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge())),
             )
         }
@@ -513,14 +469,13 @@ mod tests {
             mut config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            let challenge = config.1.sha256_input();
-            config.0.validators_table.dev_load::<S, _>(
-                &mut layouter,
-                self.inner.validators,
-                challenge,
-            )?;
+            let challenge = config.2.sha256_input();
+            let args =
+                config
+                    .1
+                    .dev_load::<S, _>(&mut layouter, self.inner.validators, challenge)?;
             self.inner
-                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())?;
+                .synthesize_sub(&config.0, &config.2, &mut layouter, args)?;
             Ok(())
         }
     }

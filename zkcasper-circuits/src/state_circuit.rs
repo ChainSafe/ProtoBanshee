@@ -183,6 +183,7 @@ impl<F: Field> StateCircuit<F> {
 impl<F: Field> SubCircuit<F> for StateCircuit<F> {
     type Config = StateCircuitConfig<F>;
     type SynthesisArgs = ();
+    type Output = ();
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
         Self::new(block.merkle_trace.clone())
@@ -198,7 +199,7 @@ impl<F: Field> SubCircuit<F> for StateCircuit<F> {
 
     fn synthesize_sub(
         &self,
-        config: &mut Self::Config,
+        config: &Self::Config,
         challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
@@ -258,7 +259,7 @@ mod tests {
                 .sha256_table
                 .dev_load(&mut layouter, &hash_inputs, challenge)?;
             self.state_circuit
-                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())?;
+                .synthesize_sub(&config.0, &config.1, &mut layouter, ())?;
             Ok(())
         }
     }
