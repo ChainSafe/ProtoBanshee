@@ -30,7 +30,9 @@ use eth_types::*;
 pub use gadgets::util::{and, not, or, rlc, select, sum, xor, Expr};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
-    plonk::{Challenge, ConstraintSystem, Error, Expression, SecondPhase, VirtualCells},
+    plonk::{
+        Challenge, ConstraintSystem, Error, Expression, FirstPhase, SecondPhase, VirtualCells,
+    },
 };
 
 pub(crate) fn query_expression<F: Field, T>(
@@ -51,48 +53,41 @@ pub(crate) fn random_linear_combine_bytes<F: Field>(bytes: [u8; 32], randomness:
 
 /// Randomness used in circuits.
 #[derive(Default, Clone, Copy, Debug)]
-pub struct Challenges<F: Field, T = Challenge> {
-    sha256_input: Value<F>,
-    lookup_input: T,
+pub struct Challenges<T = Challenge> {
+    sha256_input: T,
 }
 
-impl<F: Field> Challenges<F> {
+impl Challenges {
     /// Construct `Challenges` by allocating challenges in specific phases.
-    pub fn construct(meta: &mut ConstraintSystem<F>) -> Self {
+    pub fn construct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         Self {
-            sha256_input: Value::known(Sha256CircuitConfig::fixed_challenge()),
-            lookup_input: meta.challenge_usable_after(SecondPhase),
+            sha256_input: meta.challenge_usable_after(FirstPhase),
         }
     }
 
     /// Returns `Expression` of challenges from `ConstraintSystem`.
-    pub fn exprs(&self, meta: &mut ConstraintSystem<F>) -> Challenges<F, Expression<F>> {
-        let [lookup_input] = query_expression(meta, |meta| {
-            [self.lookup_input].map(|challenge| meta.query_challenge(challenge))
+    pub fn exprs<F: Field>(&self, meta: &mut ConstraintSystem<F>) -> Challenges<Expression<F>> {
+        let [sha256_input] = query_expression(meta, |meta| {
+            [self.sha256_input].map(|challenge| meta.query_challenge(challenge))
         });
-        Challenges {
-            sha256_input: Value::known(Sha256CircuitConfig::fixed_challenge()),
-            lookup_input,
-        }
+        Challenges { sha256_input }
     }
 
     /// Returns `Value` of challenges from `Layouter`.
-    pub fn values(&self, layouter: &mut impl Layouter<F>) -> Challenges<F, Value<F>> {
+    pub fn values<F: Field>(&self, layouter: &mut impl Layouter<F>) -> Challenges<Value<F>> {
         Challenges {
-            sha256_input: Value::known(Sha256CircuitConfig::fixed_challenge()),
-            lookup_input: layouter.get_challenge(self.lookup_input),
+            sha256_input: layouter.get_challenge(self.sha256_input),
         }
     }
 }
 
-impl<F: Field, T: Clone> Challenges<F, T> {
-    /// Returns challenge of `lookup_input`.
-    pub fn lookup_input(&self) -> T {
-        self.lookup_input.clone()
+impl<T: Clone> Challenges<T> {
+    pub fn sha256_input(&self) -> T {
+        self.sha256_input.clone()
     }
 
-    pub fn sha256_input(&self) -> Value<F> {
-        self.sha256_input
+    pub(crate) fn mock(sha256_input: T) -> Self {
+        Self { sha256_input }
     }
 }
 
@@ -126,7 +121,7 @@ pub trait SubCircuit<F: Field> {
     fn synthesize_sub(
         &self,
         config: &mut Self::Config,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         args: Self::SynthesisArgs,
     ) -> Result<(), Error>;

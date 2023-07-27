@@ -481,7 +481,7 @@ impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
     fn synthesize_sub(
         &self,
         config: &mut Self::Config,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
     ) -> Result<(), Error> {
@@ -527,7 +527,9 @@ fn queries<S: Spec, F: Field>(
 
 mod tests {
     use super::*;
-    use crate::{table::state_table::StateTables, witness::MerkleTrace};
+    use crate::{
+        sha256_circuit::Sha256CircuitConfig, table::state_table::StateTables, witness::MerkleTrace,
+    };
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
@@ -544,7 +546,7 @@ mod tests {
     }
 
     impl<S: Spec, F: Field> Circuit<F> for TestValidators<S, F> {
-        type Config = (ValidatorsCircuitConfig<F>, Challenges<F>);
+        type Config = (ValidatorsCircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -558,7 +560,7 @@ mod tests {
 
             (
                 ValidatorsCircuitConfig::new::<S>(meta, args),
-                Challenges::construct(meta),
+                Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge())),
             )
         }
 
@@ -573,12 +575,8 @@ mod tests {
                 &self.state_tree_trace,
                 challenge,
             )?;
-            self.inner.synthesize_sub(
-                &mut config.0,
-                &config.1.values(&mut layouter),
-                &mut layouter,
-                (),
-            )?;
+            self.inner
+                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())?;
             Ok(())
         }
     }

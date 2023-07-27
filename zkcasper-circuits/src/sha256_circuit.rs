@@ -9,7 +9,7 @@ pub mod util;
 use std::marker::PhantomData;
 
 use crate::{
-    table::{LookupTable, SHA256Table},
+    table::{LookupTable, Sha256Table},
     util::{not, BaseConstraintBuilder, Challenges, Expr, SubCircuit, SubCircuitConfig},
     witness::{self, HashInput},
 };
@@ -60,13 +60,13 @@ pub struct Sha256CircuitConfig<F> {
     is_right_value: Column<Advice>,
 
     /// The columns for bytes of hash results
-    pub hash_table: SHA256Table,
+    pub hash_table: Sha256Table,
     pub final_hash_bytes: [Column<Advice>; NUM_BYTES_FINAL_HASH],
     _marker: PhantomData<F>,
 }
 
 impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
-    type ConfigArgs = SHA256Table;
+    type ConfigArgs = Sha256Table;
 
     fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         // consts
@@ -1126,7 +1126,7 @@ impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
     fn synthesize_sub(
         &self,
         config: &mut Self::Config,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
     ) -> Result<(), Error> {
@@ -1146,7 +1146,7 @@ impl<F: Field> Sha256Circuit<F> {
     }
 
     /// Sets the witness using the data to be hashed
-    pub(crate) fn generate_witness(&self, _challenges: Challenges<F, Value<F>>) -> Vec<ShaRow<F>> {
+    pub(crate) fn generate_witness(&self, _challenges: Challenges<Value<F>>) -> Vec<ShaRow<F>> {
         multi_sha256(&self.inputs, Sha256CircuitConfig::fixed_challenge())
     }
 }
@@ -1170,7 +1170,7 @@ mod tests {
     }
 
     impl<F: Field> Circuit<F> for TestSha256<F> {
-        type Config = (Sha256CircuitConfig<F>, Challenges<F>);
+        type Config = (Sha256CircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -1178,10 +1178,10 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let hash_table = SHA256Table::construct(meta);
+            let hash_table = Sha256Table::construct(meta);
             (
                 Sha256CircuitConfig::new::<S>(meta, hash_table),
-                Challenges::construct(meta),
+                Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge())),
             )
         }
 
@@ -1190,12 +1190,8 @@ mod tests {
             mut config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            self.inner.synthesize_sub(
-                &mut config.0,
-                &config.1.values(&mut layouter),
-                &mut layouter,
-                (),
-            )
+            self.inner
+                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())
         }
     }
 

@@ -1,4 +1,10 @@
-use crate::{table::state_table::StateTable, util::ConstrainBuilderCommon};
+use crate::{
+    table::{
+        state_table::{StateTable, StateTables, StateTreeLevel},
+        Sha256Table,
+    },
+    util::ConstrainBuilderCommon,
+};
 
 pub mod cell_manager;
 
@@ -10,7 +16,7 @@ use log::info;
 use merkle_tree::TreeLevel;
 
 use crate::{
-    table::{LookupTable, SHA256Table},
+    table::LookupTable,
     util::{Challenges, SubCircuit, SubCircuitConfig},
     witness::{self, MerkleTrace},
 };
@@ -30,19 +36,19 @@ use std::{
 pub const TREE_LEVEL_AUX_COLUMNS: usize = 1;
 
 #[derive(Clone, Debug)]
-pub struct StateSSZCircuitConfig<F: Field> {
+pub struct StateCircuitConfig<F: Field> {
     tree: Vec<TreeLevel<F>>,
-    sha256_table: SHA256Table,
-    pub state_table: [StateTable; 2],
+    sha256_table: Sha256Table,
+    pub state_tables: StateTables,
     // state_root: Column<Instance>
 }
 
-pub struct StateSSZCircuitArgs {
-    pub sha256_table: SHA256Table,
+pub struct StateCircuitArgs {
+    pub sha256_table: Sha256Table,
 }
 
-impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
-    type ConfigArgs = StateSSZCircuitArgs;
+impl<F: Field> SubCircuitConfig<F> for StateCircuitConfig<F> {
+    type ConfigArgs = StateCircuitArgs;
 
     fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let sha256_table = args.sha256_table;
@@ -51,10 +57,11 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
         let validators_level =
             TreeLevel::configure(meta, S::STATE_TREE_LEVEL_VALIDATORS, 0, 0, true);
 
-        let state_table: [StateTable; 2] = [
-            pubkeys_level.clone().into(),
-            validators_level.clone().into(),
-        ];
+        let state_tables = [
+            (StateTreeLevel::PubKeys, pubkeys_level.clone().into()),
+            (StateTreeLevel::Validators, validators_level.clone().into()),
+        ]
+        .into();
 
         let mut tree = vec![pubkeys_level, validators_level];
 
@@ -69,9 +76,6 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
 
         // Annotate circuit
         sha256_table.annotate_columns(meta);
-        state_table
-            .iter()
-            .for_each(|table| table.annotate_columns(meta));
 
         for depth in (2..S::STATE_TREE_DEPTH).rev() {
             let depth = depth - 1;
@@ -106,17 +110,15 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
 
         println!("state circuit degree={}", meta.degree());
 
-        StateSSZCircuitConfig {
+        StateCircuitConfig {
             tree,
             sha256_table,
-            state_table,
+            state_tables,
         }
     }
 
     fn annotate_columns_in_region(&self, region: &mut Region<'_, F>) {
-        self.state_table
-            .iter()
-            .for_each(|table| table.annotate_columns_in_region(region));
+        self.state_tables.annotate_columns_in_region(region);
         self.sha256_table.annotate_columns_in_region(region);
         for level in self.tree.iter() {
             level.annotate_columns_in_region(region);
@@ -124,7 +126,7 @@ impl<F: Field> SubCircuitConfig<F> for StateSSZCircuitConfig<F> {
     }
 }
 
-impl<F: Field> StateSSZCircuitConfig<F> {
+impl<F: Field> StateCircuitConfig<F> {
     fn assign(
         &self,
         layouter: &mut impl Layouter<F>,
@@ -164,12 +166,12 @@ impl<F: Field> StateSSZCircuitConfig<F> {
 
 /// Circuit for verify Merkle-multi proof of the SSZ Merkelized `BeaconState`
 #[derive(Clone, Default, Debug)]
-pub struct StateSSZCircuit<F: Field> {
+pub struct StateCircuit<F: Field> {
     trace: MerkleTrace,
     _f: PhantomData<F>,
 }
 
-impl<F: Field> StateSSZCircuit<F> {
+impl<F: Field> StateCircuit<F> {
     pub fn new(trace: MerkleTrace) -> Self {
         Self {
             trace,
@@ -178,8 +180,8 @@ impl<F: Field> StateSSZCircuit<F> {
     }
 }
 
-impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
-    type Config = StateSSZCircuitConfig<F>;
+impl<F: Field> SubCircuit<F> for StateCircuit<F> {
+    type Config = StateCircuitConfig<F>;
     type SynthesisArgs = ();
 
     fn new_from_block(block: &witness::Block<F>) -> Self {
@@ -197,7 +199,7 @@ impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
     fn synthesize_sub(
         &self,
         config: &mut Self::Config,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
     ) -> Result<(), Error> {
@@ -212,7 +214,7 @@ impl<F: Field> SubCircuit<F> for StateSSZCircuit<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::witness::MerkleTrace;
+    use crate::{sha256_circuit::Sha256CircuitConfig, witness::MerkleTrace};
     use eth_types::Test as S;
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
@@ -220,13 +222,13 @@ mod tests {
     use std::{fs, marker::PhantomData};
 
     #[derive(Debug, Clone)]
-    struct TestStateSSZ<F: Field> {
-        state_circuit: StateSSZCircuit<F>,
+    struct TestState<F: Field> {
+        state_circuit: StateCircuit<F>,
         _f: PhantomData<F>,
     }
 
-    impl<F: Field> Circuit<F> for TestStateSSZ<F> {
-        type Config = (StateSSZCircuitConfig<F>, Challenges<F>);
+    impl<F: Field> Circuit<F> for TestState<F> {
+        type Config = (StateCircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -234,12 +236,14 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            let sha256_table = SHA256Table::construct(meta);
+            let sha256_table = Sha256Table::construct(meta);
 
-            let config =
-                { StateSSZCircuitConfig::new::<S>(meta, StateSSZCircuitArgs { sha256_table }) };
+            let config = { StateCircuitConfig::new::<S>(meta, StateCircuitArgs { sha256_table }) };
 
-            (config, Challenges::construct(meta))
+            (
+                config,
+                Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge())),
+            )
         }
 
         fn synthesize(
@@ -253,24 +257,20 @@ mod tests {
                 .0
                 .sha256_table
                 .dev_load(&mut layouter, &hash_inputs, challenge)?;
-            self.state_circuit.synthesize_sub(
-                &mut config.0,
-                &config.1.values(&mut layouter),
-                &mut layouter,
-                (),
-            )?;
+            self.state_circuit
+                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())?;
             Ok(())
         }
     }
 
     #[test]
-    fn test_state_ssz_circuit() {
+    fn test_state_circuit() {
         let k = 10;
         let merkle_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
-        let circuit = TestStateSSZ::<Fr> {
-            state_circuit: StateSSZCircuit::new(merkle_trace),
+        let circuit = TestState::<Fr> {
+            state_circuit: StateCircuit::new(merkle_trace),
             _f: PhantomData,
         };
 

@@ -210,3 +210,9 @@ impl StateTables {
         });
     }
 }
+
+impl<I: IntoIterator<Item = (StateTreeLevel, StateTable)>> From<I> for StateTables {
+    fn from(levels: I) -> Self {
+        Self(levels.into_iter().collect())
+    }
+}

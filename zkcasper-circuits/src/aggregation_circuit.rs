@@ -72,7 +72,7 @@ impl<F: Field> SubCircuitConfig<F> for AggregationCircuitConfig<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec + Sync> {
+pub struct AggregationCircuitBuilder<'a, S: Spec + Sync, F: Field> {
     builder: RefCell<GateThreadBuilder<F>>,
     range: &'a RangeChip<F>,
     fp_chip: FpChip<'a, F, S::PubKeysCurve>,
@@ -82,7 +82,7 @@ pub struct AggregationCircuitBuilder<'a, F: Field, S: Spec + Sync> {
     _spec: PhantomData<S>,
 }
 
-impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
+impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
     pub fn new(
         builder: GateThreadBuilder<F>,
         validators: &'a [Validator],
@@ -107,7 +107,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
     pub fn synthesize(
         &self,
         config: &AggregationCircuitConfig<F>,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) -> Result<Vec<EcPoint<F, FpPoint<F>>>, Error> {
         config
@@ -414,7 +414,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, F, S> {
     }
 }
 
-impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'a, F, S> {
+impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'a, S, F> {
     type Config = AggregationCircuitConfig<F>;
     type SynthesisArgs = ();
 
@@ -433,7 +433,7 @@ impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'
     fn synthesize_sub(
         &self,
         config: &mut Self::Config,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
     ) -> Result<(), Error> {
@@ -451,6 +451,8 @@ impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'
 mod tests {
     use std::fs;
 
+    use crate::sha256_circuit::Sha256CircuitConfig;
+
     use super::*;
     use eth_types::Test as S;
     use group::{prime::PrimeCurveAffine, Group};
@@ -462,7 +464,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestCircuit<'a, F: Field, S: Spec + Sync> {
-        inner: AggregationCircuitBuilder<'a, F, S>,
+        inner: AggregationCircuitBuilder<'a, S, F>,
     }
 
     impl<'a, F: Field, S: Spec + Sync> TestCircuit<'a, F, S> {
@@ -474,7 +476,7 @@ mod tests {
     }
 
     impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S> {
-        type Config = (AggregationCircuitConfig<F>, Challenges<F>);
+        type Config = (AggregationCircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -500,7 +502,10 @@ mod tests {
                 },
             );
 
-            (config, Challenges::construct(meta))
+            (
+                config,
+                Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge())),
+            )
         }
 
         fn synthesize(
@@ -514,12 +519,8 @@ mod tests {
                 self.inner.validators,
                 challenge,
             )?;
-            self.inner.synthesize_sub(
-                &mut config.0,
-                &config.1.values(&mut layouter),
-                &mut layouter,
-                (),
-            )?;
+            self.inner
+                .synthesize_sub(&mut config.0, &config.1, &mut layouter, ())?;
             Ok(())
         }
     }

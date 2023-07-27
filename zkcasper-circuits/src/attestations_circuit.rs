@@ -80,7 +80,7 @@ impl<F: Field> SubCircuitConfig<F> for AttestationsCircuitConfig<F> {
 }
 
 #[allow(type_alias_bounds)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AttestationsCircuitBuilder<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
 where
     [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
@@ -129,7 +129,7 @@ where
         &self,
         aggregated_pubkeys: Vec<G1Point<F>>,
         config: &AttestationsCircuitConfig<F>,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
     ) {
         assert!(!self.attestations.is_empty(), "no attestations supplied");
@@ -368,7 +368,7 @@ where
     fn synthesize_sub(
         &self,
         config: &mut Self::Config,
-        challenges: &Challenges<F, Value<F>>,
+        challenges: &Challenges<Value<F>>,
         layouter: &mut impl Layouter<F>,
         pubkeys: Self::SynthesisArgs,
     ) -> Result<(), Error> {
@@ -412,7 +412,7 @@ mod bls12_381 {
 mod tests {
     use std::fs;
 
-    use crate::{table::SHA256Table, witness::Validator};
+    use crate::{table::Sha256Table, witness::Validator};
 
     use super::*;
     use eth_types::Test;
@@ -451,7 +451,7 @@ mod tests {
             FieldExtConstructor<<S::SiganturesCurve as AppCurveExt>::Fp, 2>,
         [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
     {
-        type Config = (AttestationsCircuitConfig<F>, Challenges<F>);
+        type Config = (AttestationsCircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -468,7 +468,7 @@ mod tests {
                 Self::LOOKUP_BITS,
                 Self::K,
             );
-            let hash_table = SHA256Table::construct(meta);
+            let hash_table = Sha256Table::construct(meta);
             let sha256_config = Sha256CircuitConfig::new::<Test>(meta, hash_table);
             let config = AttestationsCircuitConfig::new::<Test>(
                 meta,
@@ -478,7 +478,7 @@ mod tests {
                 },
             );
 
-            (config, Challenges::construct(meta))
+            (config, Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge())))
         }
 
         fn synthesize(
@@ -497,7 +497,7 @@ mod tests {
             drop(builder);
             self.inner.synthesize_sub(
                 &mut config.0,
-                &config.1.values(&mut layouter),
+                &config.1,
                 &mut layouter,
                 agg_pubkeys,
             )?;

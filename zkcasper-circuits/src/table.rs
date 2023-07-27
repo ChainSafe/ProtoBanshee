@@ -10,7 +10,7 @@ pub(crate) mod sha256_table;
 pub(crate) mod state_table;
 pub(crate) mod validators_table;
 
-pub(crate) use sha256_table::SHA256Table;
+pub(crate) use sha256_table::Sha256Table;
 pub(crate) use validators_table::ValidatorsTable;
 
 /// Trait used to define lookup tables
