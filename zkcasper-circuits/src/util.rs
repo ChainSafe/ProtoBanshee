@@ -1,6 +1,8 @@
 //! Common utility traits and functions.
 
 mod cell_manager;
+use std::{rc::Rc, cell::RefCell};
+
 pub use cell_manager::*;
 
 mod constraint_builder;
@@ -9,7 +11,8 @@ pub use constraint_builder::*;
 mod conversion;
 pub use conversion::*;
 use halo2_base::{
-    safe_types::{GateInstructions, RangeInstructions},
+    gates::builder::GateThreadBuilder,
+    safe_types::{GateInstructions, RangeChip, RangeInstructions},
     utils::ScalarField,
     AssignedValue, Context, QuantumCell,
 };
@@ -96,7 +99,10 @@ impl<T: Clone> Challenges<T> {
 /// other via lookup tables and/or shared public inputs.  This type must contain
 /// all the inputs required to synthesize this circuit (and the contained
 /// table(s) if any).
-pub trait SubCircuit<F: Field> {
+pub trait SubCircuit<'a, S: Spec, F: Field>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
     /// Configuration of the SubCircuit.
     type Config;
 
@@ -106,7 +112,7 @@ pub trait SubCircuit<F: Field> {
     type Output;
 
     /// Create a new SubCircuit from a witness Block
-    fn new_from_block(block: &witness::Block<F>) -> Self;
+    fn new_from_state(block: &'a witness::State<S, F>) -> Self;
 
     /// Assign only the columns used by this sub-circuit.  This includes the
     /// columns that belong to the exposed lookup table contained within, if
@@ -131,7 +137,48 @@ pub trait SubCircuit<F: Field> {
 
     /// Return the minimum number of rows required to prove the block.
     /// Row numbers without/with padding are both returned.
-    fn min_num_rows_block(block: &witness::Block<F>) -> (usize, usize);
+    fn min_num_rows_state(block: &witness::State<S, F>) -> (usize, usize);
+}
+
+/// Analog of [`SubCircuit`] for halo2-lib circuits.
+pub trait SubCircuitBuilder<'a, S: Spec, F: Field>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
+    /// Configuration of the SubCircuitBuilder.
+    type Config;
+
+    /// Arguments for [`synthesize_sub`].
+    type SynthesisArgs;
+
+    type Output;
+
+    /// Create a new SubCircuitBuilder from a witness Block
+    fn new_from_state(
+        builder: Rc<RefCell<GateThreadBuilder<F>>>,
+        block: &'a witness::State<S, F>,
+    ) -> Self;
+
+    fn synthesize_sub(
+        &self,
+        config: &Self::Config,
+        challenges: &Challenges<Value<F>>,
+        layouter: &mut impl Layouter<F>,
+        args: Self::SynthesisArgs,
+    ) -> Result<Self::Output, Error>;
+
+    /// Returns the instance columns required for this circuit.
+    fn instance(&self) -> Vec<Vec<F>> {
+        vec![]
+    }
+
+    /// Returns number of unusable rows of the SubCircuit, which should be
+    /// `meta.blinding_factors() + 1`.
+    fn unusable_rows() -> usize;
+
+    /// Return the minimum number of rows required to prove the block.
+    /// Row numbers without/with padding are both returned.
+    fn min_num_rows_state(block: &witness::State<S, F>) -> (usize, usize);
 }
 
 /// SubCircuit configuration

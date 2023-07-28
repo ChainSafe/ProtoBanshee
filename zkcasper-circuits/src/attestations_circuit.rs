@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, marker::PhantomData, ops::Neg, vec};
+use std::{cell::RefCell, collections::HashMap, marker::PhantomData, ops::Neg, rc::Rc, vec};
 
 use crate::{
     gadget::crypto::{
@@ -6,7 +6,9 @@ use crate::{
         HashToCurveCache, HashToCurveChip, Sha256Chip,
     },
     sha256_circuit::Sha256CircuitConfig,
-    util::{print_fq2_dev, Challenges, IntoWitness, SubCircuit, SubCircuitConfig},
+    util::{
+        print_fq2_dev, Challenges, IntoWitness, SubCircuit, SubCircuitBuilder, SubCircuitConfig,
+    },
     witness::{self, Attestation, HashInput, HashInputChunk},
 };
 use eth_types::{AppCurveExt, Field, Spec};
@@ -81,21 +83,17 @@ impl<F: Field> SubCircuitConfig<F> for AttestationsCircuitConfig<F> {
 
 #[allow(type_alias_bounds)]
 #[derive(Clone, Debug)]
-pub struct AttestationsCircuitBuilder<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
+pub struct AttestationsCircuitBuilder<'a, S: Spec, F: Field>
 where
     [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
 {
-    builder: RefCell<GateThreadBuilder<F>>,
+    builder: Rc<RefCell<GateThreadBuilder<F>>>,
     attestations: &'a [Attestation<S>],
-    range: &'a RangeChip<F>,
-    fp_chip: FpChip<'a, F, S::SiganturesCurve>,
     zero_hashes: RefCell<HashMap<usize, HashInputChunk<QuantumCell<F>>>>,
     _spec: PhantomData<S>,
 }
 
-
-impl<'a, S: Spec, F: Field, const MAX_VALIDATORS_PER_COMMITTEE: usize> SubCircuit<F>
-    for AttestationsCircuitBuilder<'a, S, F, MAX_VALIDATORS_PER_COMMITTEE>
+impl<'a, S: Spec, F: Field> SubCircuitBuilder<'a, S, F> for AttestationsCircuitBuilder<'a, S, F>
 where
     S::SiganturesCurve: BlsCurveExt,
     <S::SiganturesCurve as AppCurveExt>::Fq:
@@ -106,8 +104,11 @@ where
     type SynthesisArgs = Vec<G1Point<F>>;
     type Output = ();
 
-    fn new_from_block(_block: &witness::Block<F>) -> Self {
-        todo!()
+    fn new_from_state(
+        builder: Rc<RefCell<GateThreadBuilder<F>>>,
+        block: &'a witness::State<S, F>,
+    ) -> Self {
+        Self::new(builder, &block.attestations)
     }
 
     /// Assumptions:
@@ -132,21 +133,26 @@ where
             .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
 
+        let range = RangeChip::default(config.range.lookup_bits());
+        let fp_chip = FpChip::<F, S::SiganturesCurve>::new(
+            &range,
+            S::SiganturesCurve::LIMB_BITS,
+            S::SiganturesCurve::NUM_LIMBS,
+        );
+        let fp2_chip = Fp2Chip::<F, S::SiganturesCurve>::new(&fp_chip);
+        let g1_chip = EccChip::new(fp2_chip.fp_chip());
+        let g2_chip = EccChip::new(&fp2_chip);
+        let fp12_chip = Fp12Chip::<F, S::SiganturesCurve>::new(fp2_chip.fp_chip());
+        let bls_chip = S::SiganturesCurve::new_signature_chip(fp2_chip.fp_chip());
         let sha256_chip = Sha256Chip::new(
             &config.sha256_config,
-            self.range(),
+            &range,
             challenges.sha256_input(),
             None,
             0,
         );
-
         let hasher = CachedHashChip::new(&sha256_chip);
-        let fp2_chip = Fp2Chip::<F, S::SiganturesCurve>::new(self.fp_chip());
-        let g1_chip = EccChip::new(fp2_chip.fp_chip());
-        let g2_chip = EccChip::new(&fp2_chip);
-        let fp12_chip = Fp12Chip::<F, S::SiganturesCurve>::new(fp2_chip.fp_chip());
         let h2c_chip = HashToCurveChip::<S, F, _>::new(&sha256_chip);
-        let bls_chip = S::SiganturesCurve::new_signature_chip(fp2_chip.fp_chip());
 
         layouter.assign_region(
             || "AggregationCircuitBuilder generated circuit",
@@ -220,7 +226,7 @@ where
 
                     let msghash = h2c_chip.hash_to_curve::<S::SiganturesCurve>(
                         signing_root.into(),
-                        self.fp_chip(),
+                        &fp_chip,
                         ctx,
                         &mut region,
                         &mut h2c_cache,
@@ -255,13 +261,12 @@ where
         todo!()
     }
 
-    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
         todo!()
     }
 }
 
-impl<'a, S: Spec, F: Field, const COMMITTEE_MAX_SIZE: usize>
-    AttestationsCircuitBuilder<'a, S, F, COMMITTEE_MAX_SIZE>
+impl<'a, S: Spec, F: Field> AttestationsCircuitBuilder<'a, S, F>
 where
     S::SiganturesCurve: BlsCurveExt,
     <S::SiganturesCurve as AppCurveExt>::Fq:
@@ -269,20 +274,12 @@ where
     [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
 {
     pub fn new(
-        builder: GateThreadBuilder<F>,
+        builder: Rc<RefCell<GateThreadBuilder<F>>>,
         attestations: &'a [Attestation<S>],
-        range: &'a RangeChip<F>,
     ) -> Self {
-        let fp_chip = FpChip::<F, S::SiganturesCurve>::new(
-            range,
-            S::SiganturesCurve::LIMB_BITS,
-            S::SiganturesCurve::NUM_LIMBS,
-        );
         Self {
-            builder: RefCell::new(builder),
-            range,
+            builder,
             attestations,
-            fp_chip,
             zero_hashes: Default::default(),
             _spec: PhantomData,
         }
@@ -353,14 +350,6 @@ where
 
         Ok(root.bytes)
     }
-
-    fn fp_chip(&self) -> &FpChip<'_, F, S::SiganturesCurve> {
-        &self.fp_chip
-    }
-
-    fn range(&self) -> &RangeChip<F> {
-        self.range
-    }
 }
 
 mod bls12_381 {
@@ -406,15 +395,15 @@ mod tests {
     use pasta_curves::group::UncompressedEncoding;
 
     #[derive(Debug)]
-    struct TestCircuit<'a, S: Spec, F: Field, const CMS: usize>
+    struct TestCircuit<'a, S: Spec, F: Field>
     where
         [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
     {
-        inner: AttestationsCircuitBuilder<'a, S, F, CMS>,
+        inner: AttestationsCircuitBuilder<'a, S, F>,
         agg_pubkeys: Vec<<S::PubKeysCurve as AppCurveExt>::Affine>,
     }
 
-    impl<'a, S: Spec, F: Field, const CMS: usize> TestCircuit<'a, S, F, CMS>
+    impl<'a, S: Spec, F: Field> TestCircuit<'a, S, F>
     where
         [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
     {
@@ -425,7 +414,7 @@ mod tests {
         const K: usize = 17;
     }
 
-    impl<'a, S: Spec, F: Field, const CMS: usize> Circuit<F> for TestCircuit<'a, S, F, CMS>
+    impl<'a, S: Spec, F: Field> Circuit<F> for TestCircuit<'a, S, F>
     where
         S::SiganturesCurve: BlsCurveExt,
         <S::SiganturesCurve as AppCurveExt>::Fq:
@@ -470,7 +459,13 @@ mod tests {
             mut config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            let g1_chip = EccChip::new(self.inner.fp_chip());
+            let range = RangeChip::default(config.0.range.lookup_bits());
+            let fp_chip = FpChip::<F, S::SiganturesCurve>::new(
+                &range,
+                S::SiganturesCurve::LIMB_BITS,
+                S::SiganturesCurve::NUM_LIMBS,
+            );
+            let g1_chip = EccChip::new(&fp_chip);
             let mut builder = self.inner.builder.borrow_mut();
             let ctx = builder.main(0);
             let agg_pubkeys = self
@@ -487,11 +482,8 @@ mod tests {
 
     #[test]
     fn test_attestations_circuit() {
-        let k = TestCircuit::<Test, Fr, { Test::MAX_VALIDATORS_PER_COMMITTEE }>::K;
+        let k = TestCircuit::<Test, Fr>::K;
 
-        let range = RangeChip::default(
-            TestCircuit::<Test, Fr, { Test::MAX_VALIDATORS_PER_COMMITTEE }>::LOOKUP_BITS,
-        );
         let builder = GateThreadBuilder::new(false);
         builder.config(k, None);
         let attestations: Vec<Attestation<Test>> =
@@ -506,8 +498,9 @@ mod tests {
             .map(|b| G1Affine::from_uncompressed(&b.as_slice().try_into().unwrap()).unwrap())
             .collect_vec();
 
-        let circuit = TestCircuit::<'_, Test, Fr, { Test::MAX_VALIDATORS_PER_COMMITTEE }> {
-            inner: AttestationsCircuitBuilder::new(builder, &attestations, &range),
+        let builder = Rc::from(RefCell::from(builder));
+        let circuit = TestCircuit::<'_, Test, Fr> {
+            inner: AttestationsCircuitBuilder::new(builder, &attestations),
             agg_pubkeys,
         };
 

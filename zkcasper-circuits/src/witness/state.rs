@@ -1,7 +1,8 @@
 use crate::sha256_circuit::Sha256CircuitConfig;
 
+use super::{Attestation, HashInput};
 use super::{MerkleTrace, Validator};
-use eth_types::Field;
+use eth_types::{Field, Spec};
 use ethereum_consensus::bellatrix::mainnet;
 use ethereum_consensus::bellatrix::BeaconState;
 
@@ -9,7 +10,7 @@ use ethereum_consensus::bellatrix::BeaconState;
 /// Block is the struct used by all circuits, which contains all the needed
 /// data for witness generation.
 #[derive(Debug, Clone, Default)]
-pub struct Block<F: Field> {
+pub struct State<S: Spec, F: Field> where [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]: {
     /// The randomness for random linear combination
     pub randomness: F,
 
@@ -18,11 +19,15 @@ pub struct Block<F: Field> {
 
     pub validators: Vec<Validator>,
 
+    pub attestations: Vec<Attestation<S>>,
+
     pub merkle_trace: MerkleTrace,
+
+    pub sha256_inputs: Vec<HashInput<u8>>,
 }
 
 #[allow(non_camel_case_types)]
-impl<F: Field> Block<F> {
+impl<S: Spec, F: Field> State<S, F> where [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]: {
     fn from_beacon_state<
         SLOTS_PER_HISTORICAL_ROOT,
         HISTORICAL_ROOTS_LIMIT,
@@ -52,14 +57,16 @@ impl<F: Field> Block<F> {
             { mainnet::MAX_TRANSACTIONS_PER_PAYLOAD },
         >,
     ) -> Self {
-        let block = Block {
+        let block = State::<S, F> {
             randomness: Sha256CircuitConfig::fixed_challenge(),
             // FIXME: this is a problem because the struct definition above says the
             // target_epoch is u64, but here it's returning an `F` type, which is not trait bound
             // to be *convertible* into a u64. Is that what we want?
             target_epoch: beacon_state.current_justified_checkpoint.epoch,
             validators: Validator::build_from_validators(beacon_state.validators.iter()),
+            attestations: vec![],
             merkle_trace: MerkleTrace::empty(),
+            sha256_inputs: vec![],
         };
         block
     }

@@ -1,5 +1,14 @@
+use std::{cell::RefCell, rc::Rc};
+
 use eth_types::{AppCurveExt, Field, Spec};
-use halo2_base::gates::range::{RangeConfig, RangeStrategy};
+use ff::PrimeField;
+use halo2_base::{
+    gates::{
+        builder::GateThreadBuilder,
+        range::{RangeConfig, RangeStrategy},
+    },
+    safe_types::RangeChip,
+};
 use halo2_ecc::fields::FieldExtConstructor;
 use halo2_proofs::{
     circuit::{SimpleFloorPlanner, Value},
@@ -14,9 +23,9 @@ use crate::{
     sha256_circuit::{Sha256Circuit, Sha256CircuitConfig},
     state_circuit::{StateCircuit, StateCircuitArgs, StateCircuitConfig},
     table::{state_table::StateTables, LookupTable, Sha256Table, ValidatorsTable},
-    util::{Challenges, SubCircuit, SubCircuitConfig},
+    util::{Challenges, SubCircuit, SubCircuitBuilder, SubCircuitConfig},
     validators_circuit::{ValidatorsCircuit, ValidatorsCircuitArgs, ValidatorsCircuitConfig},
-    witness::Block,
+    witness::State,
 };
 
 /// Configuration of the Super Circuit
@@ -107,11 +116,12 @@ pub struct SuperCircuit<'a, S: Spec + Sync, F: Field>
 where
     [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
 {
-    state_circuit: StateCircuit<F>,
-    validators_circuit: ValidatorsCircuit<S, F>,
-    sha256_circuit: Sha256Circuit<F>,
+    state_circuit: StateCircuit<'a, S, F>,
+    validators_circuit: ValidatorsCircuit<'a, S, F>,
+    sha256_circuit: Sha256Circuit<'a, S, F>,
+    builder: Rc<RefCell<GateThreadBuilder<F>>>,
     aggregation_circuit: AggregationCircuitBuilder<'a, S, F>,
-    attestations_circuit: AttestationsCircuitBuilder<'a, S, F, { S::MAX_VALIDATORS_PER_COMMITTEE }>,
+    attestations_circuit: AttestationsCircuitBuilder<'a, S, F>,
 }
 
 impl<'a, S: Spec + Sync, F: Field> SuperCircuit<'a, S, F>
@@ -121,17 +131,22 @@ where
         FieldExtConstructor<<S::SiganturesCurve as AppCurveExt>::Fp, 2>,
     [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
 {
-    pub fn new_from_block(block: &Block<F>) -> Self {
-        let state_circuit = StateCircuit::new_from_block(block);
-        let validators_circuit = ValidatorsCircuit::new_from_block(block);
-        let sha256_circuit = Sha256Circuit::new_from_block(block);
-        let aggregation_circuit = AggregationCircuitBuilder::new_from_block(block);
-        let attestations_circuit = AttestationsCircuitBuilder::new_from_block(block);
+    pub fn new_from_block(block: &'a State<S, F>) -> Self {
+        let state_circuit = StateCircuit::new_from_state(block);
+        let validators_circuit = ValidatorsCircuit::new_from_state(block);
+        let sha256_circuit = Sha256Circuit::new_from_state(block);
+
+        let builder = GateThreadBuilder::new(false);
+        let builder = Rc::new(RefCell::new(builder));
+        let aggregation_circuit = AggregationCircuitBuilder::new_from_state(builder.clone(), block);
+        let attestations_circuit =
+            AttestationsCircuitBuilder::new_from_state(builder.clone(), block);
 
         Self {
             state_circuit,
             validators_circuit,
             sha256_circuit,
+            builder,
             aggregation_circuit,
             attestations_circuit,
         }
@@ -191,5 +206,24 @@ where
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use eth_types::Test;
+    use halo2_proofs::dev::MockProver;
+    use halo2curves::bn256::Fr;
+
+    use super::*;
+
+    #[test]
+    fn test_attestations_circuit() {
+        let block = State::<Test, Fr>::default();
+        let circuit = SuperCircuit::<Test, Fr>::new_from_block(&block);
+        let prover = MockProver::<Fr>::run(18, &circuit, vec![]).unwrap();
+        prover.assert_satisfied();
     }
 }

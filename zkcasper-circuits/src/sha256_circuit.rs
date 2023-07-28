@@ -1082,44 +1082,31 @@ impl<F: Field> Sha256CircuitConfig<F> {
     }
 }
 
-/// KeccakCircuit
-#[derive(Default, Clone, Debug)]
-pub struct Sha256Circuit<F: Field> {
-    inputs: Vec<HashInput<u8>>,
+#[derive(Clone, Debug)]
+pub struct Sha256Circuit<'a, S: Spec, F: Field> {
+    inputs: &'a [HashInput<u8>],
     _marker: PhantomData<F>,
+    _spec: PhantomData<S>,
 }
 
-impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
+impl<'a, S: Spec, F: Field> SubCircuit<'a, S, F> for Sha256Circuit<'a, S, F>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
     type Config = Sha256CircuitConfig<F>;
     type SynthesisArgs = ();
     type Output = ();
+
+    fn new_from_state(state: &'a witness::State<S, F>) -> Self {
+        Self::new(&state.sha256_inputs)
+    }
 
     fn unusable_rows() -> usize {
         todo!()
     }
 
-    /// The `block.circuits_params.keccak_padding` parmeter, when enabled, sets
-    /// up the circuit to support a fixed number of permutations/keccak_f's,
-    /// independently of the permutations required by `inputs`.
-    fn new_from_block(_block: &witness::Block<F>) -> Self {
-        // Self::new(
-        //     block.circuits_params.max_keccak_rows,
-        //     block.keccak_inputs.clone(),
-        // )
-        todo!()
-    }
-
     /// Return the minimum number of rows required to prove the block
-    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
-        // let rows_per_chunk = (NUM_ROUNDS + 1) * get_num_rows_per_round();
-        // (
-        //     block
-        //         .keccak_inputs
-        //         .iter()
-        //         .map(|bytes| (bytes.len() as f64 / 136.0).ceil() as usize * rows_per_chunk)
-        //         .sum(),
-        //     block.circuits_params.max_keccak_rows,
-        // )
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
         todo!()
     }
 
@@ -1137,18 +1124,19 @@ impl<F: Field> SubCircuit<F> for Sha256Circuit<F> {
     }
 }
 
-impl<F: Field> Sha256Circuit<F> {
+impl<'a, S: Spec, F: Field> Sha256Circuit<'a, S, F> {
     /// Creates a new circuit instance
-    pub fn new(inputs: Vec<HashInput<u8>>) -> Self {
+    pub fn new(inputs: &'a Vec<HashInput<u8>>) -> Self {
         Sha256Circuit {
             inputs,
             _marker: PhantomData,
+            _spec: PhantomData::<S>,
         }
     }
 
     /// Sets the witness using the data to be hashed
     pub(crate) fn generate_witness(&self, _challenges: Challenges<Value<F>>) -> Vec<ShaRow<F>> {
-        multi_sha256(&self.inputs, Sha256CircuitConfig::fixed_challenge())
+        multi_sha256(self.inputs, Sha256CircuitConfig::fixed_challenge())
     }
 }
 
@@ -1165,12 +1153,15 @@ mod tests {
 
     use eth_types::Test as S;
 
-    #[derive(Default, Debug, Clone)]
-    struct TestSha256<F: Field> {
-        inner: Sha256Circuit<F>,
+    #[derive(Debug, Clone)]
+    struct TestSha256<'a, S: Spec, F: Field> {
+        inner: Sha256Circuit<'a, S, F>,
     }
 
-    impl<F: Field> Circuit<F> for TestSha256<F> {
+    impl<'a, S: Spec, F: Field> Circuit<F> for TestSha256<'a, S, F>
+    where
+        [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+    {
         type Config = (Sha256CircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
@@ -1200,8 +1191,8 @@ mod tests {
     fn test_sha256_single() {
         let k = 11;
         let inputs = vec![vec![0u8; 64].into(); 1];
-        let circuit = TestSha256 {
-            inner: Sha256Circuit::new(inputs),
+        let circuit = TestSha256::<S, Fr> {
+            inner: Sha256Circuit::new(&inputs),
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
@@ -1212,8 +1203,8 @@ mod tests {
     fn test_sha256_two2one_simple() {
         let k = 11;
         let inputs = vec![(vec![0u8; 32], vec![0u8; 32],).into(); 10];
-        let circuit = TestSha256 {
-            inner: Sha256Circuit::new(inputs),
+        let circuit = TestSha256::<S, Fr> {
+            inner: Sha256Circuit::new(&inputs),
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
@@ -1224,8 +1215,8 @@ mod tests {
     fn test_sha256_two2one_val_and_rlc() {
         let k = 10;
         let inputs = vec![(vec![vec![2u8; 4], vec![0u8; 28]].concat(), vec![3u8; 4],).into(); 1];
-        let circuit = TestSha256 {
-            inner: Sha256Circuit::new(inputs),
+        let circuit = TestSha256::<S, Fr> {
+            inner: Sha256Circuit::new(&inputs),
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
@@ -1239,8 +1230,8 @@ mod tests {
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
         let inputs = merkle_trace.sha256_inputs();
         println!("inputs: {:?}", inputs.len());
-        let circuit = TestSha256 {
-            inner: Sha256Circuit::new(inputs),
+        let circuit = TestSha256::<S, Fr> {
+            inner: Sha256Circuit::new(&inputs),
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();

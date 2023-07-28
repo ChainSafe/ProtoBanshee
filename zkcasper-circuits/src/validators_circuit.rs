@@ -17,7 +17,7 @@ use eth_types::*;
 
 use gadgets::util::{and, not, select, Expr};
 use halo2_proofs::{
-    circuit::{Layouter, Region, Value, Cell},
+    circuit::{Cell, Layouter, Region, Value},
     plonk::{Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells},
     poly::Rotation,
 };
@@ -329,8 +329,6 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
             || Value::known(F::one()),
         )?;
 
-       
-
         for i in 0..self.max_rows {
             region.assign_fixed(
                 || "assign q_enabled",
@@ -437,8 +435,8 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
 }
 
 #[derive(Clone, Debug)]
-pub struct ValidatorsCircuit<S: Spec, F> {
-    pub(crate) validators: Vec<Validator>,
+pub struct ValidatorsCircuit<'a, S: Spec, F> {
+    validators: &'a Vec<Validator>,
     target_epoch: u64,
     _f: PhantomData<F>,
     _spec: PhantomData<S>,
@@ -446,11 +444,11 @@ pub struct ValidatorsCircuit<S: Spec, F> {
 
 pub struct ValidatorsCircuitOutput {
     pub pubkey_cells: Vec<[Cell; 2]>,
-    pub attest_digits_cells: Vec<Vec<Cell>>
+    pub attest_digits_cells: Vec<Vec<Cell>>,
 }
 
-impl<S: Spec, F: Field> ValidatorsCircuit<S, F> {
-    pub fn new(validators: Vec<Validator>, target_epoch: u64) -> Self {
+impl<'a, S: Spec, F: Field> ValidatorsCircuit<'a, S, F> {
+    pub fn new(validators: &'a Vec<Validator>, target_epoch: u64) -> Self {
         Self {
             validators,
             target_epoch,
@@ -460,20 +458,23 @@ impl<S: Spec, F: Field> ValidatorsCircuit<S, F> {
     }
 }
 
-impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
+impl<'a, S: Spec, F: Field> SubCircuit<'a, S, F> for ValidatorsCircuit<'a, S, F>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
     type Config = ValidatorsCircuitConfig<F>;
     type SynthesisArgs = ();
     type Output = ValidatorsCircuitOutput;
 
-    fn new_from_block(block: &witness::Block<F>) -> Self {
-        Self::new(block.validators.clone(), block.target_epoch)
+    fn new_from_state(block: &'a witness::State<S, F>) -> Self {
+        Self::new(&block.validators, block.target_epoch)
     }
 
     fn unusable_rows() -> usize {
         todo!()
     }
 
-    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
         todo!()
     }
 
@@ -493,14 +494,14 @@ impl<S: Spec, F: Field> SubCircuit<F> for ValidatorsCircuit<S, F> {
 
                 config.assign_with_region::<S>(
                     &mut region,
-                    &self.validators,
+                    self.validators,
                     self.target_epoch,
                     challenges.sha256_input(),
                     &mut pubkey_cells,
                     &mut attest_digits_cells,
                 )?;
 
-                Ok(ValidatorsCircuitOutput{
+                Ok(ValidatorsCircuitOutput {
                     pubkey_cells,
                     attest_digits_cells,
                 })
@@ -548,13 +549,16 @@ mod tests {
     use eth_types::Test as S;
 
     #[derive(Debug, Clone)]
-    struct TestValidators<S: Spec, F: Field> {
-        inner: ValidatorsCircuit<S, F>,
+    struct TestValidators<'a, S: Spec, F: Field> {
+        inner: ValidatorsCircuit<'a, S, F>,
         state_tree_trace: MerkleTrace,
         _f: PhantomData<F>,
     }
 
-    impl<S: Spec, F: Field> Circuit<F> for TestValidators<S, F> {
+    impl<'a, S: Spec, F: Field> Circuit<F> for TestValidators<'a, S, F>
+    where
+        [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+    {
         type Config = (ValidatorsCircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
@@ -599,7 +603,7 @@ mod tests {
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
         let circuit = TestValidators::<Test, Fr> {
-            inner: ValidatorsCircuit::new(validators, 25),
+            inner: ValidatorsCircuit::new(&validators, 25),
             state_tree_trace,
             _f: PhantomData,
         };

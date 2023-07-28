@@ -1,7 +1,10 @@
 use crate::{
     gadget::crypto::{FpPoint, G1Chip, G1Point},
     table::{LookupTable, ValidatorsTable},
-    util::{decode_into_field, print_fq_dev, Challenges, SubCircuit, SubCircuitConfig},
+    util::{
+        decode_into_field, print_fq_dev, Challenges, SubCircuit, SubCircuitBuilder,
+        SubCircuitConfig,
+    },
     validators_circuit::ValidatorsCircuitOutput,
     witness::{self, Validator, DUMMY_VALIDATOR},
 };
@@ -38,6 +41,7 @@ use std::{
     cell::{RefCell, RefMut},
     iter,
     marker::PhantomData,
+    rc::Rc,
 };
 
 #[allow(type_alias_bounds)]
@@ -45,22 +49,39 @@ type FpChip<'chip, F, C: AppCurveExt> = halo2_ecc::fields::fp::FpChip<'chip, F, 
 
 #[derive(Clone, Debug)]
 pub struct AggregationCircuitBuilder<'a, S: Spec + Sync, F: Field> {
-    builder: RefCell<GateThreadBuilder<F>>,
-    range: &'a RangeChip<F>,
-    fp_chip: FpChip<'a, F, S::PubKeysCurve>,
+    builder: Rc<RefCell<GateThreadBuilder<F>>>,
     // Witness
     validators: &'a [Validator],
     validators_y: Vec<<S::PubKeysCurve as AppCurveExt>::Fq>,
     _spec: PhantomData<S>,
 }
 
-impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'a, S, F> {
+impl<'a, F: Field, S: Spec + Sync> SubCircuitBuilder<'a, S, F>
+    for AggregationCircuitBuilder<'a, S, F>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
     type Config = RangeConfig<F>;
     type SynthesisArgs = ValidatorsCircuitOutput;
     type Output = Vec<EcPoint<F, FpPoint<F>>>;
 
-    fn new_from_block(_block: &witness::Block<F>) -> Self {
-        todo!()
+    fn new_from_state(
+        builder: Rc<RefCell<GateThreadBuilder<F>>>,
+        block: &'a witness::State<S, F>,
+    ) -> Self {
+        let validators_y = block
+            .validators
+            .iter()
+            .map(|v| {
+                let g1_affine = <S::PubKeysCurve as AppCurveExt>::Affine::from_uncompressed(
+                    &v.pubkey_uncompressed.clone().try_into().unwrap(),
+                )
+                .unwrap();
+
+                g1_affine.into_coordinates().1
+            })
+            .collect_vec();
+        Self::new(builder, &block.validators, validators_y)
     }
 
     fn synthesize_sub(
@@ -78,6 +99,13 @@ impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'
             .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
 
+        let range = RangeChip::default(config.lookup_bits());
+        let fp_chip = FpChip::<F, S::PubKeysCurve>::new(
+            &range,
+            S::PubKeysCurve::LIMB_BITS,
+            S::PubKeysCurve::NUM_LIMBS,
+        );
+
         layouter.assign_region(
             || "AggregationCircuitBuilder generated circuit",
             |mut region| {
@@ -89,8 +117,13 @@ impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'
                 let builder = &mut self.builder.borrow_mut();
                 let mut pubkeys_compressed = vec![];
                 let mut attest_digits = vec![];
-                let aggregated_pubkeys =
-                    self.process_validators(builder, &mut pubkeys_compressed, &mut attest_digits);
+
+                let aggregated_pubkeys = self.process_validators(
+                    builder,
+                    &fp_chip,
+                    &mut pubkeys_compressed,
+                    &mut attest_digits,
+                );
 
                 let ctx = builder.main(1);
 
@@ -100,7 +133,7 @@ impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'
 
                 let pubkey_rlcs = pubkeys_compressed
                     .into_iter()
-                    .map(|compressed| self.get_rlc(&compressed, &randomness, ctx))
+                    .map(|compressed| self.get_rlc(fp_chip.gate(), &compressed, &randomness, ctx))
                     .collect_vec();
 
                 let halo2_base::gates::builder::KeygenAssignments::<F> {
@@ -172,27 +205,19 @@ impl<'a, F: Field, S: Spec + Sync> SubCircuit<F> for AggregationCircuitBuilder<'
         todo!()
     }
 
-    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
         todo!()
     }
 }
 
 impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
     pub fn new(
-        builder: GateThreadBuilder<F>,
+        builder: Rc<RefCell<GateThreadBuilder<F>>>,
         validators: &'a [Validator],
         validators_y: Vec<<S::PubKeysCurve as AppCurveExt>::Fq>,
-        range: &'a RangeChip<F>,
     ) -> Self {
-        let fp_chip = FpChip::<F, S::PubKeysCurve>::new(
-            range,
-            S::PubKeysCurve::LIMB_BITS,
-            S::PubKeysCurve::NUM_LIMBS,
-        );
         Self {
-            builder: RefCell::new(builder),
-            range,
-            fp_chip,
+            builder,
             validators,
             validators_y,
             _spec: PhantomData,
@@ -218,15 +243,15 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
     fn process_validators(
         &self,
         builder: &mut GateThreadBuilder<F>,
+        fp_chip: &FpChip<'a, F, S::PubKeysCurve>,
         pubkeys_compressed: &mut Vec<Vec<AssignedValue<F>>>,
         attest_digits: &mut Vec<Vec<AssignedValue<F>>>,
     ) -> Vec<EcPoint<F, FpPoint<F>>> {
         let witness_gen_only = builder.witness_gen_only();
-        let range = self.range();
-        let gate = range.gate();
+        let range = fp_chip.range();
+        let gate = fp_chip.gate();
 
-        let fp_chip = self.fp_chip();
-        let g1_chip = self.g1_chip();
+        let g1_chip = G1Chip::<F, S::PubKeysCurve>::new(fp_chip);
 
         let pubkey_compressed_len = S::PubKeysCurve::BYTES_FQ;
 
@@ -354,11 +379,11 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
     /// The resulted bigints should be equal to one used validators table.
     pub fn get_rlc(
         &self,
+        gate: &impl GateInstructions<F>,
         assigned_bytes: &[AssignedValue<F>],
         randomness: &QuantumCell<F>,
         ctx: &mut Context<F>,
     ) -> [AssignedValue<F>; 2] {
-        let gate = self.range().gate();
         // assertion check for assigned_bytes to be equal to BASE_BYTES from specification
         assert_eq!(assigned_bytes.len(), S::PubKeysCurve::BYTES_FQ);
 
@@ -391,18 +416,6 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
         // Shift `s` three bits to the right (equivalent to s >> 3) to zeroing the first three bits (MSB) of `a`.
         range.div_mod(ctx, b_shifted, BigUint::from(8u64), 8).0
     }
-
-    fn g1_chip(&'a self) -> G1Chip<F, S::PubKeysCurve> {
-        G1Chip::<F, S::PubKeysCurve>::new(self.fp_chip())
-    }
-
-    fn fp_chip(&self) -> &FpChip<'a, F, S::PubKeysCurve> {
-        &self.fp_chip
-    }
-
-    fn range(&self) -> &RangeChip<F> {
-        self.range
-    }
 }
 
 #[cfg(test)]
@@ -433,12 +446,11 @@ mod tests {
         const K: usize = 14;
     }
 
-    impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S> {
-        type Config = (
-            RangeConfig<F>,
-            ValidatorsTable,
-            Challenges<Value<F>>,
-        );
+    impl<'a, F: Field, S: Spec + Sync> Circuit<F> for TestCircuit<'a, F, S>
+    where
+        [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+    {
+        type Config = (RangeConfig<F>, ValidatorsTable, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
         fn without_witnesses(&self) -> Self {
@@ -498,11 +510,11 @@ mod tests {
             })
             .collect_vec();
 
-        let range = RangeChip::default(TestCircuit::<Fr, S>::LOOKUP_BITS);
         let builder = GateThreadBuilder::new(false);
         builder.config(k, None);
+        let builder = Rc::from(RefCell::from(builder));
         let circuit = TestCircuit::<'_, Fr, S> {
-            inner: AggregationCircuitBuilder::new(builder, &validators, validators_y, &range),
+            inner: AggregationCircuitBuilder::new(builder, &validators, validators_y),
         };
 
         let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();

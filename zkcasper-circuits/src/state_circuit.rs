@@ -165,35 +165,40 @@ impl<F: Field> StateCircuitConfig<F> {
 }
 
 /// Circuit for verify Merkle-multi proof of the SSZ Merkelized `BeaconState`
-#[derive(Clone, Default, Debug)]
-pub struct StateCircuit<F: Field> {
-    trace: MerkleTrace,
+#[derive(Clone, Debug)]
+pub struct StateCircuit<'a, S: Spec, F: Field> {
+    trace: &'a MerkleTrace,
     _f: PhantomData<F>,
+    _spec: PhantomData<S>,
 }
 
-impl<F: Field> StateCircuit<F> {
-    pub fn new(trace: MerkleTrace) -> Self {
+impl<'a, S: Spec, F: Field> StateCircuit<'a, S, F> {
+    pub fn new(trace: &'a MerkleTrace) -> Self {
         Self {
             trace,
             _f: PhantomData,
+            _spec: PhantomData::<S>,
         }
     }
 }
 
-impl<F: Field> SubCircuit<F> for StateCircuit<F> {
+impl<'a, S: Spec, F: Field> SubCircuit<'a, S, F> for StateCircuit<'a, S, F>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
     type Config = StateCircuitConfig<F>;
     type SynthesisArgs = ();
     type Output = ();
 
-    fn new_from_block(block: &witness::Block<F>) -> Self {
-        Self::new(block.merkle_trace.clone())
+    fn new_from_state(block: &'a witness::State<S, F>) -> Self {
+        Self::new(&block.merkle_trace)
     }
 
     fn unusable_rows() -> usize {
         todo!()
     }
 
-    fn min_num_rows_block(_block: &witness::Block<F>) -> (usize, usize) {
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
         todo!()
     }
 
@@ -204,7 +209,7 @@ impl<F: Field> SubCircuit<F> for StateCircuit<F> {
         layouter: &mut impl Layouter<F>,
         _: Self::SynthesisArgs,
     ) -> Result<(), Error> {
-        let num_rows = config.assign(layouter, &self.trace, challenges.sha256_input())?;
+        let num_rows = config.assign(layouter, self.trace, challenges.sha256_input())?;
 
         info!("state ssz circuit rows: {}", num_rows);
 
@@ -223,12 +228,15 @@ mod tests {
     use std::{fs, marker::PhantomData};
 
     #[derive(Debug, Clone)]
-    struct TestState<F: Field> {
-        state_circuit: StateCircuit<F>,
+    struct TestState<'a, S: Spec, F: Field> {
+        state_circuit: StateCircuit<'a, S, F>,
         _f: PhantomData<F>,
     }
 
-    impl<F: Field> Circuit<F> for TestState<F> {
+    impl<'a, S: Spec, F: Field> Circuit<F> for TestState<'a, S, F>
+    where
+        [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+    {
         type Config = (StateCircuitConfig<F>, Challenges<Value<F>>);
         type FloorPlanner = SimpleFloorPlanner;
 
@@ -270,8 +278,8 @@ mod tests {
         let merkle_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
-        let circuit = TestState::<Fr> {
-            state_circuit: StateCircuit::new(merkle_trace),
+        let circuit = TestState::<Test, Fr> {
+            state_circuit: StateCircuit::new(&merkle_trace),
             _f: PhantomData,
         };
 
