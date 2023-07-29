@@ -5,7 +5,7 @@ use crate::{
         CachedHashChip, Fp2Chip, Fp2Point, FpPoint, G1Point, G2Chip, G2Point, HashChip,
         HashToCurveCache, HashToCurveChip, Sha256Chip,
     },
-    sha256_circuit::Sha256CircuitConfig,
+    sha256_circuit::{Sha256CircuitConfig, util::NUM_ROUNDS},
     util::{
         print_fq2_dev, Challenges, IntoWitness, SubCircuit, SubCircuitBuilder, SubCircuitConfig,
     },
@@ -90,6 +90,7 @@ where
     builder: Rc<RefCell<GateThreadBuilder<F>>>,
     attestations: &'a [Attestation<S>],
     zero_hashes: RefCell<HashMap<usize, HashInputChunk<QuantumCell<F>>>>,
+    sha256_offset: usize,
     _spec: PhantomData<S>,
 }
 
@@ -108,7 +109,7 @@ where
         builder: Rc<RefCell<GateThreadBuilder<F>>>,
         block: &'a witness::State<S, F>,
     ) -> Self {
-        Self::new(builder, &block.attestations)
+        Self::new(builder, &block.attestations, block.sha256_inputs.len() * 144)
     }
 
     /// Assumptions:
@@ -145,7 +146,7 @@ where
             &range,
             challenges.sha256_input(),
             None,
-            0,
+            self.sha256_offset,
         );
         let hasher = CachedHashChip::new(&sha256_chip);
         let h2c_chip = HashToCurveChip::<S, F, _>::new(&sha256_chip);
@@ -272,11 +273,14 @@ where
     pub fn new(
         builder: Rc<RefCell<GateThreadBuilder<F>>>,
         attestations: &'a [Attestation<S>],
+        sha256_offset: usize,
     ) -> Self {
+        assert_eq!(sha256_offset % (NUM_ROUNDS + 8), 0, "invalid sha256 offset");
         Self {
             builder,
             attestations,
             zero_hashes: Default::default(),
+            sha256_offset,
             _spec: PhantomData,
         }
     }
@@ -501,7 +505,7 @@ mod tests {
 
         let builder = Rc::from(RefCell::from(builder));
         let circuit = TestCircuit::<'_, Test, Fr> {
-            inner: AttestationsCircuitBuilder::new(builder, &attestations),
+            inner: AttestationsCircuitBuilder::new(builder, &attestations, 0),
             agg_pubkeys,
         };
 

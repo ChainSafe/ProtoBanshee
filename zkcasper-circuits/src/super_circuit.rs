@@ -196,18 +196,18 @@ where
             &mut layouter,
             (),
         )?;
-        // let aggregated_pubkeys = self.aggregation_circuit.synthesize_sub(
-        //     &config.range,
-        //     &challenges,
-        //     &mut layouter,
-        //     validator_cells,
-        // )?;
-        // self.attestations_circuit.synthesize_sub(
-        //     &config.attestations_circuit,
-        //     &challenges,
-        //     &mut layouter,
-        //     aggregated_pubkeys,
-        // );
+        let aggregated_pubkeys = self.aggregation_circuit.synthesize_sub(
+            &config.range,
+            &challenges,
+            &mut layouter,
+            validator_cells,
+        )?;
+        self.attestations_circuit.synthesize_sub(
+            &config.attestations_circuit,
+            &challenges,
+            &mut layouter,
+            aggregated_pubkeys,
+        );
 
         Ok(())
     }

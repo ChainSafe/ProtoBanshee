@@ -218,14 +218,14 @@ impl<'a, F: Field> Sha256Chip<'a, F> {
         range: &'a RangeChip<F>,
         randomness: Value<F>,
         extra_assignments: Option<KeygenAssignments<F>>,
-        sha256_circui_offset: usize,
+        sha256_circuit_offset: usize,
     ) -> Self {
         Self {
             config,
             range,
             randomness: value_to_option(randomness).expect("randomness is not assigned"),
             extra_assignments: RefCell::new(extra_assignments.unwrap_or_default()),
-            sha256_circuit_offset: RefCell::new(sha256_circui_offset),
+            sha256_circuit_offset: RefCell::new(sha256_circuit_offset),
         }
     }
 
