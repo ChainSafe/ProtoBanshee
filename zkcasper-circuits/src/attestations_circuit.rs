@@ -127,10 +127,6 @@ where
             self.attestations.len() <= S::MAX_COMMITTEES_PER_SLOT * S::SLOTS_PER_EPOCH,
             "too many attestations supplied",
         );
-        config
-            .range
-            .load_lookup_table(layouter)
-            .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
 
         let range = RangeChip::default(config.range.lookup_bits());
@@ -460,6 +456,11 @@ mod tests {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let range = RangeChip::default(config.0.range.lookup_bits());
+            config
+                .0
+                .range
+                .load_lookup_table(&mut layouter)
+                .expect("load range lookup table");
             let fp_chip = FpChip::<F, S::SiganturesCurve>::new(
                 &range,
                 S::SiganturesCurve::LIMB_BITS,

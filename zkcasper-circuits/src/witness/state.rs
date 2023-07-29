@@ -1,6 +1,8 @@
+use std::marker::PhantomData;
+
 use crate::sha256_circuit::Sha256CircuitConfig;
 
-use super::{Attestation, HashInput};
+use super::{validators, Attestation, HashInput};
 use super::{MerkleTrace, Validator};
 use eth_types::{Field, Spec};
 use ethereum_consensus::bellatrix::mainnet;
@@ -10,10 +12,10 @@ use ethereum_consensus::bellatrix::BeaconState;
 /// Block is the struct used by all circuits, which contains all the needed
 /// data for witness generation.
 #[derive(Debug, Clone, Default)]
-pub struct State<S: Spec, F: Field> where [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]: {
-    /// The randomness for random linear combination
-    pub randomness: F,
-
+pub struct State<S: Spec, F: Field>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
     /// The target epoch
     pub target_epoch: u64,
 
@@ -24,11 +26,33 @@ pub struct State<S: Spec, F: Field> where [(); { S::MAX_VALIDATORS_PER_COMMITTEE
     pub merkle_trace: MerkleTrace,
 
     pub sha256_inputs: Vec<HashInput<u8>>,
+
+    _f: PhantomData<F>,
 }
 
 #[allow(non_camel_case_types)]
-impl<S: Spec, F: Field> State<S, F> where [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]: {
-    fn from_beacon_state<
+impl<S: Spec, F: Field> State<S, F>
+where
+    [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
+{
+    pub fn mock(
+        target_epoch: u64,
+        validators: Vec<Validator>,
+        attestations: Vec<Attestation<S>>,
+        merkle_trace: MerkleTrace,
+    ) -> Self {
+        let sha256_inputs = merkle_trace.sha256_inputs();
+        Self {
+            target_epoch,
+            validators,
+            attestations,
+            merkle_trace,
+            sha256_inputs,
+            _f: PhantomData::<F>,
+        }
+    }
+
+    pub fn from_beacon_state<
         SLOTS_PER_HISTORICAL_ROOT,
         HISTORICAL_ROOTS_LIMIT,
         ETH1_DATA_VOTES_BOUND,
@@ -58,7 +82,6 @@ impl<S: Spec, F: Field> State<S, F> where [(); { S::MAX_VALIDATORS_PER_COMMITTEE
         >,
     ) -> Self {
         let block = State::<S, F> {
-            randomness: Sha256CircuitConfig::fixed_challenge(),
             // FIXME: this is a problem because the struct definition above says the
             // target_epoch is u64, but here it's returning an `F` type, which is not trait bound
             // to be *convertible* into a u64. Is that what we want?
@@ -67,6 +90,7 @@ impl<S: Spec, F: Field> State<S, F> where [(); { S::MAX_VALIDATORS_PER_COMMITTEE
             attestations: vec![],
             merkle_trace: MerkleTrace::empty(),
             sha256_inputs: vec![],
+            _f: PhantomData::<F>,
         };
         block
     }

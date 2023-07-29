@@ -30,6 +30,7 @@ pub struct ShaRow<F> {
 pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, is_rlc: [bool; 2]) {
     // feature: [multi input lookups]
     // Prepare inputs RLCs in advance
+    // let mut inputs_rlc = inputs.map(|input| rlc::value(input, rnd));
     let mut inputs_rlc = [F::zero(), F::zero()];
     for (idx, _) in inputs.iter().enumerate() {
         for &byte in inputs[idx].iter() {
@@ -189,7 +190,6 @@ pub fn sha256<F: Field>(rows: &mut Vec<ShaRow<F>>, inputs: &[&[u8]; 2], rnd: F, 
                             rnd_pow *= rnd;
                             u8_pow[0] = F::zero();
                         }
-
                         // end
                         // feature: [lookups by value]
                         if length <= input_len {

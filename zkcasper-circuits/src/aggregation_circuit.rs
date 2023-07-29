@@ -94,9 +94,6 @@ where
             attest_digits_cells,
         }: Self::SynthesisArgs,
     ) -> Result<Self::Output, Error> {
-        config
-            .load_lookup_table(layouter)
-            .expect("load range lookup table");
         let mut first_pass = halo2_base::SKIP_FIRST_PASS;
 
         let range = RangeChip::default(config.lookup_bits());
@@ -387,9 +384,10 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
         // assertion check for assigned_bytes to be equal to BASE_BYTES from specification
         assert_eq!(assigned_bytes.len(), S::PubKeysCurve::BYTES_FQ);
 
-        // TODO: remove next 2 lines after switching to bls12-381
+        // need to pad to 64 bytes becasue `rlc::assigned_value` is over LE bytes
+        // see 1 approach in https://github.com/ChainSafe/banshee-zk/issues/72
         let mut assigned_bytes = assigned_bytes.to_vec();
-        assigned_bytes.resize(48, ctx.load_zero());
+        assigned_bytes.resize(64, ctx.load_zero());
 
         assigned_bytes
             .chunks(32)
@@ -486,6 +484,11 @@ mod tests {
                 config
                     .1
                     .dev_load::<S, _>(&mut layouter, self.inner.validators, challenge)?;
+
+            config
+                .0
+                .load_lookup_table(&mut layouter)
+                .expect("load range lookup table");
             self.inner
                 .synthesize_sub(&config.0, &config.2, &mut layouter, args)?;
             Ok(())

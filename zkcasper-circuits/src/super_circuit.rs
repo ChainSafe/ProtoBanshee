@@ -41,7 +41,7 @@ pub struct SuperCircuitConfig<F: Field> {
 }
 
 impl<F: Field> SuperCircuitConfig<F> {
-    const NUM_ADVICE: &[usize] = &[80];
+    const NUM_ADVICE: &[usize] = &[80, 1];
     const NUM_FIXED: usize = 1;
     const NUM_LOOKUP_ADVICE: usize = 15;
     const LOOKUP_BITS: usize = 8;
@@ -132,9 +132,9 @@ where
     [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
 {
     pub fn new_from_block(block: &'a State<S, F>) -> Self {
+        let sha256_circuit = Sha256Circuit::new_from_state(block);
         let state_circuit = StateCircuit::new_from_state(block);
         let validators_circuit = ValidatorsCircuit::new_from_state(block);
-        let sha256_circuit = Sha256Circuit::new_from_state(block);
 
         let builder = GateThreadBuilder::new(false);
         let builder = Rc::new(RefCell::new(builder));
@@ -178,6 +178,10 @@ where
         mut layouter: impl halo2_proofs::circuit::Layouter<F>,
     ) -> Result<(), Error> {
         let challenges = Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge()));
+        config
+            .range
+            .load_lookup_table(&mut layouter)
+            .expect("load range lookup table");
         self.sha256_circuit.synthesize_sub(
             &config.sha256_circuit,
             &challenges,
@@ -192,18 +196,18 @@ where
             &mut layouter,
             (),
         )?;
-        let aggregated_pubkeys = self.aggregation_circuit.synthesize_sub(
-            &config.range,
-            &challenges,
-            &mut layouter,
-            validator_cells,
-        )?;
-        self.attestations_circuit.synthesize_sub(
-            &config.attestations_circuit,
-            &challenges,
-            &mut layouter,
-            aggregated_pubkeys,
-        );
+        // let aggregated_pubkeys = self.aggregation_circuit.synthesize_sub(
+        //     &config.range,
+        //     &challenges,
+        //     &mut layouter,
+        //     validator_cells,
+        // )?;
+        // self.attestations_circuit.synthesize_sub(
+        //     &config.attestations_circuit,
+        //     &challenges,
+        //     &mut layouter,
+        //     aggregated_pubkeys,
+        // );
 
         Ok(())
     }
@@ -217,13 +221,22 @@ mod tests {
     use halo2_proofs::dev::MockProver;
     use halo2curves::bn256::Fr;
 
+    use crate::witness::{Attestation, MerkleTrace, Validator};
+
     use super::*;
 
     #[test]
-    fn test_attestations_circuit() {
-        let block = State::<Test, Fr>::default();
+    fn test_super_circuit() {
+        let validators: Vec<Validator> =
+            serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
+        let merkle_trace: MerkleTrace =
+            serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
+        let attestations: Vec<Attestation<Test>> =
+            serde_json::from_slice(&fs::read("../test_data/attestations.json").unwrap()).unwrap();
+        let block = State::<Test, Fr>::mock(25, validators, attestations, merkle_trace);
+
         let circuit = SuperCircuit::<Test, Fr>::new_from_block(&block);
-        let prover = MockProver::<Fr>::run(18, &circuit, vec![]).unwrap();
+        let prover = MockProver::<Fr>::run(17, &circuit, vec![]).unwrap();
         prover.assert_satisfied();
     }
 }

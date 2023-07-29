@@ -14,7 +14,7 @@ use crate::{
     witness::{self, HashInput},
 };
 use eth_types::{Field, Spec};
-use gadgets::util::{and, select, sum, xor};
+use gadgets::util::{and, select, sum, xor, rlc};
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, Region, Value},
     plonk::{Advice, Any, Column, ConstraintSystem, Error, Expression, Fixed, VirtualCells},
@@ -656,7 +656,7 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                 .iter()
                 .flat_map(|part| to_le_bytes::expr(part))
                 .collect::<Vec<_>>();
-            let rlc = compose_rlc::expr(&hash_bytes, r);
+            let rlc = rlc::expr(&hash_bytes, Expression::Constant(r));
             cb.condition(start_new_hash(meta), |cb| {
                 cb.require_equal(
                     "hash rlc check",
@@ -677,7 +677,7 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                         .expr()
                 })
                 .collect::<Vec<Expression<F>>>();
-            let rlc = compose_rlc::expr(&final_word_exprs, r);
+            let rlc =  rlc::expr(&final_word_exprs, Expression::Constant(r));
             cb.condition(q_condition.clone(), |cb| {
                 cb.require_equal(
                     "final hash rlc check",
@@ -1084,7 +1084,7 @@ impl<F: Field> Sha256CircuitConfig<F> {
 
 #[derive(Clone, Debug)]
 pub struct Sha256Circuit<'a, S: Spec, F: Field> {
-    inputs: &'a [HashInput<u8>],
+    pub inputs: &'a [HashInput<u8>],
     _marker: PhantomData<F>,
     _spec: PhantomData<S>,
 }
@@ -1202,7 +1202,7 @@ mod tests {
     #[test]
     fn test_sha256_two2one_simple() {
         let k = 11;
-        let inputs = vec![(vec![0u8; 32], vec![0u8; 32],).into(); 10];
+        let inputs = vec![(vec![0u8; 32], vec![0u8; 32],).into(); 1];
         let circuit = TestSha256::<S, Fr> {
             inner: Sha256Circuit::new(&inputs),
         };

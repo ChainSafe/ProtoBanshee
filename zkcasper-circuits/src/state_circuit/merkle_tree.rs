@@ -101,6 +101,7 @@ impl<F: Field> TreeLevel<F> {
                 || Value::known(F::one()),
             )?;
             region.assign_advice(|| "sibling", self.sibling, offset, || sibling)?;
+            // println!("state: {:?} {:?}", sibling, hex::encode(&step.sibling));
             if let Some(sibling_index) = self.sibling_index {
                 region.assign_advice(
                     || "sibling_index",
