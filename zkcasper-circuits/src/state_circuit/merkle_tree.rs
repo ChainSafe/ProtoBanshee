@@ -8,6 +8,7 @@ use halo2_proofs::{
     },
     poly::Rotation,
 };
+use itertools::Itertools;
 
 #[derive(Clone, Debug)]
 pub struct TreeLevel<F> {
@@ -78,7 +79,11 @@ impl<F: Field> TreeLevel<F> {
         steps: Vec<&MerkleTraceStep>,
         challange: Value<F>,
     ) -> Result<(), Error> {
-        for (i, step) in steps.into_iter().enumerate() {
+        for (i, step) in steps
+            .into_iter()
+            .sorted_by_key(|s| s.parent_index) // TODO: is it secure to reorder trace?
+            .enumerate()
+        {
             let offset = self.offset + i * (self.padding + 1);
             assert_eq!(step.sibling.len(), 32);
             assert_eq!(step.node.len(), 32);
@@ -125,6 +130,17 @@ impl<F: Field> TreeLevel<F> {
                 offset,
                 || Value::known(F::from(step.into_left as u64)),
             )?;
+
+            // println!(
+            //     "offset: {offset} node {:?} sibling {:?}",
+            //     [step.index.to_string(), hex::encode(&step.node)],
+            //     [step.sibling_index.to_string(), hex::encode(&step.sibling)]
+            // );
+            // println!(
+            //     "offset: {offset} parent = {:?}",
+            //     [step.parent_index.to_string(), hex::encode(&step.parent)]
+            // );
+            // println!("----------------------");
         }
 
         Ok(())

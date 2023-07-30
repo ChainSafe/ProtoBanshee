@@ -97,6 +97,8 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
         };
 
         // Annotate circuit
+
+        config.state_tables.annotate_columns(meta);
         config.validators_table.annotate_columns(meta);
         config.annotations().iter().for_each(|(col, ann)| {
             meta.annotate_lookup_any_column(*col, || ann);
@@ -596,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_validators_circuit() {
-        let k = 10;
+        let k = 11;
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
         let state_tree_trace: MerkleTrace =

@@ -14,6 +14,7 @@ import { g1PointToLeBytes as g1PointToBytesLE, g2PointToLeBytes, serialize } fro
 import { createNodeFromMultiProofWithTrace, printTrace } from "./merkleTrace";
 import { hexToBytes, bytesToHex } from "@noble/curves/abstract/utils";
 import { ProjPointType } from "@noble/curves/abstract/weierstrass";
+import { createNodeFromCompactMultiProof } from "@chainsafe/persistent-merkle-tree/lib/proof/compactMulti";
 
 const DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
@@ -33,7 +34,10 @@ const ValidatorContainer = new ContainerType(
 
 type Validator = ValueOf<typeof ValidatorContainer>;
 
-export const ValidatorsSsz = new ListCompositeType(ValidatorContainer, 10);
+export const ValidatorsSsz = new ListCompositeType(ValidatorContainer, 1099511627776);
+
+console.log("VALIDATOR_0_G_INDEX:", ValidatorsSsz.getPathInfo([0]).gindex);
+console.log("activationEpoch:", ValidatorsSsz.getPathInfo([3]).gindex * (2n**3n)+ 5n, ValidatorsSsz.getPathInfo([3, 'activationEpoch']).gindex);
 
 const N = 5;
 let validators: Validator[] = [];
@@ -177,12 +181,8 @@ let view = ValidatorsSsz.toView(validators);
 
 let proof = createProof(view.node, { type: ProofType.multi, gindices: gindices }) as MultiProof;
 
-const areEqual = (first: Uint8Array, second: Uint8Array) =>
-    first.length === second.length && first.every((value, index) => value === second[index]);
-
 let [partial_tree, trace] = createNodeFromMultiProofWithTrace(proof.leaves, proof.witnesses, proof.gindices, nonRlcGindices);
-
-// printTrace(partial_tree, trace);
+printTrace(partial_tree, trace);
 
 fs.writeFileSync(
     `../test_data/merkle_trace.json`,

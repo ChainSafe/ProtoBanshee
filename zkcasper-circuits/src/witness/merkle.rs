@@ -59,7 +59,10 @@ impl MerkleTrace {
         }
         steps_sorted
             .into_iter()
-            .map(|step| {
+            .enumerate()
+            .map(|(i, step)| {
+                // println!("i={i}, depth={}, node: {:?}, sibling: {:?}", step.depth, [step.index.to_string(), hex::encode(&step.node)], [step.sibling_index.to_string(), hex::encode(&step.sibling)]);
+                // println!("parent = {:?} {:?}", hex::encode(&step.parent), step.parent);
                 assert_eq!(
                     sha2::Sha256::digest(vec![step.node.clone(), step.sibling.clone()].concat())
                         .to_vec(),

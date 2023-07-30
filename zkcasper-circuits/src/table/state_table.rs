@@ -1,4 +1,5 @@
 use gadgets::util::rlc;
+use itertools::Itertools;
 
 use std::collections::HashMap;
 use strum::IntoEnumIterator;
@@ -77,7 +78,7 @@ impl StateTable {
         steps: Vec<&MerkleTraceStep>,
         challange: Value<F>,
     ) -> Result<(), Error> {
-        for (i, step) in steps.into_iter().enumerate() {
+        for (i, step) in steps.into_iter().sorted_by_key(|s| s.parent_index).enumerate() {
             assert_eq!(step.sibling.len(), 32);
             assert_eq!(step.node.len(), 32);
             let node = if step.is_rlc[0] {
@@ -174,7 +175,7 @@ impl StateTables {
         is_left: bool,
         enable: Expression<F>,
         gindex: Expression<F>,
-        value_rlc: Expression<F>,
+        value: Expression<F>,
     ) -> Vec<(Expression<F>, Expression<F>)> {
         let lookup_table = self.0.get(&level).unwrap();
         let value_col = if is_left {
@@ -194,7 +195,7 @@ impl StateTables {
                 meta.query_fixed(lookup_table.is_enabled, Rotation::cur()),
             ),
             (
-                value_rlc * enable.clone(),
+                value * enable.clone(),
                 meta.query_advice(value_col, Rotation::cur()),
             ),
             (
@@ -202,6 +203,12 @@ impl StateTables {
                 meta.query_advice(index_col, Rotation::cur()),
             ),
         ]
+    }
+
+    pub fn annotate_columns<F: Field>(&self, meta: &mut ConstraintSystem<F>) {
+        self.0.iter().for_each(|(_, table)| {
+            table.annotate_columns(meta);
+        });
     }
 
     pub fn annotate_columns_in_region<F: Field>(&self, region: &mut Region<'_, F>) {

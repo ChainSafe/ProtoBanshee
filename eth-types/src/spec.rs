@@ -11,7 +11,7 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const MAX_VALIDATORS_PER_COMMITTEE: usize;
     const MAX_COMMITTEES_PER_SLOT: usize;
     const SLOTS_PER_EPOCH: usize;
-    const VALIDATOR_0_G_INDEX: usize;
+    const VALIDATOR_0_GINDEX: usize;
     const VALIDATOR_SSZ_CHUNKS: usize;
     const USED_CHUNKS_PER_VALIDATOR: usize;
     const STATE_TREE_DEPTH: usize;
@@ -35,14 +35,14 @@ pub struct Test;
 
 impl Spec for Test {
     const VALIDATOR_REGISTRY_LIMIT: usize = 100;
-    const MAX_VALIDATORS_PER_COMMITTEE: usize = 10;
+    const MAX_VALIDATORS_PER_COMMITTEE: usize = 5;
     const MAX_COMMITTEES_PER_SLOT: usize = 1;
     const SLOTS_PER_EPOCH: usize = 1;
-    const VALIDATOR_0_G_INDEX: usize = 32;
+    const VALIDATOR_0_GINDEX: usize = 2199023255552;
     const VALIDATOR_SSZ_CHUNKS: usize = 8;
     const USED_CHUNKS_PER_VALIDATOR: usize = 5;
-    const STATE_TREE_DEPTH: usize = 10;
-    const STATE_TREE_LEVEL_PUBKEYS: usize = 10;
+    const STATE_TREE_DEPTH: usize = 46;
+    const STATE_TREE_LEVEL_PUBKEYS: usize = 46;
     const STATE_TREE_LEVEL_VALIDATORS: usize = Self::STATE_TREE_LEVEL_PUBKEYS - 1;
     const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
@@ -58,7 +58,7 @@ impl Spec for Mainnet {
     const MAX_VALIDATORS_PER_COMMITTEE: usize = 2048;
     const MAX_COMMITTEES_PER_SLOT: usize = 64;
     const SLOTS_PER_EPOCH: usize = 32;
-    const VALIDATOR_0_G_INDEX: usize = 94557999988736;
+    const VALIDATOR_0_GINDEX: usize = 94557999988736;
     const VALIDATOR_SSZ_CHUNKS: usize = 9;
     const USED_CHUNKS_PER_VALIDATOR: usize = 5;
     const STATE_TREE_DEPTH: usize = 47;

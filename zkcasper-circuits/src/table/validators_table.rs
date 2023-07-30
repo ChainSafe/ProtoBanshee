@@ -270,7 +270,7 @@ impl<S: Spec, F: Field> ValidatorTableQueries<S, F> {
     }
 
     pub fn balance_gindex(&self) -> Expression<F> {
-        (S::VALIDATOR_0_G_INDEX.expr() + self.id())
+        (S::VALIDATOR_0_GINDEX.expr() + self.id())
             * 2u64.pow(3).expr() // 3 levels deeper
             + 2.expr() // skip pubkeyRoot and withdrawalCredentials
     }
@@ -300,25 +300,24 @@ impl<S: Spec, F: Field> ValidatorTableQueries<S, F> {
     }
 
     pub fn slashed_gindex(&self) -> Expression<F> {
-        (S::VALIDATOR_0_G_INDEX.expr() + self.id()) * 2u64.pow(3).expr() + 3.expr()
+        (S::VALIDATOR_0_GINDEX.expr() + self.id()) * 2u64.pow(3).expr() + 3.expr()
     }
 
     pub fn activation_epoch_gindex(&self) -> Expression<F> {
-        (S::VALIDATOR_0_G_INDEX.expr() + self.id()) * 2u64.pow(3).expr() + 5.expr()
+        (S::VALIDATOR_0_GINDEX.expr() + self.id()) * 2u64.pow(3).expr() + 5.expr()
         // skip activationEligibilityEpoch
     }
 
     pub fn exit_epoch_gindex(&self) -> Expression<F> {
-        (S::VALIDATOR_0_G_INDEX.expr() + self.id()) * 2u64.pow(3).expr() + 6.expr()
+        (S::VALIDATOR_0_GINDEX.expr() + self.id()) * 2u64.pow(3).expr() + 6.expr()
     }
 
     pub fn pubkey_lo_gindex(&self) -> Expression<F> {
-        (S::VALIDATOR_0_G_INDEX.expr() + self.id()) * 2u64.pow(4).expr() // 4 levels deeper 0 + 0 * 2^x = 94557999988736n
-                                                                         // d = sqrt(94557999988736n) = 1048576 sqrt(86)
+        (S::VALIDATOR_0_GINDEX.expr() + self.id()) * 2u64.pow(4).expr() // 4 levels deeper
     }
 
     pub fn pubkey_hi_gindex(&self) -> Expression<F> {
-        (S::VALIDATOR_0_G_INDEX.expr() + self.id()) * 2u64.pow(4).expr() + 1.expr()
+        (S::VALIDATOR_0_GINDEX.expr() + self.id()) * 2u64.pow(4).expr() + 1.expr()
     }
 
     pub fn balance_acc(&self) -> Expression<F> {
