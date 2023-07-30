@@ -38,7 +38,7 @@ impl<S: Spec, F: Field> State<S, F>
 where
     [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
 {
-    pub fn mock(
+    pub fn new(
         target_epoch: u64,
         validators: Vec<Validator>,
         attestations: Vec<Attestation<S>>,
@@ -94,7 +94,12 @@ where
             attestations: vec![],
             merkle_trace: MerkleTrace::empty(),
             sha256_inputs: vec![],
-            state_root: beacon_state.hash_tree_root().unwrap().as_ref().try_into().unwrap(),
+            state_root: beacon_state
+                .hash_tree_root()
+                .unwrap()
+                .as_ref()
+                .try_into()
+                .unwrap(),
             randomness: Sha256CircuitConfig::fixed_challenge(),
         };
         block

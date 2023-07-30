@@ -275,7 +275,7 @@ mod tests {
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
         let attestations: Vec<Attestation<Test>> =
             serde_json::from_slice(&fs::read("../test_data/attestations.json").unwrap()).unwrap();
-        let state = State::<Test, Fr>::mock(25, validators, attestations, merkle_trace);
+        let state = State::<Test, Fr>::new(25, validators, attestations, merkle_trace);
 
         let circuit = SuperCircuit::<Test, Fr>::new_from_state(&state);
         let instance = circuit.instance();

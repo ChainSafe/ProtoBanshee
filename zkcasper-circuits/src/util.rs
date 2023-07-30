@@ -1,7 +1,7 @@
 //! Common utility traits and functions.
 
 mod cell_manager;
-use std::{rc::Rc, cell::RefCell};
+use std::{cell::RefCell, rc::Rc};
 
 pub use cell_manager::*;
 

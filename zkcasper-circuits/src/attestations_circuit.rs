@@ -5,7 +5,7 @@ use crate::{
         CachedHashChip, Fp2Chip, Fp2Point, FpPoint, G1Point, G2Chip, G2Point, HashChip,
         HashToCurveCache, HashToCurveChip, Sha256Chip,
     },
-    sha256_circuit::{Sha256CircuitConfig, util::NUM_ROUNDS},
+    sha256_circuit::{util::NUM_ROUNDS, Sha256CircuitConfig},
     util::{
         print_fq2_dev, Challenges, IntoWitness, SubCircuit, SubCircuitBuilder, SubCircuitConfig,
     },
@@ -109,7 +109,11 @@ where
         builder: Rc<RefCell<GateThreadBuilder<F>>>,
         state: &'a witness::State<S, F>,
     ) -> Self {
-        Self::new(builder, &state.attestations, state.sha256_inputs.len() * 144)
+        Self::new(
+            builder,
+            &state.attestations,
+            state.sha256_inputs.len() * 144,
+        )
     }
 
     /// Assumptions:

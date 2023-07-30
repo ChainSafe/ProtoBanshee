@@ -31,7 +31,13 @@ impl MerkleTrace {
     }
 
     pub fn root(&self) -> [u8; 32] {
-        self.0.last().expect("root is expected").node.clone().try_into().unwrap()
+        self.0
+            .last()
+            .expect("root is expected")
+            .node
+            .clone()
+            .try_into()
+            .unwrap()
     }
 
     pub fn trace_by_levels(&self) -> Vec<Vec<&MerkleTraceStep>> {

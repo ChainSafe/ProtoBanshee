@@ -78,7 +78,11 @@ impl StateTable {
         steps: Vec<&MerkleTraceStep>,
         challange: Value<F>,
     ) -> Result<(), Error> {
-        for (i, step) in steps.into_iter().sorted_by_key(|s| s.parent_index).enumerate() {
+        for (i, step) in steps
+            .into_iter()
+            .sorted_by_key(|s| s.parent_index)
+            .enumerate()
+        {
             assert_eq!(step.sibling.len(), 32);
             assert_eq!(step.node.len(), 32);
             let node = if step.is_rlc[0] {

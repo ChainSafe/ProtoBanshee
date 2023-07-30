@@ -14,7 +14,7 @@ use crate::{
     witness::{self, HashInput},
 };
 use eth_types::{Field, Spec};
-use gadgets::util::{and, select, sum, xor, rlc};
+use gadgets::util::{and, rlc, select, sum, xor};
 use halo2_proofs::{
     circuit::{AssignedCell, Layouter, Region, Value},
     plonk::{Advice, Any, Column, ConstraintSystem, Error, Expression, Fixed, VirtualCells},
@@ -677,7 +677,7 @@ impl<F: Field> SubCircuitConfig<F> for Sha256CircuitConfig<F> {
                         .expr()
                 })
                 .collect::<Vec<Expression<F>>>();
-            let rlc =  rlc::expr(&final_word_exprs, Expression::Constant(r));
+            let rlc = rlc::expr(&final_word_exprs, Expression::Constant(r));
             cb.condition(q_condition.clone(), |cb| {
                 cb.require_equal(
                     "final hash rlc check",
