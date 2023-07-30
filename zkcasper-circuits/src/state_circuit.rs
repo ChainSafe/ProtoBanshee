@@ -71,6 +71,8 @@ impl<F: Field> SubCircuitConfig<F> for StateCircuitConfig<F> {
                 - ((S::VALIDATOR_REGISTRY_LIMIT as f64).log2().ceil() as usize + 2))
             {
                 padding = padding * 2 + 1;
+            } else if i < S::STATE_TREE_LEVEL_BEACON_STATE {
+                padding = 0;
             }
             let level = TreeLevel::configure(meta, i, 0, padding, false);
             tree.push(level);
@@ -107,7 +109,11 @@ impl<F: Field> SubCircuitConfig<F> for StateCircuitConfig<F> {
                 let into_sibling: Expression<F> = not::expr(level.into_left(meta));
                 let node = level.node(meta);
                 let sibling = level.sibling(meta);
-                let parent = next_level.sibling_at(level.padding().add(1).mul(-1), meta);
+                let parent = if depth < S::STATE_TREE_LEVEL_BEACON_STATE {
+                    next_level.sibling(meta) // FIXME: this likely won't work when leaves from beacon state fields are present
+                } else {
+                    next_level.sibling_at(level.padding().add(1).mul(-1), meta)
+                };
                 sha256_table.build_lookup(meta, selector * into_sibling, node, sibling, parent)
             });
         }

@@ -15,6 +15,7 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const STATE_TREE_DEPTH: usize;
     const STATE_TREE_LEVEL_PUBKEYS: usize;
     const STATE_TREE_LEVEL_VALIDATORS: usize;
+    const STATE_TREE_LEVEL_BEACON_STATE: usize;
     const DST: &'static [u8];
 
     type PubKeysCurve: AppCurveExt;
@@ -36,10 +37,11 @@ impl Spec for Test {
     const MAX_VALIDATORS_PER_COMMITTEE: usize = 5;
     const MAX_COMMITTEES_PER_SLOT: usize = 1;
     const SLOTS_PER_EPOCH: usize = 1;
-    const VALIDATOR_0_GINDEX: usize = 2199023255552;
-    const STATE_TREE_DEPTH: usize = 46;
-    const STATE_TREE_LEVEL_PUBKEYS: usize = 46;
+    const VALIDATOR_0_GINDEX: usize = 94557999988736;
+    const STATE_TREE_DEPTH: usize = 51;
+    const STATE_TREE_LEVEL_PUBKEYS: usize = Self::STATE_TREE_DEPTH;
     const STATE_TREE_LEVEL_VALIDATORS: usize = Self::STATE_TREE_LEVEL_PUBKEYS - 1;
+    const STATE_TREE_LEVEL_BEACON_STATE: usize = 6;
     const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
     type PubKeysCurve = bls12_381::G1;
@@ -55,10 +57,10 @@ impl Spec for Mainnet {
     const MAX_COMMITTEES_PER_SLOT: usize = 64;
     const SLOTS_PER_EPOCH: usize = 32;
     const VALIDATOR_0_GINDEX: usize = 94557999988736;
-    const STATE_TREE_DEPTH: usize = 47;
-    // TODO: calculate and verify the pubkeys level for mainnet
-    const STATE_TREE_LEVEL_PUBKEYS: usize = 49;
+    const STATE_TREE_DEPTH: usize = 51;
+    const STATE_TREE_LEVEL_PUBKEYS: usize = Self::STATE_TREE_DEPTH;
     const STATE_TREE_LEVEL_VALIDATORS: usize = Self::STATE_TREE_LEVEL_PUBKEYS - 1;
+    const STATE_TREE_LEVEL_BEACON_STATE: usize = 6;
     const DST: &'static [u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 
     type PubKeysCurve = bls12_381::G1;
