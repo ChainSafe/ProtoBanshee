@@ -36,7 +36,7 @@ type Validator = ValueOf<typeof ValidatorContainer>;
 
 export const ValidatorsSsz = new ListCompositeType(ValidatorContainer, 1099511627776);
 
-console.log("VALIDATOR_0_G_INDEX:", ValidatorsSsz.getPathInfo([0]).gindex);
+console.log("VALIDATOR_0_GINDEX:", ValidatorsSsz.getPathInfo([0]).gindex);
 console.log("activationEpoch:", ValidatorsSsz.getPathInfo([3]).gindex * (2n**3n)+ 5n, ValidatorsSsz.getPathInfo([3, 'activationEpoch']).gindex);
 
 const N = 5;

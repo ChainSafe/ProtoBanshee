@@ -12,8 +12,6 @@ pub trait Spec: 'static + Sized + Copy + Default + Debug {
     const MAX_COMMITTEES_PER_SLOT: usize;
     const SLOTS_PER_EPOCH: usize;
     const VALIDATOR_0_GINDEX: usize;
-    const VALIDATOR_SSZ_CHUNKS: usize;
-    const USED_CHUNKS_PER_VALIDATOR: usize;
     const STATE_TREE_DEPTH: usize;
     const STATE_TREE_LEVEL_PUBKEYS: usize;
     const STATE_TREE_LEVEL_VALIDATORS: usize;
@@ -39,8 +37,6 @@ impl Spec for Test {
     const MAX_COMMITTEES_PER_SLOT: usize = 1;
     const SLOTS_PER_EPOCH: usize = 1;
     const VALIDATOR_0_GINDEX: usize = 2199023255552;
-    const VALIDATOR_SSZ_CHUNKS: usize = 8;
-    const USED_CHUNKS_PER_VALIDATOR: usize = 5;
     const STATE_TREE_DEPTH: usize = 46;
     const STATE_TREE_LEVEL_PUBKEYS: usize = 46;
     const STATE_TREE_LEVEL_VALIDATORS: usize = Self::STATE_TREE_LEVEL_PUBKEYS - 1;
@@ -59,8 +55,6 @@ impl Spec for Mainnet {
     const MAX_COMMITTEES_PER_SLOT: usize = 64;
     const SLOTS_PER_EPOCH: usize = 32;
     const VALIDATOR_0_GINDEX: usize = 94557999988736;
-    const VALIDATOR_SSZ_CHUNKS: usize = 9;
-    const USED_CHUNKS_PER_VALIDATOR: usize = 5;
     const STATE_TREE_DEPTH: usize = 47;
     // TODO: calculate and verify the pubkeys level for mainnet
     const STATE_TREE_LEVEL_PUBKEYS: usize = 49;

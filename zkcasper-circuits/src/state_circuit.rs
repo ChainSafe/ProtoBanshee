@@ -67,9 +67,10 @@ impl<F: Field> SubCircuitConfig<F> for StateCircuitConfig<F> {
 
         let mut padding = 0;
         for i in (2..=S::STATE_TREE_DEPTH - 2).rev() {
-            if i < ((S::VALIDATOR_REGISTRY_LIMIT as f64).log2().ceil() as usize + 2) {
+            if i > (S::STATE_TREE_DEPTH
+                - ((S::VALIDATOR_REGISTRY_LIMIT as f64).log2().ceil() as usize + 2))
+            {
                 padding = padding * 2 + 1;
-                println!("level {} padding {}", i, padding);
             }
             let level = TreeLevel::configure(meta, i, 0, padding, false);
             tree.push(level);
@@ -288,6 +289,6 @@ mod tests {
         };
 
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
-        // prover.assert_satisfied();
+        prover.assert_satisfied();
     }
 }
