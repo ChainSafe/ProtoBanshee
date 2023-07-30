@@ -43,7 +43,7 @@ pub struct StateCircuitConfig<F: Field> {
     tree: Vec<TreeLevel<F>>,
     sha256_table: Sha256Table,
     pub state_tables: StateTables,
-    state_root: [Column<Instance>; 32],
+    pub state_root: [Column<Instance>; 32],
 }
 
 pub struct StateCircuitArgs<F> {

@@ -18,7 +18,9 @@ use eth_types::*;
 use gadgets::util::{and, not, select, Expr};
 use halo2_proofs::{
     circuit::{Cell, Layouter, Region, Value},
-    plonk::{Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, VirtualCells},
+    plonk::{
+        Advice, Any, Column, ConstraintSystem, Error, FirstPhase, Fixed, Instance, VirtualCells,
+    },
     poly::Rotation,
 };
 use itertools::Itertools;
@@ -35,15 +37,19 @@ pub struct ValidatorsCircuitConfig<F: Field> {
     q_last: Column<Fixed>,
     q_committee_first: Column<Fixed>,
     q_attest_digits: Vec<Column<Fixed>>,
-    state_tables: StateTables,
-    pub validators_table: ValidatorsTable,
+
     storage_phase1: [Column<Advice>; 2], // one per `LtGadget`
     byte_lookup: [Column<Advice>; N_BYTE_LOOKUPS],
     target_epoch: Column<Advice>, // TODO: should be an instance or assigned from instance
     cell_manager: CellManager<F>,
+    // lookup tables
+    pub validators_table: ValidatorsTable,
+    state_tables: StateTables,
     // Lazy initialized
     target_gte_activation: Option<LtGadget<F, N_BYTES_U64>>,
     target_lt_exit: Option<LtGadget<F, N_BYTES_U64>>,
+    // Instance
+    pub target_epoch_pub: Column<Instance>,
 }
 
 pub struct ValidatorsCircuitArgs {
@@ -77,6 +83,8 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
 
         let cell_manager = CellManager::new(meta, S::VALIDATOR_REGISTRY_LIMIT, &cm_advices);
 
+        let target_epoch_public = meta.instance_column();
+
         let mut config = Self {
             max_rows: S::MAX_VALIDATORS_PER_COMMITTEE
                 * S::MAX_COMMITTEES_PER_SLOT
@@ -94,6 +102,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             target_gte_activation: None,
             target_lt_exit: None,
             cell_manager,
+            target_epoch_pub: target_epoch_public,
         };
 
         // Annotate circuit
@@ -224,10 +233,12 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             meta.lookup_any(name, |_| lookup);
         }
 
-        meta.create_gate("balance accumulation: first row", |meta| {
+        meta.create_gate("first row", |meta| {
             let q = queries::<S, F>(meta, &config);
             let mut cb = ConstraintBuilder::new(&mut config.cell_manager, MAX_DEGREE);
             cb.require_equal("init balance_acc", q.table.balance(), q.table.balance_acc());
+            cb.require_equal("init target epoch", q.target_epoch(), q.target_epoch_pub());
+            // TODO: state_tables[BeaconFields].lookup(target_epoch - 1, current_justified_checkpoint_gindex, node/sibling)
             cb.gate(q.q_first())
         });
 
@@ -243,6 +254,11 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
                 "balance_acc = balance_acc_prev + balance",
                 q.table.balance_acc(),
                 new_balance_acc,
+            );
+            cb.require_equal(
+                "target epoch consistancy",
+                q.target_epoch_prev(),
+                q.target_epoch(),
             );
             cb.gate(and::expr(vec![q.q_enabled(), not::expr(q.q_first())]))
         });
@@ -353,14 +369,16 @@ impl<F: Field> ValidatorsCircuitConfig<F> {
                 || Value::known(F::one()),
             )?;
 
-            if let Some(&validator) = padded_validators.get(i) {
-                region.assign_advice(
-                    || "assign target epoch",
-                    self.target_epoch,
-                    offset,
-                    || Value::known(F::from(target_epoch)),
-                )?; // TODO: assign from instance instead
+            // We avoid using `region.assign_advice_from_instance` as it causes a lot of permutation cells.
+            // Instead we use a simple `target_epoch@prev = target_epoch` gate.
+            region.assign_advice(
+                || "assign target epoch",
+                self.target_epoch,
+                offset,
+                || Value::known(F::from(target_epoch)),
+            )?;
 
+            if let Some(&validator) = padded_validators.get(i) {
                 target_gte_activation.assign(
                     region,
                     offset,
@@ -502,6 +520,11 @@ where
             },
         )
     }
+
+    fn instance(&self) -> Vec<Vec<F>> {
+        vec![vec![F::from(self.target_epoch)]]
+    }
+
     fn unusable_rows() -> usize {
         todo!()
     }
@@ -526,6 +549,8 @@ fn queries<S: Spec, F: Field>(
             .map(|col| meta.query_fixed(*col, Rotation::cur()))
             .collect_vec(),
         target_epoch: meta.query_advice(config.target_epoch, Rotation::cur()),
+        target_epoch_prev: meta.query_advice(config.target_epoch, Rotation::prev()),
+        target_epoch_pub: meta.query_instance(config.target_epoch_pub, Rotation::cur()),
         table: config.validators_table.queries(meta),
     }
 }
@@ -605,7 +630,8 @@ mod tests {
             _f: PhantomData,
         };
 
-        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+        let instance = circuit.inner.instance();
+        let prover = MockProver::<Fr>::run(k, &circuit, instance).unwrap();
         prover.assert_satisfied();
     }
 }
