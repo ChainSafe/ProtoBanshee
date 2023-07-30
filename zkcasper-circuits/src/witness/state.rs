@@ -7,6 +7,7 @@ use super::{MerkleTrace, Validator};
 use eth_types::{Field, Spec};
 use ethereum_consensus::bellatrix::mainnet;
 use ethereum_consensus::bellatrix::BeaconState;
+use ssz_rs::Merkleized;
 
 // TODO: Remove fields that are duplicated in`eth_block`
 /// Block is the struct used by all circuits, which contains all the needed
@@ -16,6 +17,8 @@ pub struct State<S: Spec, F: Field>
 where
     [(); { S::MAX_VALIDATORS_PER_COMMITTEE }]:,
 {
+    pub randomness: F,
+
     /// The target epoch
     pub target_epoch: u64,
 
@@ -27,7 +30,7 @@ where
 
     pub sha256_inputs: Vec<HashInput<u8>>,
 
-    _f: PhantomData<F>,
+    pub state_root: [u8; 32],
 }
 
 #[allow(non_camel_case_types)]
@@ -46,9 +49,10 @@ where
             target_epoch,
             validators,
             attestations,
+            state_root: merkle_trace.root(),
             merkle_trace,
             sha256_inputs,
-            _f: PhantomData::<F>,
+            randomness: Sha256CircuitConfig::fixed_challenge(),
         }
     }
 
@@ -66,7 +70,7 @@ where
         MAX_BYTES_PER_TRANSACTION,
         MAX_TRANSACTIONS_PER_PAYLOAD,
     >(
-        beacon_state: BeaconState<
+        mut beacon_state: BeaconState<
             { mainnet::SLOTS_PER_HISTORICAL_ROOT },
             { mainnet::HISTORICAL_ROOTS_LIMIT },
             { mainnet::ETH1_DATA_VOTES_BOUND },
@@ -90,7 +94,8 @@ where
             attestations: vec![],
             merkle_trace: MerkleTrace::empty(),
             sha256_inputs: vec![],
-            _f: PhantomData::<F>,
+            state_root: beacon_state.hash_tree_root().unwrap().as_ref().try_into().unwrap(),
+            randomness: Sha256CircuitConfig::fixed_challenge(),
         };
         block
     }

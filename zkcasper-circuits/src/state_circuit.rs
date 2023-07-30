@@ -1,4 +1,5 @@
 use crate::{
+    sha256_circuit::Sha256CircuitConfig,
     table::{
         state_table::{StateTable, StateTables, StateTreeLevel},
         Sha256Table,
@@ -12,6 +13,7 @@ pub mod constraint_builder;
 use constraint_builder::ConstraintBuilder;
 
 pub mod merkle_tree;
+use ethereum_consensus::configs::goerli::config;
 use log::info;
 use merkle_tree::TreeLevel;
 
@@ -21,10 +23,11 @@ use crate::{
     witness::{self, MerkleTrace},
 };
 use eth_types::*;
-use gadgets::util::not;
+use gadgets::util::{not, rlc};
 use halo2_proofs::{
     circuit::{Layouter, Region, Value},
-    plonk::{ConstraintSystem, Error, Expression},
+    plonk::{Advice, Column, ConstraintSystem, Error, Expression, Instance},
+    poly::Rotation,
 };
 use itertools::Itertools;
 use std::{
@@ -40,17 +43,19 @@ pub struct StateCircuitConfig<F: Field> {
     tree: Vec<TreeLevel<F>>,
     sha256_table: Sha256Table,
     pub state_tables: StateTables,
-    // state_root: Column<Instance>
+    state_root: [Column<Instance>; 32],
 }
 
-pub struct StateCircuitArgs {
+pub struct StateCircuitArgs<F> {
     pub sha256_table: Sha256Table,
+    pub randomness: F,
 }
 
 impl<F: Field> SubCircuitConfig<F> for StateCircuitConfig<F> {
-    type ConfigArgs = StateCircuitArgs;
+    type ConfigArgs = StateCircuitArgs<F>;
 
     fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
+        let state_root = array_init::array_init(|_| meta.instance_column());
         let sha256_table = args.sha256_table;
 
         let pubkeys_level = TreeLevel::configure(meta, S::STATE_TREE_LEVEL_PUBKEYS, 0, 3, true);
@@ -118,12 +123,23 @@ impl<F: Field> SubCircuitConfig<F> for StateCircuitConfig<F> {
             });
         }
 
+        let last_level = &tree[0];
+        meta.lookup_any("state root", |meta| {
+            let selector = last_level.selector(meta);
+            let node = last_level.node(meta);
+            let sibling = last_level.sibling(meta);
+            let bytes = state_root.map(|col| meta.query_instance(col, Rotation::cur()));
+            let state_root_rlc = rlc::expr(&bytes, Expression::Constant(args.randomness));
+            sha256_table.build_lookup(meta, selector, node, sibling, state_root_rlc)
+        });
+
         println!("state circuit degree={}", meta.degree());
 
         StateCircuitConfig {
             tree,
             sha256_table,
             state_tables,
+            state_root,
         }
     }
 
@@ -164,7 +180,6 @@ impl<F: Field> StateCircuitConfig<F> {
                     .collect_vec();
                 for (level, steps) in self.tree.iter().zip(trace_by_depth) {
                     level.assign_with_region(&mut region, steps, challenge)?;
-                    // println!("------------------------- level {}", level.depth);
                 }
 
                 Ok(())
@@ -201,16 +216,8 @@ where
     type SynthesisArgs = ();
     type Output = ();
 
-    fn new_from_state(block: &'a witness::State<S, F>) -> Self {
-        Self::new(&block.merkle_trace)
-    }
-
-    fn unusable_rows() -> usize {
-        todo!()
-    }
-
-    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
-        todo!()
+    fn new_from_state(state: &'a witness::State<S, F>) -> Self {
+        Self::new(&state.merkle_trace)
     }
 
     fn synthesize_sub(
@@ -226,6 +233,18 @@ where
 
         Ok(())
     }
+
+    fn instance(&self) -> Vec<Vec<F>> {
+        self.trace.root().map(|b| vec![F::from(b as u64)]).to_vec()
+    }
+
+    fn unusable_rows() -> usize {
+        todo!()
+    }
+
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
+        todo!()
+    }
 }
 
 #[cfg(test)]
@@ -240,7 +259,7 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestState<'a, S: Spec, F: Field> {
-        state_circuit: StateCircuit<'a, S, F>,
+        inner: StateCircuit<'a, S, F>,
         _f: PhantomData<F>,
     }
 
@@ -258,7 +277,15 @@ mod tests {
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             let sha256_table = Sha256Table::construct(meta);
 
-            let config = { StateCircuitConfig::new::<S>(meta, StateCircuitArgs { sha256_table }) };
+            let config = {
+                StateCircuitConfig::new::<S>(
+                    meta,
+                    StateCircuitArgs {
+                        sha256_table,
+                        randomness: Sha256CircuitConfig::fixed_challenge(),
+                    },
+                )
+            };
 
             (
                 config,
@@ -272,12 +299,12 @@ mod tests {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let challenge = config.1.sha256_input();
-            let hash_inputs = self.state_circuit.trace.sha256_inputs();
+            let hash_inputs = self.inner.trace.sha256_inputs();
             config
                 .0
                 .sha256_table
                 .dev_load(&mut layouter, &hash_inputs, challenge)?;
-            self.state_circuit
+            self.inner
                 .synthesize_sub(&config.0, &config.1, &mut layouter, ())?;
             Ok(())
         }
@@ -285,16 +312,17 @@ mod tests {
 
     #[test]
     fn test_state_circuit() {
-        let k = 11;
+        let k = 10;
         let merkle_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
 
         let circuit = TestState::<Test, Fr> {
-            state_circuit: StateCircuit::new(&merkle_trace),
+            inner: StateCircuit::new(&merkle_trace),
             _f: PhantomData,
         };
 
-        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+        let instance = circuit.inner.instance();
+        let prover = MockProver::<Fr>::run(k, &circuit, instance).unwrap();
         prover.assert_satisfied();
     }
 }

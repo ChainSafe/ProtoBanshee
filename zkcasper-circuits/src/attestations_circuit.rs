@@ -107,9 +107,9 @@ where
 
     fn new_from_state(
         builder: Rc<RefCell<GateThreadBuilder<F>>>,
-        block: &'a witness::State<S, F>,
+        state: &'a witness::State<S, F>,
     ) -> Self {
-        Self::new(builder, &block.attestations, block.sha256_inputs.len() * 144)
+        Self::new(builder, &state.attestations, state.sha256_inputs.len() * 144)
     }
 
     /// Assumptions:
@@ -248,10 +248,6 @@ where
                 Ok(())
             },
         )
-    }
-
-    fn instance(&self) -> Vec<Vec<F>> {
-        vec![]
     }
 
     fn unusable_rows() -> usize {

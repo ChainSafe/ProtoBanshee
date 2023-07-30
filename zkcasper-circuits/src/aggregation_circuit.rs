@@ -67,9 +67,9 @@ where
 
     fn new_from_state(
         builder: Rc<RefCell<GateThreadBuilder<F>>>,
-        block: &'a witness::State<S, F>,
+        state: &'a witness::State<S, F>,
     ) -> Self {
-        let validators_y = block
+        let validators_y = state
             .validators
             .iter()
             .map(|v| {
@@ -81,7 +81,7 @@ where
                 g1_affine.into_coordinates().1
             })
             .collect_vec();
-        Self::new(builder, &block.validators, validators_y)
+        Self::new(builder, &state.validators, validators_y)
     }
 
     fn synthesize_sub(
@@ -192,10 +192,6 @@ where
                 Ok(aggregated_pubkeys)
             },
         )
-    }
-
-    fn instance(&self) -> Vec<Vec<F>> {
-        vec![]
     }
 
     fn unusable_rows() -> usize {

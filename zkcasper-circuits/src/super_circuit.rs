@@ -48,10 +48,14 @@ impl<F: Field> SuperCircuitConfig<F> {
     const K: usize = 17;
 }
 
-impl<F: Field> SubCircuitConfig<F> for SuperCircuitConfig<F> {
-    type ConfigArgs = ();
+pub struct SuperCircuitArgs<F: Field> {
+    randomness: F,
+}
 
-    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, _: Self::ConfigArgs) -> Self {
+impl<F: Field> SubCircuitConfig<F> for SuperCircuitConfig<F> {
+    type ConfigArgs = SuperCircuitArgs<F>;
+
+    fn new<S: Spec>(meta: &mut ConstraintSystem<F>, args: Self::ConfigArgs) -> Self {
         let sha256_table = Sha256Table::construct(meta);
         let validators_table = ValidatorsTable::construct::<S, F>(meta);
 
@@ -61,6 +65,7 @@ impl<F: Field> SubCircuitConfig<F> for SuperCircuitConfig<F> {
             meta,
             StateCircuitArgs {
                 sha256_table: sha256_table.clone(),
+                randomness: args.randomness,
             },
         );
 
@@ -124,23 +129,29 @@ where
     attestations_circuit: AttestationsCircuitBuilder<'a, S, F>,
 }
 
-impl<'a, S: Spec + Sync, F: Field> SuperCircuit<'a, S, F>
+impl<'a, S: Spec + Sync, F: Field> SubCircuit<'a, S, F> for SuperCircuit<'a, S, F>
 where
     S::SiganturesCurve: BlsCurveExt,
     <S::SiganturesCurve as AppCurveExt>::Fq:
         FieldExtConstructor<<S::SiganturesCurve as AppCurveExt>::Fp, 2>,
     [(); S::MAX_VALIDATORS_PER_COMMITTEE]:,
 {
-    pub fn new_from_block(block: &'a State<S, F>) -> Self {
-        let sha256_circuit = Sha256Circuit::new_from_state(block);
-        let state_circuit = StateCircuit::new_from_state(block);
-        let validators_circuit = ValidatorsCircuit::new_from_state(block);
+    type Config = SuperCircuitConfig<F>;
+
+    type SynthesisArgs = ();
+
+    type Output = ();
+
+    fn new_from_state(state: &'a State<S, F>) -> Self {
+        let sha256_circuit = Sha256Circuit::new_from_state(state);
+        let state_circuit = StateCircuit::new_from_state(state);
+        let validators_circuit = ValidatorsCircuit::new_from_state(state);
 
         let builder = GateThreadBuilder::new(false);
         let builder = Rc::new(RefCell::new(builder));
-        let aggregation_circuit = AggregationCircuitBuilder::new_from_state(builder.clone(), block);
+        let aggregation_circuit = AggregationCircuitBuilder::new_from_state(builder.clone(), state);
         let attestations_circuit =
-            AttestationsCircuitBuilder::new_from_state(builder.clone(), block);
+            AttestationsCircuitBuilder::new_from_state(builder.clone(), state);
 
         Self {
             state_circuit,
@@ -150,6 +161,62 @@ where
             aggregation_circuit,
             attestations_circuit,
         }
+    }
+
+    fn synthesize_sub(
+        &self,
+        config: &Self::Config,
+        challenges: &Challenges<Value<F>>,
+        layouter: &mut impl halo2_proofs::circuit::Layouter<F>,
+        args: Self::SynthesisArgs,
+    ) -> Result<Self::Output, Error> {
+        config
+            .range
+            .load_lookup_table(layouter)
+            .expect("load range lookup table");
+        self.sha256_circuit
+            .synthesize_sub(&config.sha256_circuit, challenges, layouter, ())?;
+        self.state_circuit
+            .synthesize_sub(&config.state_circuit, challenges, layouter, ())?;
+        let validator_cells = self.validators_circuit.synthesize_sub(
+            &config.validators_circuit,
+            challenges,
+            layouter,
+            (),
+        )?;
+        let aggregated_pubkeys = self.aggregation_circuit.synthesize_sub(
+            &config.range,
+            challenges,
+            layouter,
+            validator_cells,
+        )?;
+        self.attestations_circuit.synthesize_sub(
+            &config.attestations_circuit,
+            challenges,
+            layouter,
+            aggregated_pubkeys,
+        );
+
+        Ok(())
+    }
+
+    fn instance(&self) -> Vec<Vec<F>> {
+        itertools::chain![
+            self.sha256_circuit.instance(),
+            self.state_circuit.instance(),
+            self.validators_circuit.instance(),
+            self.aggregation_circuit.instance(),
+            self.attestations_circuit.instance(),
+        ]
+        .collect()
+    }
+
+    fn unusable_rows() -> usize {
+        todo!()
+    }
+
+    fn min_num_rows_state(block: &crate::witness::State<S, F>) -> (usize, usize) {
+        todo!()
     }
 }
 
@@ -169,47 +236,22 @@ where
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-        Self::Config::new::<S>(meta, ())
+        Self::Config::new::<S>(
+            meta,
+            SuperCircuitArgs {
+                randomness: Sha256CircuitConfig::fixed_challenge(),
+            },
+        )
     }
 
     fn synthesize(
         &self,
-        mut config: Self::Config,
+        config: Self::Config,
         mut layouter: impl halo2_proofs::circuit::Layouter<F>,
     ) -> Result<(), Error> {
         let challenges = Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge()));
-        config
-            .range
-            .load_lookup_table(&mut layouter)
-            .expect("load range lookup table");
-        self.sha256_circuit.synthesize_sub(
-            &config.sha256_circuit,
-            &challenges,
-            &mut layouter,
-            (),
-        )?;
-        self.state_circuit
-            .synthesize_sub(&config.state_circuit, &challenges, &mut layouter, ())?;
-        let validator_cells = self.validators_circuit.synthesize_sub(
-            &config.validators_circuit,
-            &challenges,
-            &mut layouter,
-            (),
-        )?;
-        let aggregated_pubkeys = self.aggregation_circuit.synthesize_sub(
-            &config.range,
-            &challenges,
-            &mut layouter,
-            validator_cells,
-        )?;
-        self.attestations_circuit.synthesize_sub(
-            &config.attestations_circuit,
-            &challenges,
-            &mut layouter,
-            aggregated_pubkeys,
-        );
 
-        Ok(())
+        self.synthesize_sub(&config, &challenges, &mut layouter, ())
     }
 }
 
@@ -233,10 +275,11 @@ mod tests {
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
         let attestations: Vec<Attestation<Test>> =
             serde_json::from_slice(&fs::read("../test_data/attestations.json").unwrap()).unwrap();
-        let block = State::<Test, Fr>::mock(25, validators, attestations, merkle_trace);
+        let state = State::<Test, Fr>::mock(25, validators, attestations, merkle_trace);
 
-        let circuit = SuperCircuit::<Test, Fr>::new_from_block(&block);
-        let prover = MockProver::<Fr>::run(17, &circuit, vec![]).unwrap();
+        let circuit = SuperCircuit::<Test, Fr>::new_from_state(&state);
+        let instance = circuit.instance();
+        let prover = MockProver::<Fr>::run(17, &circuit, instance).unwrap();
         prover.assert_satisfied();
     }
 }

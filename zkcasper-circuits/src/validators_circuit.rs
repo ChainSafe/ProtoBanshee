@@ -468,16 +468,8 @@ where
     type SynthesisArgs = ();
     type Output = ValidatorsCircuitOutput;
 
-    fn new_from_state(block: &'a witness::State<S, F>) -> Self {
-        Self::new(&block.validators, block.target_epoch)
-    }
-
-    fn unusable_rows() -> usize {
-        todo!()
-    }
-
-    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
-        todo!()
+    fn new_from_state(state: &'a witness::State<S, F>) -> Self {
+        Self::new(&state.validators, state.target_epoch)
     }
 
     /// Make the assignments to the ValidatorsCircuit
@@ -510,9 +502,12 @@ where
             },
         )
     }
+    fn unusable_rows() -> usize {
+        todo!()
+    }
 
-    fn instance(&self) -> Vec<Vec<F>> {
-        vec![]
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
+        todo!()
     }
 }
 

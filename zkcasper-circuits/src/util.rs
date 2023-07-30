@@ -112,7 +112,7 @@ where
     type Output;
 
     /// Create a new SubCircuit from a witness Block
-    fn new_from_state(block: &'a witness::State<S, F>) -> Self;
+    fn new_from_state(state: &'a witness::State<S, F>) -> Self;
 
     /// Assign only the columns used by this sub-circuit.  This includes the
     /// columns that belong to the exposed lookup table contained within, if
@@ -156,7 +156,7 @@ where
     /// Create a new SubCircuitBuilder from a witness Block
     fn new_from_state(
         builder: Rc<RefCell<GateThreadBuilder<F>>>,
-        block: &'a witness::State<S, F>,
+        state: &'a witness::State<S, F>,
     ) -> Self;
 
     fn synthesize_sub(

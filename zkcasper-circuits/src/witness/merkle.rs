@@ -30,6 +30,10 @@ impl MerkleTrace {
         Self(vec![])
     }
 
+    pub fn root(&self) -> [u8; 32] {
+        self.0.last().expect("root is expected").node.clone().try_into().unwrap()
+    }
+
     pub fn trace_by_levels(&self) -> Vec<Vec<&MerkleTraceStep>> {
         self.0
             .iter()
@@ -61,8 +65,6 @@ impl MerkleTrace {
             .into_iter()
             .enumerate()
             .map(|(i, step)| {
-                // println!("i={i}, depth={}, node: {:?}, sibling: {:?}", step.depth, [step.index.to_string(), hex::encode(&step.node)], [step.sibling_index.to_string(), hex::encode(&step.sibling)]);
-                // println!("parent = {:?} {:?}", hex::encode(&step.parent), step.parent);
                 assert_eq!(
                     sha2::Sha256::digest(vec![step.node.clone(), step.sibling.clone()].concat())
                         .to_vec(),

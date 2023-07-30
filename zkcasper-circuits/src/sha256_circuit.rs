@@ -1101,15 +1101,6 @@ where
         Self::new(&state.sha256_inputs)
     }
 
-    fn unusable_rows() -> usize {
-        todo!()
-    }
-
-    /// Return the minimum number of rows required to prove the block
-    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
-        todo!()
-    }
-
     /// Make the assignments to the KeccakCircuit
     fn synthesize_sub(
         &self,
@@ -1121,6 +1112,15 @@ where
         let witness = self.generate_witness(*challenges);
         let _ = config.assign(layouter, witness.as_slice());
         Ok(())
+    }
+
+    fn unusable_rows() -> usize {
+        todo!()
+    }
+
+    /// Return the minimum number of rows required to prove the block
+    fn min_num_rows_state(_block: &witness::State<S, F>) -> (usize, usize) {
+        todo!()
     }
 }
 
