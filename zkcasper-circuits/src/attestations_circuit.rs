@@ -231,7 +231,6 @@ where
 
                     let res =
                         bls_chip.verify_pairing(signature, msghash, pubkey, g1_neg.clone(), ctx);
-
                     fp12_chip.assert_equal(ctx, res, fp12_one.clone());
                 }
 
@@ -245,6 +244,7 @@ where
                     extra_assignments,
                 );
 
+                // TODO: constaint source_root, target_root with instances: `layouter.constrain_instance`
                 Ok(())
             },
         )
