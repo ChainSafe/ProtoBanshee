@@ -14,7 +14,7 @@ use constraint_builder::ConstraintBuilder;
 
 pub mod merkle_tree;
 use ethereum_consensus::configs::goerli::config;
-use log::info;
+use log::{debug, info};
 use merkle_tree::TreeLevel;
 
 use crate::{
@@ -133,7 +133,7 @@ impl<F: Field> SubCircuitConfig<F> for StateCircuitConfig<F> {
             sha256_table.build_lookup(meta, selector, node, sibling, state_root_rlc)
         });
 
-        println!("state circuit degree={}", meta.degree());
+        debug!("state circuit degree={}", meta.degree());
 
         StateCircuitConfig {
             tree,

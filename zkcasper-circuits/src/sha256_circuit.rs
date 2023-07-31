@@ -1229,7 +1229,6 @@ mod tests {
         let merkle_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();
         let inputs = merkle_trace.sha256_inputs();
-        println!("inputs: {:?}", inputs.len());
         let circuit = TestSha256::<S, Fr> {
             inner: Sha256Circuit::new(&inputs),
         };

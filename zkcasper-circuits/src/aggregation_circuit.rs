@@ -381,7 +381,7 @@ impl<'a, F: Field, S: Spec + Sync> AggregationCircuitBuilder<'a, S, F> {
         assert_eq!(assigned_bytes.len(), S::PubKeysCurve::BYTES_FQ);
 
         // need to pad to 64 bytes becasue `rlc::assigned_value` is over LE bytes
-        // see 1 approach in https://github.com/ChainSafe/banshee-zk/issues/72
+        // see Approach 1 in https://github.com/ChainSafe/banshee-zk/issues/72
         let mut assigned_bytes = assigned_bytes.to_vec();
         assigned_bytes.resize(64, ctx.load_zero());
 

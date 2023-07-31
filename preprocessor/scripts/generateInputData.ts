@@ -22,7 +22,6 @@ const DST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
 console.log("VALIDATOR_0_GINDEX:", BeaconStateSsz.getPathInfo(['validators', 0]).gindex);
 
 const N = 5;
-// let validators: Validator[] = [];
 let gindices: bigint[] = [];
 let validatorBaseGindices: bigint[] = [];
 

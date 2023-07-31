@@ -115,7 +115,7 @@ impl<F: Field> SubCircuitConfig<F> for SuperCircuitConfig<F> {
     }
 }
 
-/// The Super Circuit contains all the zkEVM circuits
+/// The Super Circuit contains all the zkCasper circuits
 #[derive(Clone, Debug)]
 pub struct SuperCircuit<'a, S: Spec + Sync, F: Field>
 where

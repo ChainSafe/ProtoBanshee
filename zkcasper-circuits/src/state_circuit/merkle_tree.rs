@@ -81,7 +81,7 @@ impl<F: Field> TreeLevel<F> {
     ) -> Result<(), Error> {
         for (i, step) in steps
             .into_iter()
-            .sorted_by_key(|s| s.parent_index) // TODO: is it secure to reorder trace?
+            .sorted_by_key(|s| s.parent_index) // WARNING: is it secure to reorder trace?
             .enumerate()
         {
             let offset = self.offset + i * (self.padding + 1);
@@ -98,7 +98,7 @@ impl<F: Field> TreeLevel<F> {
                 Value::known(F::from_bytes_le_unsecure(&step.sibling))
             };
 
-            // TODO: fixed q_enabled should be set seprarately to the bottom of the table
+            // FIXME: fixed q_enabled should be set seprarately to the bottom of the table
             region.assign_fixed(
                 || "q_enabled",
                 self.q_enabled,
@@ -106,7 +106,6 @@ impl<F: Field> TreeLevel<F> {
                 || Value::known(F::one()),
             )?;
             region.assign_advice(|| "sibling", self.sibling, offset, || sibling)?;
-            // println!("state: {:?} {:?}", sibling, hex::encode(&step.sibling));
             if let Some(sibling_index) = self.sibling_index {
                 region.assign_advice(
                     || "sibling_index",
@@ -130,17 +129,6 @@ impl<F: Field> TreeLevel<F> {
                 offset,
                 || Value::known(F::from(step.into_left as u64)),
             )?;
-
-            // println!(
-            //     "offset: {offset} node {:?} sibling {:?}",
-            //     [step.index.to_string(), hex::encode(&step.node)],
-            //     [step.sibling_index.to_string(), hex::encode(&step.sibling)]
-            // );
-            // println!(
-            //     "offset: {offset} parent = {:?}",
-            //     [step.parent_index.to_string(), hex::encode(&step.parent)]
-            // );
-            // println!("----------------------");
         }
 
         Ok(())

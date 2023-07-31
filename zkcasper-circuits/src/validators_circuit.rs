@@ -24,6 +24,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use itertools::Itertools;
+use log::debug;
 use std::{iter, marker::PhantomData};
 
 pub(crate) const N_BYTE_LOOKUPS: usize = 16; // 8 per lt gadget (target_gte_activation, target_lt_exit)
@@ -297,7 +298,7 @@ impl<F: Field> SubCircuitConfig<F> for ValidatorsCircuitConfig<F> {
             ]))
         });
 
-        println!("validators circuit degree={}", meta.degree());
+        debug!("validators circuit degree={}", meta.degree());
 
         config
     }
