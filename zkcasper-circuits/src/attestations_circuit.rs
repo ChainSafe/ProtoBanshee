@@ -233,9 +233,15 @@ where
                         &mut h2c_cache,
                     )?;
 
+
+                    print_fq2_dev::<S::SiganturesCurve, F>(&signature.x, "signature_x");
+                    print_fq2_dev::<S::SiganturesCurve, F>(&signature.y, "signature_y");
+
+                    println!("-------------------");
+
                     let res =
                         bls_chip.verify_pairing(signature, msghash, pubkey, g1_neg.clone(), ctx);
-                    // fp12_chip.assert_equal(ctx, res, fp12_one.clone());
+                    fp12_chip.assert_equal(ctx, res, fp12_one.clone());
                 }
 
                 let extra_assignments = hasher.take_extra_assignments();
@@ -411,7 +417,7 @@ mod tests {
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 15;
         const LOOKUP_BITS: usize = 8;
-        const K: usize = 18;
+        const K: usize = 19;
     }
 
     impl<'a, S: Spec, F: Field> Circuit<F> for TestCircuit<'a, S, F>

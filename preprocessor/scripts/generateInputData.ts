@@ -1,5 +1,5 @@
 import fs from "fs";
-import { bls12_381 } from '@noble/curves/bls12-381';
+import { bls12_381 } from '@noble/curves/bls12-381' // '../../../examples/noble-curves/esm/bls12-381';
 import {
     BitArray,
     ContainerType,
@@ -12,7 +12,7 @@ import {
 import { createProof, ProofType, MultiProof, Node } from "@chainsafe/persistent-merkle-tree";
 import { chunkArray, g1PointToLeBytes as g1PointToBytesLE, g2PointToLeBytes, serialize } from "./util";
 import { createNodeFromMultiProofWithTrace, printTrace } from "./merkleTrace";
-import { hexToBytes, bytesToHex } from "@noble/curves/abstract/utils";
+import { hexToBytes, bytesToHex, numberToBytesBE } from "@noble/curves/abstract/utils";
 import { ProjPointType } from "@noble/curves/abstract/weierstrass";
 import { createNodeFromCompactMultiProof } from "@chainsafe/persistent-merkle-tree/lib/proof/compactMulti";
 import { ValidatorsSsz, Validator, BeaconStateSsz } from "./types";
@@ -43,7 +43,7 @@ let pubKeyPoints: ProjPointType<bigint>[] = [];
 
 for (let i = 0; i < N_validators * N_committees; i++) {
     // use 5 pregenerated private keys to avoid changing JSON files.
-    let privKey = i < 5 ? hexToBytes(privKeyHexes[i]) : bls12_381.utils.randomPrivateKey();
+    let privKey = i < privKeyHexes.length ? hexToBytes(privKeyHexes[i]) : bls12_381.utils.randomPrivateKey();
     let p = bls12_381.G1.ProjectivePoint.fromPrivateKey(privKey);
     let pubkey = g1PointToBytesLE(p, true);
 
@@ -126,7 +126,7 @@ for (let i = 0; i < N_committees; i++) {
         },
         target: {
             epoch: targetEpoch,
-            root: beaconStateRoot
+            root: beaconStateRoot,
         }
     };
     
@@ -140,11 +140,16 @@ for (let i = 0; i < N_committees; i++) {
     let aggSignature = bls12_381.aggregateSignatures(signatures);
 
     
-    
     // assert signature is valid
     bls12_381.verify(aggSignature, msgPoint, aggregatedPubKeys[i]);
     
     let sigBytes = g2PointToLeBytes(aggSignature, true);
+
+    bls12_381.G2.ProjectivePoint.fromHex(bytesToHex(aggSignature.toRawBytes(true)))
+    console.log(`signature ${i}:`, aggSignature.toAffine());
+
+
+    // console.log("-------------------");
     
     attestations.push({
         aggregationBits: BitArray.fromBoolArray(Array(N_validators).fill(1)),
