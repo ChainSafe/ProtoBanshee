@@ -201,9 +201,6 @@ where
                         .expect("pubkey not found")
                         .clone();
 
-                    print_fq_dev::<S::PubKeysCurve, F>(&pubkey.x, "pk_x");
-                    print_fq_dev::<S::PubKeysCurve, F>(&pubkey.y, "pk_y");
-
                     let signature = Self::assign_signature(signature, &g2_chip, ctx);
 
                     let chunks = [
@@ -232,12 +229,6 @@ where
                         &mut region,
                         &mut h2c_cache,
                     )?;
-
-
-                    print_fq2_dev::<S::SiganturesCurve, F>(&signature.x, "signature_x");
-                    print_fq2_dev::<S::SiganturesCurve, F>(&signature.y, "signature_y");
-
-                    println!("-------------------");
 
                     let res =
                         bls_chip.verify_pairing(signature, msghash, pubkey, g1_neg.clone(), ctx);
@@ -417,7 +408,7 @@ mod tests {
         const NUM_FIXED: usize = 1;
         const NUM_LOOKUP_ADVICE: usize = 15;
         const LOOKUP_BITS: usize = 8;
-        const K: usize = 19;
+        const K: usize = 17;
     }
 
     impl<'a, S: Spec, F: Field> Circuit<F> for TestCircuit<'a, S, F>

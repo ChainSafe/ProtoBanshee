@@ -1,5 +1,5 @@
 import fs from "fs";
-import { bls12_381 } from '@noble/curves/bls12-381' // '../../../examples/noble-curves/esm/bls12-381';
+import { bls12_381 } from '@noble/curves/bls12-381'
 import {
     BitArray,
     ContainerType,
@@ -139,17 +139,10 @@ for (let i = 0; i < N_committees; i++) {
     let signatures = committeePrivKeys[i].map((privKey) => msgPoint.multiply(BigInt('0x' + privKey)));
     let aggSignature = bls12_381.aggregateSignatures(signatures);
 
-    
     // assert signature is valid
     bls12_381.verify(aggSignature, msgPoint, aggregatedPubKeys[i]);
     
     let sigBytes = g2PointToLeBytes(aggSignature, true);
-
-    bls12_381.G2.ProjectivePoint.fromHex(bytesToHex(aggSignature.toRawBytes(true)))
-    console.log(`signature ${i}:`, aggSignature.toAffine());
-
-
-    // console.log("-------------------");
     
     attestations.push({
         aggregationBits: BitArray.fromBoolArray(Array(N_validators).fill(1)),
