@@ -6,9 +6,7 @@ use crate::{
         HashToCurveCache, HashToCurveChip, Sha256Chip,
     },
     sha256_circuit::{util::NUM_ROUNDS, Sha256CircuitConfig},
-    util::{
-        print_fq2_dev, Challenges, IntoWitness, SubCircuit, SubCircuitBuilder, SubCircuitConfig, print_fq_dev,
-    },
+    util::{Challenges, IntoWitness, SubCircuit, SubCircuitBuilder, SubCircuitConfig},
     witness::{self, Attestation, HashInput, HashInputChunk},
 };
 use eth_types::{AppCurveExt, Field, Spec};
