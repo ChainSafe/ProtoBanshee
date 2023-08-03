@@ -10,7 +10,10 @@ use std::marker::PhantomData;
 
 use crate::{
     table::{LookupTable, Sha256Table},
-    util::{not, BaseConstraintBuilder, Challenges, Expr, SubCircuit, SubCircuitConfig},
+    util::{
+        not, BaseConstraintBuilder, Challenges, ConstrainBuilderCommon, Expr, SubCircuit,
+        SubCircuitConfig,
+    },
     witness::{self, HashInput},
 };
 use eth_types::{Field, Spec};

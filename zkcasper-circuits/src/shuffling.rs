@@ -20,11 +20,14 @@ use halo2_proofs::{
 use num_bigint::BigUint;
 
 use crate::{
-    gadget::crypto::{AssignedHashResult, HashChip},
+    gadget::{
+        crypto::{AssignedHashResult, HashChip},
+        math::IsZeroGadget,
+    },
     sha256_circuit::Sha256CircuitConfig,
     table::Sha256Table,
     // table::SHA256Table,
-    util::{BaseConstraintBuilder, SubCircuitConfig},
+    util::{BaseConstraintBuilder, ConstrainBuilderCommon, SubCircuitConfig},
     witness::{HashInput, HashInputChunk},
 };
 
@@ -53,8 +56,9 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
     pub mirror1: Column<Advice>, // 90 Rows
     pub mirror2: Column<Advice>, // 90 Rows
 
-    pub flip: Column<Advice>,      // 90 * (N/2) Rows
-    pub bit_index: Column<Advice>, // 90 * (N/2) Rows
+    pub flip: Column<Advice>,               // 90 * (N/2) Rows
+    pub bit_index: Column<Advice>,          // 90 * (N/2) Rows. In range [0, 255(0xff)]
+    pub bit_index_quotient: Column<Advice>, // 90 * (N/2) Rows
 
     pub the_byte: Column<Advice>, // 90 * (N/2)
     pub the_bit: Column<Advice>,  // 90 * (N/2)
@@ -80,7 +84,25 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let bit_index = meta.advice_column();
         let the_byte = meta.advice_column();
         let the_bit = meta.advice_column();
+        let bit_index_quotient = meta.advice_column();
         let left_half: [Selector; ROUNDS] = [(); ROUNDS].map(|_| meta.complex_selector());
+
+        let config = Self {
+            list_length,
+            i,
+            list_items,
+            round,
+            pivot,
+            mirror1,
+            mirror2,
+            flip,
+            bit_index,
+            the_byte,
+            the_bit,
+            bit_index_quotient,
+            left_half,
+            sha256,
+        };
 
         meta.create_gate("per round variables", |meta| {
             let mut cb = BaseConstraintBuilder::default();
@@ -104,48 +126,44 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
 
         meta.create_gate("inner loop", |meta| {
             let mut cb = BaseConstraintBuilder::default();
+
+            let flip = meta.query_advice(flip, Rotation::cur());
+            let i = meta.query_advice(i, Rotation::cur());
+            let pivot = meta.query_advice(pivot, Rotation::cur());
+            let list_length = meta.query_advice(list_length, Rotation::cur());
+            let bit_index = meta.query_advice(bit_index, Rotation::cur());
+            let bit_index_quotient = meta.query_advice(bit_index_quotient, Rotation::cur());
+
             for r in 0..ROUNDS {
-                let flip = meta.query_advice(flip, Rotation::cur());
-                let i = meta.query_advice(i, Rotation::cur());
-                let pivot = meta.query_advice(pivot, Rotation::cur());
-                let list_length = meta.query_advice(list_length, Rotation::cur());
-                let bit_index = meta.query_advice(bit_index, Rotation::cur());
                 let is_left = meta.query_selector(left_half[r]);
 
                 let f = select::expr(
                     is_left.clone(),
                     pivot.clone() - i.clone(),
-                    pivot + list_length - i.clone(),
+                    pivot.clone() + list_length.clone() - i.clone(),
                 );
                 cb.require_equal("flip = pivot - i or pivot + list size - i", flip.clone(), f);
 
-                let i_or_flip = select::expr(is_left, i, flip.clone());
-                // FIXME: How to constrain congruency mod 256? or & 0xff which is the same thing...
+                let i_or_flip = select::expr(is_left, i.clone(), flip.clone());
                 cb.require_equal(
                     "bit_index = i & 0xff or flip & 0xff",
-                    bit_index * 256.expr(),
-                    i_or_flip,
+                    bit_index_quotient.clone() * 256.expr(),
+                    i_or_flip - bit_index.clone(),
                 );
+
+                // if is_left AND bit_index == 0 OR i == mirror1 -> Hash
+                // else if NOT is_left AND bit_index == 255 OR i == pivot + 1 -> Hash
+                // else -> No Hash
+
+                // select::expr(is_left,
+                //     select::expr((bit_index))
+                //     , when_false);
             }
 
             cb.gate(1.expr())
         });
 
-        Self {
-            list_length,
-            i,
-            list_items,
-            round,
-            pivot,
-            mirror1,
-            mirror2,
-            flip,
-            bit_index,
-            the_byte,
-            the_bit,
-            left_half,
-            sha256,
-        }
+        config
     }
 }
 

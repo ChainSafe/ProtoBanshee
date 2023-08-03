@@ -91,33 +91,20 @@ pub struct BaseConstraintBuilder<F> {
     pub condition: Option<Expression<F>>,
 }
 
-impl<F: Field> BaseConstraintBuilder<F> {
-    pub(crate) fn new(max_degree: usize) -> Self {
-        BaseConstraintBuilder {
-            constraints: Vec::new(),
-            max_degree,
-            condition: None,
-        }
-    }
-
-    pub(crate) fn require_zero(&mut self, name: &'static str, constraint: Expression<F>) {
+impl<F: Field> ConstrainBuilderCommon<F> for BaseConstraintBuilder<F> {
+    fn require_zero(&mut self, name: &'static str, constraint: Expression<F>) {
         self.add_constraint(name, constraint);
     }
 
-    pub(crate) fn require_equal(
-        &mut self,
-        name: &'static str,
-        lhs: Expression<F>,
-        rhs: Expression<F>,
-    ) {
+    fn require_equal(&mut self, name: &'static str, lhs: Expression<F>, rhs: Expression<F>) {
         self.add_constraint(name, lhs - rhs);
     }
 
-    pub(crate) fn require_boolean(&mut self, name: &'static str, value: Expression<F>) {
+    fn require_boolean(&mut self, name: &'static str, value: Expression<F>) {
         self.add_constraint(name, value.clone() * (1.expr() - value));
     }
 
-    pub(crate) fn require_in_set(
+    fn require_in_set(
         &mut self,
         name: &'static str,
         value: Expression<F>,
@@ -130,7 +117,7 @@ impl<F: Field> BaseConstraintBuilder<F> {
         );
     }
 
-    pub(crate) fn condition<R>(
+    fn condition<R>(
         &mut self,
         condition: Expression<F>,
         constraint: impl FnOnce(&mut Self) -> R,
@@ -145,19 +132,33 @@ impl<F: Field> BaseConstraintBuilder<F> {
         ret
     }
 
-    pub(crate) fn add_constraints(&mut self, constraints: Vec<(&'static str, Expression<F>)>) {
+    fn add_constraints(&mut self, constraints: Vec<(&'static str, Expression<F>)>) {
         for (name, constraint) in constraints {
             self.add_constraint(name, constraint);
         }
     }
 
-    pub(crate) fn add_constraint(&mut self, name: &'static str, constraint: Expression<F>) {
+    fn add_constraint(&mut self, name: &'static str, constraint: Expression<F>) {
         let constraint = match &self.condition {
             Some(condition) => condition.clone() * constraint,
             None => constraint,
         };
         self.validate_degree(constraint.degree(), name);
         self.constraints.push((name, constraint));
+    }
+
+    fn query_cells(&mut self, cell_type: CellType, count: usize) -> Vec<Cell<F>> {
+        unimplemented!()
+    }
+}
+
+impl<F: Field> BaseConstraintBuilder<F> {
+    pub(crate) fn new(max_degree: usize) -> Self {
+        BaseConstraintBuilder {
+            constraints: Vec::new(),
+            max_degree,
+            condition: None,
+        }
     }
 
     pub(crate) fn validate_degree(&self, degree: usize, name: &'static str) {
