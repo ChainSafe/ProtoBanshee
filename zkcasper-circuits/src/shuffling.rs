@@ -3,7 +3,8 @@ use std::{iter, marker::PhantomData, mem, ops::Mul};
 use eth_types::{Field, Mainnet, Spec};
 use gadgets::{
     binary_number::{BinaryNumberChip, BinaryNumberConfig},
-    util::{select, Expr},
+    is_zero,
+    util::{or, select, Expr},
 };
 use halo2_base::{
     gates::range,
@@ -65,6 +66,11 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
 
     pub left_half: [Selector; ROUNDS], // (N/2) Rows
 
+    pub is_zero_bit_index: Option<IsZeroGadget<F>>,
+    pub is_zero_i_minus_mirror1: Option<IsZeroGadget<F>>,
+    pub is_zero_i_minus_pivot_minus_1: Option<IsZeroGadget<F>>,
+    pub is_zero_bit_index_minus_255: Option<IsZeroGadget<F>>,
+
     pub sha256: Sha256CircuitConfig<F>,
 }
 
@@ -87,7 +93,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let bit_index_quotient = meta.advice_column();
         let left_half: [Selector; ROUNDS] = [(); ROUNDS].map(|_| meta.complex_selector());
 
-        let config = Self {
+        let mut config = Self {
             list_length,
             i,
             list_items,
@@ -102,6 +108,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             bit_index_quotient,
             left_half,
             sha256,
+            is_zero_bit_index: None,
+            is_zero_i_minus_mirror1: None,
+            is_zero_i_minus_pivot_minus_1: None,
+            is_zero_bit_index_minus_255: None,
         };
 
         meta.create_gate("per round variables", |meta| {
@@ -133,6 +143,15 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let list_length = meta.query_advice(list_length, Rotation::cur());
             let bit_index = meta.query_advice(bit_index, Rotation::cur());
             let bit_index_quotient = meta.query_advice(bit_index_quotient, Rotation::cur());
+            let mirror1 = meta.query_advice(mirror1, Rotation::cur());
+
+            let is_zero_bit_index = IsZeroGadget::construct(&mut cb, bit_index.clone());
+            let is_zero_bit_index_minus_255 =
+                IsZeroGadget::construct(&mut cb, bit_index.clone() - 255.expr());
+            let is_zero_i_minus_mirror1 =
+                IsZeroGadget::construct(&mut cb, i.clone() - mirror1.clone());
+            let is_zero_i_minus_pivot_minus_1 =
+                IsZeroGadget::construct(&mut cb, i.clone() - pivot.clone() - 1.expr());
 
             for r in 0..ROUNDS {
                 let is_left = meta.query_selector(left_half[r]);
@@ -144,7 +163,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 );
                 cb.require_equal("flip = pivot - i or pivot + list size - i", flip.clone(), f);
 
-                let i_or_flip = select::expr(is_left, i.clone(), flip.clone());
+                let i_or_flip = select::expr(is_left.clone(), i.clone(), flip.clone());
                 cb.require_equal(
                     "bit_index = i & 0xff or flip & 0xff",
                     bit_index_quotient.clone() * 256.expr(),
@@ -155,10 +174,33 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 // else if NOT is_left AND bit_index == 255 OR i == pivot + 1 -> Hash
                 // else -> No Hash
 
-                // select::expr(is_left,
-                //     select::expr((bit_index))
-                //     , when_false);
+                select::expr(
+                    is_left.clone(),
+                    select::expr(
+                        or::expr(
+                            [is_zero_bit_index.expr(), is_zero_i_minus_mirror1.expr()].into_iter(),
+                        ),
+                        1.expr(), // Do lookup table on new hash value
+                        0.expr(), // Hash stays the same
+                    ),
+                    select::expr(
+                        or::expr(
+                            [
+                                is_zero_bit_index_minus_255.expr(),
+                                is_zero_i_minus_pivot_minus_1.expr(),
+                            ]
+                            .into_iter(),
+                        ),
+                        2.expr(), // Do lookup table on new hash value
+                        0.expr(), // Hash stays the same
+                    ),
+                );
             }
+
+            config.is_zero_bit_index = Some(is_zero_bit_index);
+            config.is_zero_i_minus_mirror1 = Some(is_zero_i_minus_mirror1);
+            config.is_zero_i_minus_pivot_minus_1 = Some(is_zero_i_minus_pivot_minus_1);
+            config.is_zero_bit_index_minus_255 = Some(is_zero_bit_index_minus_255);
 
             cb.gate(1.expr())
         });
