@@ -178,34 +178,34 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             cb.gate(q_round_ops)
         });
 
-        // TODO: Enforce concat(seed, round) == seed_concat_round
-        meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
-            let seed_concat_round = meta.query_advice(seed_concat_round, Rotation::cur());
-            let q_round_ops = meta.query_selector(q_round_ops);
+        // // TODO: Enforce concat(seed, round) == seed_concat_round
+        // meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
+        //     let seed_concat_round = meta.query_advice(seed_concat_round, Rotation::cur());
+        //     let q_round_ops = meta.query_selector(q_round_ops);
 
-            let hash = meta.query_advice(hash, Rotation::cur());
-            config
-                .sha256_table
-                .build_lookup(meta, q_round_ops, seed_concat_round, 0.expr(), hash)
-        });
+        //     let hash = meta.query_advice(hash, Rotation::cur());
+        //     config
+        //         .sha256_table
+        //         .build_lookup(meta, q_round_ops, seed_concat_round, 0.expr(), hash)
+        // });
 
-        // TODO: Enforce concat(seed, round, i) == seed_concat_round_concat_i
-        meta.lookup_any(
-            "hash_bytes = sha256(seed, round_as_bytes, uintTo4Bytes(i or flip /256)",
-            |meta| {
-                let seed_concat_round_concat_i =
-                    meta.query_advice(seed_concat_round_concat_i, Rotation::cur());
-                let hash_bytes = meta.query_advice(hash_bytes, Rotation::cur());
+        // // TODO: Enforce concat(seed, round, i) == seed_concat_round_concat_i
+        // meta.lookup_any(
+        //     "hash_bytes = sha256(seed, round_as_bytes, uintTo4Bytes(i or flip /256)",
+        //     |meta| {
+        //         let seed_concat_round_concat_i =
+        //             meta.query_advice(seed_concat_round_concat_i, Rotation::cur());
+        //         let hash_bytes = meta.query_advice(hash_bytes, Rotation::cur());
 
-                config.sha256_table.build_lookup(
-                    meta,
-                    1.expr(),
-                    seed_concat_round_concat_i,
-                    0.expr(),
-                    hash_bytes,
-                )
-            },
-        );
+        //         config.sha256_table.build_lookup(
+        //             meta,
+        //             1.expr(),
+        //             seed_concat_round_concat_i,
+        //             0.expr(),
+        //             hash_bytes,
+        //         )
+        //     },
+        // );
 
         meta.create_gate("inner loop", |meta| {
             let mut cb = BaseConstraintBuilder::default();
@@ -337,24 +337,31 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 layouter.assign_region(
                     || "dunno",
                     |mut region| {
-                        Ok(
-                            for (name, column, value) in &[
-                                ("pivot", self.pivot, pivot),
-                                ("mirror1", self.mirror1, mirror1),
-                                ("mirror2", self.mirror2, mirror2),
-                                ("flip", self.flip, flip),
-                                ("bit_index", self.bit_index, bit_index),
-                                ("the_byte", self.the_byte, the_byte.into()),
-                                ("the_bit", self.the_bit, the_bit.into()),
-                            ] {
-                                region.assign_advice(
-                                    || name.to_string(),
-                                    *column,
-                                    i as usize,
-                                    || Value::known(F::from(*value)),
-                                )?;
-                            },
-                        )
+                        self.pivot_bytes.iter().enumerate().map(|(i, e)| {
+                            region.assign_advice(
+                                || format!("hash_bytes_{}", i),
+                                *e,
+                                0,
+                                || Value::known(F::from(pivot.to_le_bytes()[i] as u64)),
+                            )
+                        });
+                        for (name, column, value) in &[
+                            ("pivot", self.pivot, pivot),
+                            ("mirror1", self.mirror1, mirror1),
+                            ("mirror2", self.mirror2, mirror2),
+                            ("flip", self.flip, flip),
+                            ("bit_index", self.bit_index, bit_index),
+                            ("the_byte", self.the_byte, the_byte.into()),
+                            ("the_bit", self.the_bit, the_bit.into()),
+                        ] {
+                            region.assign_advice(
+                                || name.to_string(),
+                                *column,
+                                i as usize,
+                                || Value::known(F::from(*value)),
+                            )?;
+                        }
+                        Ok(())
                     },
                 );
             }
