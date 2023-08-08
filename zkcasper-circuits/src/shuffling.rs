@@ -334,17 +334,19 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     input[i as usize] = input[flip as usize];
                     input[flip as usize] = tmp;
                 }
+
                 layouter.assign_region(
                     || "dunno",
                     |mut region| {
+                        let offset = ((i - mirror1) * round as u64) as usize;
                         if i <= pivot {
-                            self.left_half[round as usize].enable(&mut region, i as usize)?;
+                            self.left_half[round as usize].enable(&mut region, offset)?;
                         }
                         self.pivot_bytes.iter().enumerate().map(|(i, e)| {
                             region.assign_advice(
                                 || format!("pivot_bytes{}", i),
                                 *e,
-                                0,
+                                offset,
                                 || Value::known(F::from(pivot.to_le_bytes()[i] as u64)),
                             )
                         });
@@ -360,7 +362,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                             region.assign_advice(
                                 || name.to_string(),
                                 *column,
-                                i as usize,
+                                offset,
                                 || Value::known(F::from(*value)),
                             )?;
                         }
