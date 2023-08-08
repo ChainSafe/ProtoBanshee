@@ -337,9 +337,12 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 layouter.assign_region(
                     || "dunno",
                     |mut region| {
+                        if i <= pivot {
+                            self.left_half[round as usize].enable(&mut region, i as usize)?;
+                        }
                         self.pivot_bytes.iter().enumerate().map(|(i, e)| {
                             region.assign_advice(
-                                || format!("hash_bytes_{}", i),
+                                || format!("pivot_bytes{}", i),
                                 *e,
                                 0,
                                 || Value::known(F::from(pivot.to_le_bytes()[i] as u64)),
