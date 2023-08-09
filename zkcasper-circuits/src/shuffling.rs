@@ -346,14 +346,14 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     input[i as usize] = input[flip as usize];
                     input[flip as usize] = tmp;
                 }
+                let offset = ((i - mirror1 + 1) * round as u64) as usize;
+
                 println!(
-                "Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
-                round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i
-            );
+                    "Offset {} Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
+                    offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
                 layouter.assign_region(
                     || "dunno",
                     |mut region| {
-                        let offset = ((i - mirror1) * round as u64) as usize;
                         if i <= pivot {
                             self.left_half[round as usize].enable(&mut region, offset)?;
                         }
@@ -447,22 +447,6 @@ mod test {
         let circuit = TestCircuit::<Fr>::default();
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
     }
-
-    // #[test]
-    // fn shuffling_test() {
-    //     // let seed:[u8; 32] = [0x4a, 0xc9, 0x6f, 0x66, 0x4a, 0x6c, 0xaf, 0xd3, 0x00, 0xb1, 0x61, 0x72, 0x08, 0x09, 0xb9, 0xe1, 0x79, 0x05, 0xd4, 0xd8, 0xfe, 0xd7, 0xa9, 0x7f, 0xf8, 0x9c, 0xf0, 0x08, 0x0a, 0x95, 0x3f, 0xe7];
-    //     // let mut input = [0, 4, 1, 3, 2];
-    //     let mut seed = [0u8; 32];
-    //     seed[0] = 1;
-    //     seed[1] = 128;
-    //     seed[2] = 12;
-    //     let mut input = [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9].to_vec();
-    //     // ShufflingConfig::<Fr, 90>::shuffle(&mut input, seed);
-    //     shuffle_list(&mut input, seed);
-    //     println!("{:?}", input);
-    //     // 0, 7, 8, 6, 3, 9, 4, 5, 2, 1}
-    //     // shuffle_0x4ac96f664a6cafd300b161720809b9e17905d4d8fed7a97ff89cf0080a953fe7_5
-    // }
 }
 struct ShufflingChip<F: Field> {
     config: ShufflingConfig<F, 90>,
