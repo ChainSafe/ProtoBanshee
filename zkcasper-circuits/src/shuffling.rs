@@ -46,6 +46,7 @@ const U64_BYTES: usize = U64_BITS / 8;
 const U32_BITS: usize = 32;
 const U32_BYTES: usize = U32_BITS / 8;
 
+const EMPTY_HASH: [u8; 32] = [0; 32];
 #[derive(Debug)]
 
 pub struct ShuffleChip<'a, S: Spec, F: Field, HC: HashChip<F>> {
@@ -95,7 +96,8 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
 }
 
 impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
-    pub fn configure(meta: &mut ConstraintSystem<F>, sha256_table: Sha256Table) -> Self {
+    pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
+        let sha256_table = Sha256Table::construct::<F>(meta);
         let seed = meta.advice_column();
         let list_length = meta.advice_column();
         let i = meta.advice_column();
@@ -279,22 +281,31 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         config
     }
 
-    pub fn shuffle(&self, layouter: &mut impl Layouter<F>, input: &mut Vec<u8>, seed: [u8; 32]) {
-        let list_size = input.len() as u64;
-        for round in 89u8..0 {
-            let round_as_byte = round.to_be_bytes();
-            let hash = sha2::Sha256::digest(vec![seed.to_vec(), round_as_byte.to_vec()].concat());
-            let pivot = hash[0..8].to_vec();
-            let pivot = u64::from_le_bytes(pivot.try_into().unwrap());
-            let pivot = pivot % list_size;
+    pub fn shuffle_list(&self, layouter: &mut impl Layouter<F>, input: &mut [u8], seed: [u8; 32]) {
+        let list_size = input.len();
+        if list_size == 0 {
+            return;
+        }
 
-            let mut hash_bytes = [0u8; 32];
+        for round in (0..90) {
+            let round_as_byte: [u8; 1] = [round as u8];
+
+            let hash = sha2::Sha256::digest(vec![seed.to_vec(), round_as_byte.to_vec()].concat());
+
+            let pivot = u64::from_le_bytes(hash[0..8].try_into().expect("Expected 8 bytes"));
+            let pivot = pivot % list_size as u64;
+
+            let mut hash_bytes = EMPTY_HASH;
             let mirror1 = (pivot + 2) / 2;
-            let mirror2 = (pivot + list_size) / 2;
+            let mirror2 = (pivot + list_size as u64) / 2;
+            println!(
+                "Round {} pivot {} mirror1 {} mirror2 {}",
+                round, pivot, mirror1, mirror2
+            );
             for i in mirror1..=mirror2 {
                 let (flip, bit_index) = if i <= pivot {
                     let flip = pivot - i;
-                    let bit_index = i & 0xff;
+                    let bit_index = (i & 0xff) as usize;
                     if bit_index == 0 || i == mirror1 {
                         hash_bytes = sha2::Sha256::digest(
                             vec![
@@ -309,8 +320,8 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     }
                     (flip, bit_index)
                 } else {
-                    let flip = pivot + list_size - i;
-                    let bit_index = flip & 0xff;
+                    let flip = pivot + list_size as u64 - i;
+                    let bit_index = (flip & 0xff) as usize;
                     if bit_index == 0xff || i == pivot + 1 {
                         hash_bytes = sha2::Sha256::digest(
                             vec![
@@ -323,11 +334,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         .try_into()
                         .unwrap();
                     }
-
                     (flip, bit_index)
                 };
 
-                let the_byte = hash[(bit_index / 8) as usize];
+                let the_byte = hash_bytes[bit_index / 8];
                 let the_bit = (the_byte >> (bit_index & 0x07)) & 1;
                 if the_bit != 0 {
                     let tmp = input[i as usize];
@@ -355,7 +365,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                             ("mirror1", self.mirror1, mirror1),
                             ("mirror2", self.mirror2, mirror2),
                             ("flip", self.flip, flip),
-                            ("bit_index", self.bit_index, bit_index),
+                            ("bit_index", self.bit_index, bit_index.try_into().unwrap()),
                             ("the_byte", self.the_byte, the_byte.into()),
                             ("the_bit", self.the_bit, the_bit.into()),
                         ] {
@@ -374,6 +384,70 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use halo2_proofs::{
+        circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
+    };
+
+    use super::*;
+
+    #[derive(Default)]
+    struct TestCircuit<F: Field> {
+        _f: PhantomData<F>,
+    }
+    impl<F: Field> Circuit<F> for TestCircuit<F> {
+        type Config = ShufflingConfig<F, 90>;
+
+        type FloorPlanner = SimpleFloorPlanner;
+
+        fn without_witnesses(&self) -> Self {
+            todo!()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+            ShufflingConfig::<F, 90>::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<F>,
+        ) -> Result<(), Error> {
+            let mut seed = [0u8; 32];
+            seed[0] = 1;
+            seed[1] = 128;
+            seed[2] = 12;
+            let mut input = [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9].to_vec();
+
+            config.shuffle_list(&mut layouter, &mut input, seed);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_shuffling_circuit() {
+        let k = 10;
+        let circuit = TestCircuit::<Fr>::default();
+        let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+    }
+
+    // #[test]
+    // fn shuffling_test() {
+    //     // let seed:[u8; 32] = [0x4a, 0xc9, 0x6f, 0x66, 0x4a, 0x6c, 0xaf, 0xd3, 0x00, 0xb1, 0x61, 0x72, 0x08, 0x09, 0xb9, 0xe1, 0x79, 0x05, 0xd4, 0xd8, 0xfe, 0xd7, 0xa9, 0x7f, 0xf8, 0x9c, 0xf0, 0x08, 0x0a, 0x95, 0x3f, 0xe7];
+    //     // let mut input = [0, 4, 1, 3, 2];
+    //     let mut seed = [0u8; 32];
+    //     seed[0] = 1;
+    //     seed[1] = 128;
+    //     seed[2] = 12;
+    //     let mut input = [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9].to_vec();
+    //     // ShufflingConfig::<Fr, 90>::shuffle(&mut input, seed);
+    //     shuffle_list(&mut input, seed);
+    //     println!("{:?}", input);
+    //     // 0, 7, 8, 6, 3, 9, 4, 5, 2, 1}
+    //     // shuffle_0x4ac96f664a6cafd300b161720809b9e17905d4d8fed7a97ff89cf0080a953fe7_5
+    // }
+}
 struct ShufflingChip<F: Field> {
     config: ShufflingConfig<F, 90>,
 }
