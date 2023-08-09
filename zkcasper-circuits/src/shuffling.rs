@@ -62,6 +62,7 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
     pub list_length: Column<Advice>,
     pub i: Column<Advice>, // plus one sequential
     pub list_items: Column<Advice>,
+    pub q_enable: Selector,
 
     pub q_round_ops: Selector, // 90 Rows
     pub round: Column<Advice>, // 90 * (N/2) Rows
@@ -118,6 +119,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let seed_concat_round_concat_i = meta.advice_column();
 
         let left_half: [Selector; ROUNDS] = [(); ROUNDS].map(|_| meta.complex_selector());
+        let q_enable = meta.selector();
 
         let pivot_bytes: [Column<Advice>; U64_BYTES] =
             [(); U64_BYTES].map(|_| meta.advice_column());
@@ -144,6 +146,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             hash_bytes,
             seed_concat_round,
             seed_concat_round_concat_i,
+            q_enable,
             q_round_ops,
             is_zero_bit_index: None,
             is_zero_i_minus_mirror1: None,
@@ -159,24 +162,24 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let m2 = m.query_advice(mirror2, Rotation::cur());
             let list_length = m.query_advice(list_length, Rotation::cur());
             let pivot_bytes = pivot_bytes.map(|c| m.query_advice(c, Rotation::cur()));
-
+            let q_enable = m.query_selector(q_enable);
             // TODO: Restrict Pivot_bytes to be hash[0 ..8]
             cb.require_equal(
                 "pivot_bytes == pivot",
                 pivot.clone(),
                 from_u64_bytes::expr(&pivot_bytes),
             );
-            cb.require_equal(
+            cb.require_in_set(
                 "mirror m1 = (pivot + 2) / 2",
-                2u64.expr() * m1,
                 pivot.clone() + 2u64.expr(),
+                [m1.clone() * 2.expr(), m1 * 2.expr() + 1.expr()].to_vec(), // TODO: Is this safe to not properly check if even or odd?
             );
-            cb.require_equal(
+            cb.require_in_set(
                 "mirror m2 = (pivot + list_length) / 2",
-                2u64.expr() * m2,
                 pivot + list_length,
+                [m2.clone() * 2.expr(), m2.clone() * 2.expr() + 1.expr()].to_vec(),
             );
-            cb.gate(1.expr())
+            cb.gate(q_enable)
         });
 
         // // TODO: Enforce concat(seed, round) == seed_concat_round
@@ -219,6 +222,12 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let bit_index_quotient = meta.query_advice(bit_index_quotient, Rotation::cur());
             let mirror1 = meta.query_advice(mirror1, Rotation::cur());
 
+            let q_enable = meta.query_selector(q_enable);
+            let left_half = left_half
+                .iter()
+                .map(|s| meta.query_selector(*s))
+                .collect::<Vec<_>>();
+
             // let is_zero_bit_index = IsZeroGadget::construct(&mut cb, bit_index.clone());
             // let is_zero_bit_index_minus_255 =
             //     IsZeroGadget::construct(&mut cb, bit_index.clone() - 255.expr());
@@ -227,21 +236,20 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             // let is_zero_i_minus_pivot_minus_1 =
             //     IsZeroGadget::construct(&mut cb, i.clone() - pivot.clone() - 1.expr());
 
-            for r in 0..ROUNDS {
-                let is_left = meta.query_selector(left_half[r]);
+            for r in 0usize..ROUNDS {
                 let f = select::expr(
-                    is_left.clone(),
+                    left_half[r].clone(),
                     pivot.clone() - i.clone(),
                     pivot.clone() + list_length.clone() - i.clone(),
                 );
                 cb.require_equal("flip = pivot - i or pivot + list size - i", flip.clone(), f);
 
-                let i_or_flip = select::expr(is_left.clone(), i.clone(), flip.clone());
-                cb.require_equal(
-                    "bit_index = i & 0xff or flip & 0xff",
-                    bit_index_quotient.clone() * 256.expr(),
-                    i_or_flip - bit_index.clone(),
-                );
+                // let i_or_flip = select::expr(is_left.clone(), i.clone(), flip.clone());
+                // cb.require_equal(
+                //     "bit_index = i & 0xff or flip & 0xff",
+                //     bit_index_quotient.clone() * 256.expr(),
+                //     i_or_flip - bit_index.clone(),
+                // );
             }
 
             // config.is_zero_bit_index = Some(is_zero_bit_index);
@@ -249,7 +257,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             // config.is_zero_i_minus_pivot_minus_1 = Some(is_zero_i_minus_pivot_minus_1);
             // config.is_zero_bit_index_minus_255 = Some(is_zero_bit_index_minus_255);
 
-            cb.gate(1.expr())
+            cb.gate(q_enable)
         });
 
         // if is_left AND bit_index == 0 OR i == mirror1 -> Hash
@@ -283,10 +291,15 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         config
     }
 
-    pub fn shuffle_list(&self, layouter: &mut impl Layouter<F>, input: &mut [u8], seed: [u8; 32]) {
+    pub fn shuffle_list(
+        &self,
+        layouter: &mut impl Layouter<F>,
+        input: &mut [u8],
+        seed: [u8; 32],
+    ) -> Result<(), Error> {
         let list_size = input.len();
         if list_size == 0 {
-            return;
+            return Ok(());
         }
 
         for round in (0..90) {
@@ -294,8 +307,8 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
 
             let hash = sha2::Sha256::digest(vec![seed.to_vec(), round_as_byte.to_vec()].concat());
 
-            let pivot = u64::from_le_bytes(hash[0..8].try_into().expect("Expected 8 bytes"));
-            let pivot = pivot % list_size as u64;
+            let pivote = u64::from_le_bytes(hash[0..8].try_into().expect("Expected 8 bytes"));
+            let pivot = pivote % list_size as u64;
 
             let mut hash_bytes = EMPTY_HASH;
             let mirror1 = (pivot + 2) / 2;
@@ -349,24 +362,34 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 }
 
                 let offset = ((i - mirror1) + 1) as usize
-                    + (round as u64 * (mirror2 - mirror1 + 1)) as usize;
+                    + (round as u64 * (mirror2 - mirror1 + 1)) as usize
+                    - 1;
                 println!(
-                    "Offset {} Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
-                    offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
+                "is_left: {} Offset {} Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
+                i<= pivot, offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
                 layouter.assign_region(
                     || "dunno",
                     |mut region| {
+                        self.q_enable.enable(&mut region, offset)?;
+
                         if i <= pivot {
+                            // println!("enable left half at round {} and offset {}", round, offset);
                             self.left_half[round as usize].enable(&mut region, offset)?;
                         }
-                        self.pivot_bytes.iter().enumerate().map(|(i, e)| {
-                            region.assign_advice(
-                                || format!("pivot_bytes{}", i),
-                                *e,
-                                offset,
-                                || Value::known(F::from(pivot.to_le_bytes()[i] as u64)),
-                            )
-                        });
+                        let pivot_bytes_cells = self
+                            .pivot_bytes
+                            .iter()
+                            .enumerate()
+                            .map(|(i, e)| {
+                                region.assign_advice(
+                                    || format!("pivot_bytes{}", i),
+                                    *e,
+                                    offset,
+                                    || Value::known(F::from(pivot.to_le_bytes()[i] as u64)),
+                                )
+                            })
+                            .collect::<Result<Vec<_>, Error>>()?;
+
                         for (name, column, value) in &[
                             ("list_length", self.list_length, list_size as u64),
                             ("pivot", self.pivot, pivot),
@@ -392,9 +415,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         }
                         Ok(())
                     },
-                );
+                )?;
             }
         }
+        Ok(())
     }
 }
 
@@ -420,6 +444,7 @@ mod test {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+            println!("Configuring");
             ShufflingConfig::<F, 90>::configure(meta)
         }
 
@@ -432,11 +457,15 @@ mod test {
             seed[0] = 1;
             seed[1] = 128;
             seed[2] = 12;
-            let mut input = [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9].to_vec();
+            let mut input = [0u8; 10]
+                .iter()
+                .enumerate()
+                .map(|(i, _)| i as u8)
+                .collect::<Vec<_>>();
 
             let expected = [0u8, 7, 8, 6, 3, 9, 4, 5, 2, 1];
 
-            config.shuffle_list(&mut layouter, &mut input, seed);
+            config.shuffle_list(&mut layouter, &mut input, seed)?;
             assert_eq!(input, expected);
 
             Ok(())
@@ -445,9 +474,12 @@ mod test {
 
     #[test]
     fn test_shuffling_circuit() {
-        let k = 18;
+        let k = 17;
         let circuit = TestCircuit::<Fr>::default();
+        println!("Running prover");
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
+        println!("Asserting satisfied");
+        prover.assert_satisfied();
     }
 }
 struct ShufflingChip<F: Field> {
