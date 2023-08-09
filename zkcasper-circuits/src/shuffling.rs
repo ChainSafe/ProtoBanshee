@@ -158,7 +158,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let m1 = m.query_advice(mirror1, Rotation::cur());
             let m2 = m.query_advice(mirror2, Rotation::cur());
             let list_length = m.query_advice(list_length, Rotation::cur());
-            let q_round_ops = m.query_selector(q_round_ops);
             let pivot_bytes = pivot_bytes.map(|c| m.query_advice(c, Rotation::cur()));
 
             // TODO: Restrict Pivot_bytes to be hash[0 ..8]
@@ -177,7 +176,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 2u64.expr() * m2,
                 pivot + list_length,
             );
-            cb.gate(q_round_ops)
+            cb.gate(1.expr())
         });
 
         // // TODO: Enforce concat(seed, round) == seed_concat_round
@@ -220,13 +219,13 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let bit_index_quotient = meta.query_advice(bit_index_quotient, Rotation::cur());
             let mirror1 = meta.query_advice(mirror1, Rotation::cur());
 
-            let is_zero_bit_index = IsZeroGadget::construct(&mut cb, bit_index.clone());
-            let is_zero_bit_index_minus_255 =
-                IsZeroGadget::construct(&mut cb, bit_index.clone() - 255.expr());
-            let is_zero_i_minus_mirror1 =
-                IsZeroGadget::construct(&mut cb, i.clone() - mirror1.clone());
-            let is_zero_i_minus_pivot_minus_1 =
-                IsZeroGadget::construct(&mut cb, i.clone() - pivot.clone() - 1.expr());
+            // let is_zero_bit_index = IsZeroGadget::construct(&mut cb, bit_index.clone());
+            // let is_zero_bit_index_minus_255 =
+            //     IsZeroGadget::construct(&mut cb, bit_index.clone() - 255.expr());
+            // let is_zero_i_minus_mirror1 =
+            //     IsZeroGadget::construct(&mut cb, i.clone() - mirror1.clone());
+            // let is_zero_i_minus_pivot_minus_1 =
+            //     IsZeroGadget::construct(&mut cb, i.clone() - pivot.clone() - 1.expr());
 
             for r in 0..ROUNDS {
                 let is_left = meta.query_selector(left_half[r]);
@@ -245,10 +244,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 );
             }
 
-            config.is_zero_bit_index = Some(is_zero_bit_index);
-            config.is_zero_i_minus_mirror1 = Some(is_zero_i_minus_mirror1);
-            config.is_zero_i_minus_pivot_minus_1 = Some(is_zero_i_minus_pivot_minus_1);
-            config.is_zero_bit_index_minus_255 = Some(is_zero_bit_index_minus_255);
+            // config.is_zero_bit_index = Some(is_zero_bit_index);
+            // config.is_zero_i_minus_mirror1 = Some(is_zero_i_minus_mirror1);
+            // config.is_zero_i_minus_pivot_minus_1 = Some(is_zero_i_minus_pivot_minus_1);
+            // config.is_zero_bit_index_minus_255 = Some(is_zero_bit_index_minus_255);
 
             cb.gate(1.expr())
         });
@@ -278,6 +277,9 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         //         0.expr(), // Hash stays the same
         //     ),
         // );
+
+        println!("shuffling circuit degree={}", meta.degree());
+
         config
     }
 
@@ -298,14 +300,13 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let mut hash_bytes = EMPTY_HASH;
             let mirror1 = (pivot + 2) / 2;
             let mirror2 = (pivot + list_size as u64) / 2;
-            println!(
-                "Round {} pivot {} mirror1 {} mirror2 {}",
-                round, pivot, mirror1, mirror2
-            );
+
             for i in mirror1..=mirror2 {
-                let (flip, bit_index) = if i <= pivot {
+                let (flip, bit_index, bit_index_quotient) = if i <= pivot {
                     let flip = pivot - i;
                     let bit_index = (i & 0xff) as usize;
+                    let bit_index_quotient = (i / 256) as usize;
+
                     if bit_index == 0 || i == mirror1 {
                         hash_bytes = sha2::Sha256::digest(
                             vec![
@@ -318,10 +319,11 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         .try_into()
                         .unwrap();
                     }
-                    (flip, bit_index)
+                    (flip, bit_index, bit_index_quotient)
                 } else {
                     let flip = pivot + list_size as u64 - i;
                     let bit_index = (flip & 0xff) as usize;
+                    let bit_index_quotient = (flip / 256) as usize;
                     if bit_index == 0xff || i == pivot + 1 {
                         hash_bytes = sha2::Sha256::digest(
                             vec![
@@ -334,7 +336,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         .try_into()
                         .unwrap();
                     }
-                    (flip, bit_index)
+                    (flip, bit_index, bit_index_quotient)
                 };
 
                 let the_byte = hash_bytes[bit_index / 8];
@@ -344,7 +346,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     input[i as usize] = input[flip as usize];
                     input[flip as usize] = tmp;
                 }
-
+                println!(
+                "Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
+                round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i
+            );
                 layouter.assign_region(
                     || "dunno",
                     |mut region| {
@@ -361,13 +366,20 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                             )
                         });
                         for (name, column, value) in &[
+                            ("list_length", self.list_length, list_size as u64),
                             ("pivot", self.pivot, pivot),
                             ("mirror1", self.mirror1, mirror1),
                             ("mirror2", self.mirror2, mirror2),
                             ("flip", self.flip, flip),
                             ("bit_index", self.bit_index, bit_index.try_into().unwrap()),
+                            (
+                                "bit_index_quotient",
+                                self.bit_index_quotient,
+                                bit_index_quotient.try_into().unwrap(),
+                            ),
                             ("the_byte", self.the_byte, the_byte.into()),
                             ("the_bit", self.the_bit, the_bit.into()),
+                            ("i", self.i, i),
                         ] {
                             region.assign_advice(
                                 || name.to_string(),
@@ -420,14 +432,18 @@ mod test {
             seed[2] = 12;
             let mut input = [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9].to_vec();
 
+            let expected = [0u8, 7, 8, 6, 3, 9, 4, 5, 2, 1];
+
             config.shuffle_list(&mut layouter, &mut input, seed);
+            assert_eq!(input, expected);
+
             Ok(())
         }
     }
 
     #[test]
     fn test_shuffling_circuit() {
-        let k = 10;
+        let k = 18;
         let circuit = TestCircuit::<Fr>::default();
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
     }
@@ -470,51 +486,3 @@ impl<F: Field> ShufflingChip<F> {
         Self { config }
     }
 }
-
-// Teku shuffling algorithm
-// public void shuffleList(int[] input, Bytes32 seed) {
-
-//     int listSize = input.length;
-//     if (listSize == 0) {
-//       return;
-//     }
-
-//     final Sha256 sha256 = getSha256Instance();
-
-//     for (int round = specConfig.getShuffleRoundCount() - 1; round >= 0; round--) {
-
-//       final Bytes roundAsByte = Bytes.of((byte) round);
-
-//       // This needs to be unsigned modulo.
-//       final Bytes hash = sha256.wrappedDigest(seed, roundAsByte);
-//       int pivot = bytesToUInt64(hash.slice(0, 8)).mod(listSize).intValue();
-
-//       byte[] hashBytes = EMPTY_HASH;
-//       int mirror1 = (pivot + 2) / 2; --------OK
-//       int mirror2 = (pivot + listSize) / 2; ---------OK
-//       for (int i = mirror1; i <= mirror2; i++) {
-//         int flip, bitIndex; ------------OK
-//         if (i <= pivot) {
-//           flip = pivot - i;
-//           bitIndex = i & 0xff;
-//           if (bitIndex == 0 || i == mirror1) {
-//             hashBytes = sha256.digest(seed, roundAsByte, uintTo4Bytes(i / 256));
-//           }
-//         } else {
-//           flip = pivot + listSize - i;
-//           bitIndex = flip & 0xff;
-//           if (bitIndex == 0xff || i == pivot + 1) {
-//             hashBytes = sha256.digest(seed, roundAsByte, uintTo4Bytes(flip / 256));
-//           }
-//         }
-
-//         int theByte = hashBytes[bitIndex / 8];
-//         int theBit = (theByte >> (bitIndex & 0x07)) & 1;
-//         if (theBit != 0) {
-//           int tmp = input[i];
-//           input[i] = input[flip];
-//           input[flip] = tmp;
-//         }
-//       }
-//     }
-//   }
