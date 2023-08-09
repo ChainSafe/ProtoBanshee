@@ -4,7 +4,7 @@ use eth_types::{Field, Mainnet, Spec};
 use gadgets::{
     binary_number::{BinaryNumberChip, BinaryNumberConfig},
     is_zero,
-    util::{or, select, Expr},
+    util::{not, or, select, Expr},
 };
 use halo2_base::{
     gates::range,
@@ -82,7 +82,7 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
     pub the_byte: Column<Advice>, // 90 * (N/2)
     pub the_bit: Column<Advice>,  // 90 * (N/2)
 
-    pub left_half: [Selector; ROUNDS], // (N/2) Rows
+    pub left_half: Selector,
 
     // Hashables
     pub seed_concat_round: Column<Advice>,          // 90 Rows
@@ -118,7 +118,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let hash_bytes = meta.advice_column();
         let seed_concat_round_concat_i = meta.advice_column();
 
-        let left_half: [Selector; ROUNDS] = [(); ROUNDS].map(|_| meta.complex_selector());
+        let left_half = meta.complex_selector();
         let q_enable = meta.selector();
 
         let pivot_bytes: [Column<Advice>; U64_BYTES] =
@@ -223,10 +223,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let mirror1 = meta.query_advice(mirror1, Rotation::cur());
 
             let q_enable = meta.query_selector(q_enable);
-            let left_half = left_half
-                .iter()
-                .map(|s| meta.query_selector(*s))
-                .collect::<Vec<_>>();
+            let left_half = meta.query_selector(left_half);
 
             // let is_zero_bit_index = IsZeroGadget::construct(&mut cb, bit_index.clone());
             // let is_zero_bit_index_minus_255 =
@@ -236,21 +233,24 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             // let is_zero_i_minus_pivot_minus_1 =
             //     IsZeroGadget::construct(&mut cb, i.clone() - pivot.clone() - 1.expr());
 
-            for r in 0usize..ROUNDS {
-                let f = select::expr(
-                    left_half[r].clone(),
-                    pivot.clone() - i.clone(),
-                    pivot.clone() + list_length.clone() - i.clone(),
-                );
-                cb.require_equal("flip = pivot - i or pivot + list size - i", flip.clone(), f);
-
-                // let i_or_flip = select::expr(is_left.clone(), i.clone(), flip.clone());
-                // cb.require_equal(
-                //     "bit_index = i & 0xff or flip & 0xff",
-                //     bit_index_quotient.clone() * 256.expr(),
-                //     i_or_flip - bit_index.clone(),
-                // );
-            }
+            cb.require_boolean("require left half be boolean", left_half.clone());
+            cb.require_equal(
+                "(left of pivot) flip = pivot - i",
+                0.expr(),
+                left_half.clone() * (flip.clone() - pivot.clone() + i.clone()),
+            );
+            cb.require_equal(
+                "(right of pivot) flip = pivot + list size - i",
+                0.expr(),
+                not::expr(left_half.clone())
+                    * (flip.clone() - (pivot.clone() + list_length.clone() - i.clone())),
+            );
+            let i_or_flip = select::expr(left_half.clone(), i.clone(), flip.clone());
+            cb.require_equal(
+                "bit_index = i & 0xff or flip & 0xff",
+                bit_index_quotient.clone() * 256.expr(),
+                i_or_flip - bit_index.clone(),
+            );
 
             // config.is_zero_bit_index = Some(is_zero_bit_index);
             // config.is_zero_i_minus_mirror1 = Some(is_zero_i_minus_mirror1);
@@ -297,6 +297,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         input: &mut [u8],
         seed: [u8; 32],
     ) -> Result<(), Error> {
+        layouter.assign_region(
+            || "dunno",
+            |mut region| {
+        let mut bbbb = 0;
         let list_size = input.len();
         if list_size == 0 {
             return Ok(());
@@ -365,59 +369,55 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     + (round as u64 * (mirror2 - mirror1 + 1)) as usize
                     - 1;
                 println!(
-                "is_left: {} Offset {} Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
-                i<= pivot, offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
-                layouter.assign_region(
-                    || "dunno",
-                    |mut region| {
-                        self.q_enable.enable(&mut region, offset)?;
+                    "is_left: {} Offset {} Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
+                    i<= pivot, offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
 
-                        if i <= pivot {
-                            // println!("enable left half at round {} and offset {}", round, offset);
-                            self.left_half[round as usize].enable(&mut region, offset)?;
-                        }
-                        let pivot_bytes_cells = self
-                            .pivot_bytes
-                            .iter()
-                            .enumerate()
-                            .map(|(i, e)| {
-                                region.assign_advice(
-                                    || format!("pivot_bytes{}", i),
-                                    *e,
-                                    offset,
-                                    || Value::known(F::from(pivot.to_le_bytes()[i] as u64)),
-                                )
-                            })
-                            .collect::<Result<Vec<_>, Error>>()?;
+                self.q_enable.enable(&mut region, offset)?;
 
-                        for (name, column, value) in &[
-                            ("list_length", self.list_length, list_size as u64),
-                            ("pivot", self.pivot, pivot),
-                            ("mirror1", self.mirror1, mirror1),
-                            ("mirror2", self.mirror2, mirror2),
-                            ("flip", self.flip, flip),
-                            ("bit_index", self.bit_index, bit_index.try_into().unwrap()),
-                            (
-                                "bit_index_quotient",
-                                self.bit_index_quotient,
-                                bit_index_quotient.try_into().unwrap(),
-                            ),
-                            ("the_byte", self.the_byte, the_byte.into()),
-                            ("the_bit", self.the_bit, the_bit.into()),
-                            ("i", self.i, i),
-                        ] {
-                            region.assign_advice(
-                                || name.to_string(),
-                                *column,
-                                offset,
-                                || Value::known(F::from(*value)),
-                            )?;
-                        }
-                        Ok(())
-                    },
-                )?;
+                if i <= pivot {
+                    self.left_half.enable(&mut region, offset)?;
+                }
+                let pivot_bytes_cells = self
+                    .pivot_bytes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        region.assign_advice(
+                            || format!("pivot_bytes{}", i),
+                            *e,
+                            offset,
+                            || Value::known(F::from(pivot.to_le_bytes()[i] as u64)),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+
+                for (name, column, value) in &[
+                    ("list_length", self.list_length, list_size as u64),
+                    ("pivot", self.pivot, pivot),
+                    ("mirror1", self.mirror1, mirror1),
+                    ("mirror2", self.mirror2, mirror2),
+                    ("flip", self.flip, flip),
+                    ("bit_index", self.bit_index, bit_index.try_into().unwrap()),
+                    (
+                        "bit_index_quotient",
+                        self.bit_index_quotient,
+                        bit_index_quotient.try_into().unwrap(),
+                    ),
+                    ("the_byte", self.the_byte, the_byte.into()),
+                    ("the_bit", self.the_bit, the_bit.into()),
+                    ("i", self.i, i),
+                ] {
+                    region.assign_advice(
+                        || name.to_string(),
+                        *column,
+                        offset,
+                        || Value::known(F::from(*value)),
+                    )?;
+                }
             }
         }
+        Ok(())
+    })?;
         Ok(())
     }
 }
