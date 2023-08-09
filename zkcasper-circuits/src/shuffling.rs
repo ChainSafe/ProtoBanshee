@@ -342,12 +342,14 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 let the_byte = hash_bytes[bit_index / 8];
                 let the_bit = (the_byte >> (bit_index & 0x07)) & 1;
                 if the_bit != 0 {
-                    let tmp = input[i as usize];
-                    input[i as usize] = input[flip as usize];
-                    input[flip as usize] = tmp;
+                    // let tmp = input[i as usize];
+                    // input[i as usize] = input[flip as usize];
+                    // input[flip as usize] = tmp;
+                    input.swap(i as usize, flip as usize);
                 }
-                let offset = ((i - mirror1 + 1) * round as u64) as usize;
 
+                let offset = ((i - mirror1) + 1) as usize
+                    + (round as u64 * (mirror2 - mirror1 + 1)) as usize;
                 println!(
                     "Offset {} Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
                     offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
