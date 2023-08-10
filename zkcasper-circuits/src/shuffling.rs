@@ -118,7 +118,12 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let the_byte = meta.advice_column();
         meta.enable_equality(the_byte);
         let the_bit = meta.advice_column();
-        let the_byte_as_bits = [(); 8].map(|_| meta.advice_column());
+        meta.enable_equality(the_bit);
+        let the_byte_as_bits = [(); 8].map(|_| {
+            let col = meta.advice_column();
+            meta.enable_equality(col);
+            col
+        });
         let bit_index_quotient = meta.advice_column();
         let seed_concat_round = meta.advice_column();
         let hash_bytes = [(); 32].map(|_| {
@@ -414,6 +419,9 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                             )
                         })
                         .collect::<Result<Vec<_>, Error>>()?;
+                    let the_bit_cell = the_byte_as_bits_cells
+                        [(the_byte >> (*bit_index % 8)) as usize & 1]
+                        .copy_advice(|| "the_bit", &mut region, self.the_bit, *offset)?;
 
                     for (name, column, value) in &[
                         ("list_length", self.list_length, *list_size as u64),
@@ -427,7 +435,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                             self.bit_index_quotient,
                             *bit_index_quotient,
                         ),
-                        ("the_bit", self.the_bit, *the_bit),
                         ("i", self.i, *i),
                         ("pivot_quotient", self.pivot_quotient, *pivot_quotient),
                         ("round", self.round, *round as u64),
