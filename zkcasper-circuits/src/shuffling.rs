@@ -69,7 +69,6 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
 
     pub q_round_ops: Selector, // 90 Rows
     pub round: Column<Advice>, // 90 * (N/2) Rows
-    pub hash: Column<Advice>, // 90 Rows. (hash = sha(seed, round))[0..8] is used to calculate pivot
 
     pub pivot: Column<Advice>,            // 90 Rows
     pub pivot_quotient: Column<Advice>,   // 90 Rows
@@ -116,7 +115,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let the_byte = meta.advice_column();
         let the_bit = meta.advice_column();
         let bit_index_quotient = meta.advice_column();
-        let hash = meta.advice_column();
         let seed_concat_round = meta.advice_column();
         let hash_bytes = [(); 32].map(|_| meta.advice_column());
         let seed_concat_round_concat_i = meta.advice_column();
@@ -145,7 +143,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             bit_index_quotient,
             left_half,
             sha256_table,
-            hash,
             hash_bytes,
             seed_concat_round,
             seed_concat_round_concat_i,
@@ -186,23 +183,28 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             cb.gate(q_enable)
         });
 
-        // meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
-        //     let seed = seed.map(|s| meta.query_advice(s, Rotation::cur()));
-        //     let round = meta.query_advice(round, Rotation::cur());
-        //     let seed_plus_round = rlc::expr(
-        //         &seed
-        //             .iter()
-        //             .chain(std::iter::once(&round))
-        //             .map(|s| s.clone())
-        //             .collect::<Vec<_>>(),
-        //         Expression::Constant(rand),
-        //     );
-        //     let q_enable = meta.query_selector(q_enable);
-        //     let hash = meta.query_advice(hash, Rotation::cur());
-        //     config
-        //         .sha256_table
-        //         .build_lookup(meta, q_enable, seed_plus_round, 0.expr(), hash)
-        // });
+        meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
+            let seed = seed.map(|s| meta.query_advice(s, Rotation::cur()));
+            let round = meta.query_advice(round, Rotation::cur());
+            let seed_plus_round = rlc::expr(
+                &seed
+                    .iter()
+                    .chain(std::iter::once(&round))
+                    .map(|s| s.clone())
+                    .collect::<Vec<_>>(),
+                Expression::Constant(rand),
+            );
+            let q_enable = meta.query_selector(q_enable);
+            let pivot_hash = pivot_hash.map(|c| meta.query_advice(c, Rotation::cur()));
+
+            config.sha256_table.build_lookup(
+                meta,
+                q_enable,
+                seed_plus_round,
+                0.expr(),
+                rlc::expr(&pivot_hash, Expression::Constant(rand)),
+            )
+        });
 
         // // TODO: Enforce concat(seed, round, i) == seed_concat_round_concat_i
         // meta.lookup_any(
