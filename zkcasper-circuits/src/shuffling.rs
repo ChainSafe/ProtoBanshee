@@ -20,6 +20,7 @@ use halo2_proofs::{
     },
     poly::Rotation,
 };
+use itertools::Itertools;
 use num_bigint::BigUint;
 use sha2::Digest;
 
@@ -311,6 +312,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             |mut region| {
                 for ShuffleRow {
                     seed,
+                    round,
                     offset,
                     list_size,
                     pivot_hash,
@@ -375,6 +377,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         ("the_bit", self.the_bit, *the_bit),
                         ("i", self.i, *i),
                         ("pivot_quotient", self.pivot_quotient, *pivot_quotient),
+                        ("round", self.round, *round as u64),
                     ] {
                         region.assign_advice(
                             || name.to_string(),
@@ -391,7 +394,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
     }
 
     // Generates witness data
-    pub fn shuffle_list(&self, input: &mut [u8], seed: [u8; 32]) -> Result<Vec<ShuffleRow>, Error> {
+    pub fn shuffle_list(input: &mut [u8], seed: [u8; 32]) -> Result<Vec<ShuffleRow>, Error> {
         let list_size = input.len();
         if list_size == 0 {
             return Ok(vec![]);
@@ -474,6 +477,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
 
                 let row = ShuffleRow {
                     seed,
+                    round,
                     offset,
                     list_size: list_size as u64,
                     pivot,
@@ -498,6 +502,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
 
 pub struct ShuffleRow {
     pub seed: [u8; 32],
+    pub round: u8,
     pub offset: usize,
     pub pivot_hash: [u8; 32],
     pub list_size: u64,
@@ -512,11 +517,28 @@ pub struct ShuffleRow {
     pub i: u64,
     pub pivot_quotient: u64,
 }
+
+impl ShuffleRow {
+    fn sha256_inputs(rows: &[Self]) -> Vec<HashInput<u8>> {
+        rows.iter()
+            .map(|row| {
+                let mut input = row.seed.to_vec();
+                input.push(row.round);
+                HashInput::Single(HashInputChunk {
+                    bytes: input,
+                    is_rlc: true,
+                })
+            })
+            .collect_vec()
+    }
+}
 #[cfg(test)]
 mod test {
     use halo2_proofs::{
         circuit::SimpleFloorPlanner, dev::MockProver, halo2curves::bn256::Fr, plonk::Circuit,
     };
+
+    use crate::util::Challenges;
 
     use super::*;
 
@@ -525,7 +547,7 @@ mod test {
         _f: PhantomData<F>,
     }
     impl<F: Field> Circuit<F> for TestCircuit<F> {
-        type Config = ShufflingConfig<F, 90>;
+        type Config = (ShufflingConfig<F, 90>, Challenges<Value<F>>);
 
         type FloorPlanner = SimpleFloorPlanner;
 
@@ -534,13 +556,16 @@ mod test {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            println!("Configuring");
             let sha256_table = Sha256Table::construct(meta);
 
-            ShufflingConfig::<F, 90>::configure(
+            let config = ShufflingConfig::<F, 90>::configure(
                 meta,
                 sha256_table,
                 Sha256CircuitConfig::fixed_challenge(),
+            );
+            (
+                config,
+                Challenges::mock(Value::known(Sha256CircuitConfig::fixed_challenge())),
             )
         }
 
@@ -561,8 +586,13 @@ mod test {
 
             let expected = [0u8, 7, 8, 6, 3, 9, 4, 5, 2, 1];
 
-            let witness = config.shuffle_list(&mut input, seed)?;
-            config.assign(&mut layouter, &witness)?;
+            let witness = ShufflingConfig::<F, 90>::shuffle_list(&mut input, seed)?;
+            let hash_inputs = ShuffleRow::sha256_inputs(&witness);
+            config
+                .0
+                .sha256_table
+                .dev_load(&mut layouter, &hash_inputs, config.1.sha256_input())?;
+            config.0.assign(&mut layouter, &witness)?;
             assert_eq!(input, expected);
 
             Ok(())
