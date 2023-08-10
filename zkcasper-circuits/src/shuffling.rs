@@ -34,7 +34,7 @@ use crate::{
     util::{
         from_bytes, from_u64_bytes, BaseConstraintBuilder, ConstrainBuilderCommon, SubCircuitConfig,
     },
-    witness::{HashInput, HashInputChunk},
+    witness::{self, HashInput, HashInputChunk},
 };
 
 const SEED_SIZE: usize = 32;
@@ -185,23 +185,23 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             cb.gate(q_enable)
         });
 
-        meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
-            let seed = seed.map(|s| meta.query_advice(s, Rotation::cur()));
-            let round = meta.query_advice(round, Rotation::cur());
-            let seed_plus_round = rlc::expr(
-                &seed
-                    .iter()
-                    .chain(std::iter::once(&round))
-                    .map(|s| s.clone())
-                    .collect::<Vec<_>>(),
-                Expression::Constant(rand),
-            );
-            let q_enable = meta.query_selector(q_enable);
-            let hash = meta.query_advice(hash, Rotation::cur());
-            config
-                .sha256_table
-                .build_lookup(meta, q_enable, seed_plus_round, 0.expr(), hash)
-        });
+        // meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
+        //     let seed = seed.map(|s| meta.query_advice(s, Rotation::cur()));
+        //     let round = meta.query_advice(round, Rotation::cur());
+        //     let seed_plus_round = rlc::expr(
+        //         &seed
+        //             .iter()
+        //             .chain(std::iter::once(&round))
+        //             .map(|s| s.clone())
+        //             .collect::<Vec<_>>(),
+        //         Expression::Constant(rand),
+        //     );
+        //     let q_enable = meta.query_selector(q_enable);
+        //     let hash = meta.query_advice(hash, Rotation::cur());
+        //     config
+        //         .sha256_table
+        //         .build_lookup(meta, q_enable, seed_plus_round, 0.expr(), hash)
+        // });
 
         // // TODO: Enforce concat(seed, round, i) == seed_concat_round_concat_i
         // meta.lookup_any(
@@ -301,15 +301,100 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         config
     }
 
-    pub fn shuffle_list(
+    pub fn assign(
         &self,
         layouter: &mut impl Layouter<F>,
-        input: &mut [u8],
-        seed: [u8; 32],
+        witness: &[ShuffleRow],
     ) -> Result<(), Error> {
+        layouter.assign_region(
+            || "Shuffle Rows",
+            |mut region| {
+                for ShuffleRow {
+                    seed,
+                    offset,
+                    list_size,
+                    pivot_hash,
+                    pivot,
+                    mirror1,
+                    mirror2,
+                    flip,
+                    bit_index,
+                    bit_index_quotient,
+                    the_byte,
+                    the_bit,
+                    i,
+                    pivot_quotient,
+                } in witness.iter()
+                {
+                    let seed_cells = self
+                        .seed
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            region.assign_advice(
+                                || format!("seed{}", i),
+                                *e,
+                                *offset,
+                                || Value::known(F::from(seed[i] as u64)),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+
+                    self.q_enable.enable(&mut region, *offset)?;
+
+                    if i <= pivot {
+                        self.left_half.enable(&mut region, *offset)?;
+                    }
+                    let pivot_hash_cells = self
+                        .pivot_hash
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            region.assign_advice(
+                                || format!("pivot_hash{}", i),
+                                *e,
+                                *offset,
+                                || Value::known(F::from(pivot_hash[i] as u64)),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+
+                    for (name, column, value) in &[
+                        ("list_length", self.list_length, *list_size as u64),
+                        ("pivot", self.pivot, *pivot),
+                        ("mirror1", self.mirror1, *mirror1),
+                        ("mirror2", self.mirror2, *mirror2),
+                        ("flip", self.flip, *flip),
+                        ("bit_index", self.bit_index, *bit_index),
+                        (
+                            "bit_index_quotient",
+                            self.bit_index_quotient,
+                            *bit_index_quotient,
+                        ),
+                        ("the_byte", self.the_byte, *the_byte),
+                        ("the_bit", self.the_bit, *the_bit),
+                        ("i", self.i, *i),
+                        ("pivot_quotient", self.pivot_quotient, *pivot_quotient),
+                    ] {
+                        region.assign_advice(
+                            || name.to_string(),
+                            *column,
+                            *offset,
+                            || Value::known(F::from(*value)),
+                        )?;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        Ok(())
+    }
+
+    // Generates witness data
+    pub fn shuffle_list(&self, input: &mut [u8], seed: [u8; 32]) -> Result<Vec<ShuffleRow>, Error> {
         let list_size = input.len();
         if list_size == 0 {
-            return Ok(());
+            return Ok(vec![]);
         }
 
         let mut shuffle_row = vec![];
@@ -388,6 +473,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     i<= pivot, offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
 
                 let row = ShuffleRow {
+                    seed,
                     offset,
                     list_size: list_size as u64,
                     pivot,
@@ -406,92 +492,12 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             }
         }
 
-        layouter.assign_region(
-            || "Shuffle Rows",
-            |mut region| {
-                for ShuffleRow {
-                    offset,
-                    list_size,
-                    pivot_hash,
-                    pivot,
-                    mirror1,
-                    mirror2,
-                    flip,
-                    bit_index,
-                    bit_index_quotient,
-                    the_byte,
-                    the_bit,
-                    i,
-                    pivot_quotient,
-                } in shuffle_row.iter()
-                {
-                    let seed_cells = self
-                        .seed
-                        .iter()
-                        .enumerate()
-                        .map(|(i, e)| {
-                            region.assign_advice(
-                                || format!("seed{}", i),
-                                *e,
-                                *offset,
-                                || Value::known(F::from(seed[i] as u64)),
-                            )
-                        })
-                        .collect::<Result<Vec<_>, Error>>()?;
-
-                    self.q_enable.enable(&mut region, *offset)?;
-
-                    if i <= pivot {
-                        self.left_half.enable(&mut region, *offset)?;
-                    }
-                    let pivot_hash_cells = self
-                        .pivot_hash
-                        .iter()
-                        .enumerate()
-                        .map(|(i, e)| {
-                            region.assign_advice(
-                                || format!("pivot_hash{}", i),
-                                *e,
-                                *offset,
-                                || Value::known(F::from(pivot_hash[i] as u64)),
-                            )
-                        })
-                        .collect::<Result<Vec<_>, Error>>()?;
-
-                    for (name, column, value) in &[
-                        ("list_length", self.list_length, *list_size as u64),
-                        ("pivot", self.pivot, *pivot),
-                        ("mirror1", self.mirror1, *mirror1),
-                        ("mirror2", self.mirror2, *mirror2),
-                        ("flip", self.flip, *flip),
-                        ("bit_index", self.bit_index, *bit_index),
-                        (
-                            "bit_index_quotient",
-                            self.bit_index_quotient,
-                            *bit_index_quotient,
-                        ),
-                        ("the_byte", self.the_byte, *the_byte),
-                        ("the_bit", self.the_bit, *the_bit),
-                        ("i", self.i, *i),
-                        ("pivot_quotient", self.pivot_quotient, *pivot_quotient),
-                    ] {
-                        region.assign_advice(
-                            || name.to_string(),
-                            *column,
-                            *offset,
-                            || Value::known(F::from(*value)),
-                        )?;
-                    }
-                }
-                Ok(())
-            },
-        )?;
-
-        Ok(())
+        Ok(shuffle_row)
     }
 }
 
-struct ShuffleRow {
+pub struct ShuffleRow {
+    pub seed: [u8; 32],
     pub offset: usize,
     pub pivot_hash: [u8; 32],
     pub list_size: u64,
@@ -555,7 +561,8 @@ mod test {
 
             let expected = [0u8, 7, 8, 6, 3, 9, 4, 5, 2, 1];
 
-            config.shuffle_list(&mut layouter, &mut input, seed)?;
+            let witness = config.shuffle_list(&mut input, seed)?;
+            config.assign(&mut layouter, &witness)?;
             assert_eq!(input, expected);
 
             Ok(())
