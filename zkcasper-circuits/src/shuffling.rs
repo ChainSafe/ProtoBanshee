@@ -15,7 +15,9 @@ use halo2_base::{
 };
 use halo2_proofs::{
     circuit::{layouter, AssignedCell, Chip, Layouter, Region, Value},
-    plonk::{Advice, Column, ConstraintSystem, Error, Expression, Selector, VirtualCells},
+    plonk::{
+        Advice, Column, ConstraintSystem, Error, Expression, Instance, Selector, VirtualCells,
+    },
     poly::Rotation,
 };
 use num_bigint::BigUint;
@@ -57,7 +59,7 @@ pub struct ShuffleChip<'a, S: Spec, F: Field, HC: HashChip<F>> {
 
 #[derive(Clone, Debug)]
 pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
-    pub seed: Column<Advice>,
+    pub seed: [Column<Advice>; 32], // Should be instance column, right?
 
     pub list_length: Column<Advice>,
     pub i: Column<Advice>, // plus one sequential
@@ -68,20 +70,21 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
     pub round: Column<Advice>, // 90 * (N/2) Rows
     pub hash: Column<Advice>, // 90 Rows. (hash = sha(seed, round))[0..8] is used to calculate pivot
 
-    pub pivot: Column<Advice>,                    // 90 Rows
-    pub pivot_bytes: [Column<Advice>; U64_BYTES], // 90 * (N/2) Rows
-    pub mirror1: Column<Advice>,                  // 90 Rows
-    pub mirror2: Column<Advice>,                  // 90 Rows
+    pub pivot: Column<Advice>,            // 90 Rows
+    pub pivot_quotient: Column<Advice>,            // 90 Rows
+    pub pivot_hash: [Column<Advice>; 32], // 90 * (N/2) Rows
+    pub mirror1: Column<Advice>,          // 90 Rows
+    pub mirror2: Column<Advice>,          // 90 Rows
 
-    pub hash_bytes: Column<Advice>, // 90 * (N/2) Rows
+    pub hash_bytes: [Column<Advice>; 32], // 90 * (N/2) Rows
 
     pub flip: Column<Advice>,               // 90 * (N/2) Rows
     pub bit_index: Column<Advice>,          // 90 * (N/2) Rows. In range [0, 255(0xff)]
     pub bit_index_quotient: Column<Advice>, // 90 * (N/2) Rows
 
     pub the_byte: Column<Advice>, // 90 * (N/2)
-    pub the_bit: Column<Advice>,  // 90 * (N/2)
-
+    pub the_bit: Column<Advice>,  // 90 * (N/2) u8
+    // pub the_bit: [Column<Advice>; 8],  // 90 * (N/2) u8
     pub left_half: Selector,
 
     // Hashables
@@ -99,7 +102,7 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
 impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
         let sha256_table = Sha256Table::construct::<F>(meta);
-        let seed = meta.advice_column();
+        let seed = [(); 32].map(|_| meta.advice_column());
         let list_length = meta.advice_column();
         let i = meta.advice_column();
         let list_items = meta.advice_column();
@@ -115,14 +118,14 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let bit_index_quotient = meta.advice_column();
         let hash = meta.advice_column();
         let seed_concat_round = meta.advice_column();
-        let hash_bytes = meta.advice_column();
+        let hash_bytes = [(); 32].map(|_| meta.advice_column());
         let seed_concat_round_concat_i = meta.advice_column();
 
         let left_half = meta.complex_selector();
         let q_enable = meta.selector();
 
-        let pivot_bytes: [Column<Advice>; U64_BYTES] =
-            [(); U64_BYTES].map(|_| meta.advice_column());
+        let pivot_hash = [(); 32].map(|_| meta.advice_column());
+        let pivot_quotient = meta.advice_column();
 
         let q_round_ops = meta.selector();
 
@@ -152,7 +155,8 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             is_zero_i_minus_mirror1: None,
             is_zero_i_minus_pivot_minus_1: None,
             is_zero_bit_index_minus_255: None,
-            pivot_bytes,
+            pivot_hash,
+            pivot_quotient,
         };
 
         meta.create_gate("per round variables", |m| {
@@ -161,13 +165,14 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let m1 = m.query_advice(mirror1, Rotation::cur());
             let m2 = m.query_advice(mirror2, Rotation::cur());
             let list_length = m.query_advice(list_length, Rotation::cur());
-            let pivot_bytes = pivot_bytes.map(|c| m.query_advice(c, Rotation::cur()));
+            let pivot_hash = pivot_hash.map(|c| m.query_advice(c, Rotation::cur()));
+            let pivot_quotient = m.query_advice(pivot_quotient, Rotation::cur());
             let q_enable = m.query_selector(q_enable);
             // TODO: Restrict Pivot_bytes to be hash[0 ..8]
             cb.require_equal(
-                "pivot_bytes == pivot",
-                pivot.clone(),
-                from_u64_bytes::expr(&pivot_bytes),
+                "pivot == u64_le(pivot_byte) % list_size",
+                pivot_quotient * list_length.clone(),
+                from_u64_bytes::expr(&pivot_hash[0..8]) - pivot.clone(),
             );
             cb.require_in_set(
                 "mirror m1 = (pivot + 2) / 2",
@@ -184,9 +189,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
 
         // // TODO: Enforce concat(seed, round) == seed_concat_round
         // meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
-        //     let seed_concat_round = meta.query_advice(seed_concat_round, Rotation::cur());
-        //     let q_round_ops = meta.query_selector(q_round_ops);
-
+        //     // let seed_concat_round = meta.query_advice(seed_concat_round, Rotation::cur());
+        //     // let q_round_ops = meta.query_selector(q_round_ops);
+        //     let seed = seed.map(|s| meta.query_instance(s, Rotation::cur()));
+        //     let round = meta.query_advice(round, Rotation::cur());
         //     let hash = meta.query_advice(hash, Rotation::cur());
         //     config
         //         .sha256_table
@@ -307,10 +313,13 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         for round in (0..90) {
             let round_as_byte: [u8; 1] = [round as u8];
 
-            let hash = sha2::Sha256::digest(vec![seed.to_vec(), round_as_byte.to_vec()].concat());
+            let pivot_hash =
+                sha2::Sha256::digest(vec![seed.to_vec(), round_as_byte.to_vec()].concat());
 
-            let pivote = u64::from_le_bytes(hash[0..8].try_into().expect("Expected 8 bytes"));
-            let pivot = pivote % list_size as u64;
+            let pivot = u64::from_le_bytes(pivot_hash[0..8].try_into().expect("Expected 8 bytes"));
+            println!("pivot is: {} and pivot hash le: {:#X?}",pivot, &pivot_hash[0..8]);
+            let pivot_quotient = pivot/list_size as u64;
+            let pivot = pivot % list_size as u64;
 
             let mut hash_bytes = EMPTY_HASH;
             let mirror1 = (pivot + 2) / 2;
@@ -379,7 +388,8 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     the_byte: the_byte.into(),
                     the_bit: the_bit.into(),
                     i,
-                    pivot_bytes: pivot.to_le_bytes(),
+                    pivot_hash: pivot_hash.into(),
+                    pivot_quotient,
                 };
                 shuffle_row.push(row)
             }
@@ -391,6 +401,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 for ShuffleRow {
                     offset,
                     list_size,
+                    pivot_hash,
                     pivot,
                     mirror1,
                     mirror2,
@@ -400,25 +411,39 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     the_byte,
                     the_bit,
                     i,
-                    pivot_bytes,
+                    pivot_quotient
+
                 } in shuffle_row.iter()
                 {
+                    let seed_cells = self
+                        .seed
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            region.assign_advice(
+                                || format!("seed{}", i),
+                                *e,
+                                *offset,
+                                || Value::known(F::from(seed[i] as u64)),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+
                     self.q_enable.enable(&mut region, *offset)?;
 
                     if i <= pivot {
                         self.left_half.enable(&mut region, *offset)?;
                     }
-
-                    let pivot_bytes_cells = self
-                        .pivot_bytes
+                    let pivot_hash_cells = self
+                        .pivot_hash
                         .iter()
                         .enumerate()
                         .map(|(i, e)| {
                             region.assign_advice(
-                                || format!("pivot_bytes{}", i),
+                                || format!("pivot_hash{}", i),
                                 *e,
                                 *offset,
-                                || Value::known(F::from(pivot_bytes[i] as u64)),
+                                || Value::known(F::from(pivot_hash[i] as u64)),
                             )
                         })
                         .collect::<Result<Vec<_>, Error>>()?;
@@ -438,6 +463,11 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         ("the_byte", self.the_byte, *the_byte),
                         ("the_bit", self.the_bit, *the_bit),
                         ("i", self.i, *i),
+                        (
+                            "pivot_quotient",
+                            self.pivot_quotient,
+                            *pivot_quotient,
+                        )
                     ] {
                         region.assign_advice(
                             || name.to_string(),
@@ -457,7 +487,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
 
 struct ShuffleRow {
     pub offset: usize,
-
+    pub pivot_hash: [u8; 32],
     pub list_size: u64,
     pub pivot: u64,
     pub mirror1: u64,
@@ -468,7 +498,7 @@ struct ShuffleRow {
     pub the_byte: u64,
     pub the_bit: u64,
     pub i: u64,
-    pub pivot_bytes: [u8; 8],
+    pub pivot_quotient: u64,
 }
 #[cfg(test)]
 mod test {
