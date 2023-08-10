@@ -168,8 +168,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let pivot_hash = pivot_hash.map(|c| m.query_advice(c, Rotation::cur()));
             let pivot_quotient = m.query_advice(pivot_quotient, Rotation::cur());
             let q_enable = m.query_selector(q_enable);
-            // TODO: Restrict Pivot_bytes to be hash[0 ..8]
-            // Is this overflowing???
             cb.require_equal(
                 "pivot == u64_le(pivot_byte) % list_size",
                 pivot_quotient * list_length.clone() + pivot.clone(),
@@ -318,13 +316,15 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 sha2::Sha256::digest(vec![seed.to_vec(), round_as_byte.to_vec()].concat());
 
             let pivot = u64::from_le_bytes(pivot_hash[0..8].try_into().expect("Expected 8 bytes"));
+
+            let pivot_quotient = pivot / list_size as u64;
             println!(
-                "pivot is: {:#X?}, pivotmod is {:#X?}, and pivot hash le: {:#X?}",
+                "pivot is: {:#X?}, pivot_quotient is {:#X?} pivot is {:#X?}, and pivot hash le: {:#X?}",
                 pivot,
+                pivot_quotient,
                 pivot % list_size as u64,
                 &pivot_hash[0..8]
             );
-            let pivot_quotient = pivot / list_size as u64;
             let pivot = pivot % list_size as u64;
 
             let mut hash_bytes = EMPTY_HASH;

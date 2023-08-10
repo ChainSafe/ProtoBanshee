@@ -239,7 +239,7 @@ pub(crate) mod from_u64_bytes {
         let mut multiplier = F::one();
         for byte in bytes.iter() {
             value = value + byte.expr() * multiplier;
-            multiplier *= F::from(8);
+            multiplier *= F::from(256);
         }
         value
     }
