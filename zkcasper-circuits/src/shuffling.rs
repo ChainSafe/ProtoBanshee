@@ -4,7 +4,7 @@ use eth_types::{Field, Mainnet, Spec};
 use gadgets::{
     binary_number::{BinaryNumberChip, BinaryNumberConfig},
     is_zero,
-    util::{not, or, select, Expr},
+    util::{not, or, rlc, select, Expr},
 };
 use halo2_base::{
     gates::range,
@@ -100,8 +100,7 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
 }
 
 impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
-    pub fn configure(meta: &mut ConstraintSystem<F>) -> Self {
-        let sha256_table = Sha256Table::construct::<F>(meta);
+    pub fn configure(meta: &mut ConstraintSystem<F>, sha256_table: Sha256Table, rand: F) -> Self {
         let seed = [(); 32].map(|_| meta.advice_column());
         let list_length = meta.advice_column();
         let i = meta.advice_column();
@@ -122,7 +121,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let seed_concat_round_concat_i = meta.advice_column();
 
         let left_half = meta.complex_selector();
-        let q_enable = meta.selector();
+        let q_enable = meta.complex_selector();
 
         let pivot_hash = [(); 32].map(|_| meta.advice_column());
         let pivot_quotient = meta.advice_column();
@@ -186,17 +185,23 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             cb.gate(q_enable)
         });
 
-        // // TODO: Enforce concat(seed, round) == seed_concat_round
-        // meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
-        //     // let seed_concat_round = meta.query_advice(seed_concat_round, Rotation::cur());
-        //     // let q_round_ops = meta.query_selector(q_round_ops);
-        //     let seed = seed.map(|s| meta.query_instance(s, Rotation::cur()));
-        //     let round = meta.query_advice(round, Rotation::cur());
-        //     let hash = meta.query_advice(hash, Rotation::cur());
-        //     config
-        //         .sha256_table
-        //         .build_lookup(meta, q_round_ops, seed_concat_round, 0.expr(), hash)
-        // });
+        meta.lookup_any("hash = sha256(seed, round) as byte", |meta| {
+            let seed = seed.map(|s| meta.query_advice(s, Rotation::cur()));
+            let round = meta.query_advice(round, Rotation::cur());
+            let seed_plus_round = rlc::expr(
+                &seed
+                    .iter()
+                    .chain(std::iter::once(&round))
+                    .map(|s| s.clone())
+                    .collect::<Vec<_>>(),
+                Expression::Constant(rand),
+            );
+            let q_enable = meta.query_selector(q_enable);
+            let hash = meta.query_advice(hash, Rotation::cur());
+            config
+                .sha256_table
+                .build_lookup(meta, q_enable, seed_plus_round, 0.expr(), hash)
+        });
 
         // // TODO: Enforce concat(seed, round, i) == seed_concat_round_concat_i
         // meta.lookup_any(
@@ -524,7 +529,13 @@ mod test {
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
             println!("Configuring");
-            ShufflingConfig::<F, 90>::configure(meta)
+            let sha256_table = Sha256Table::construct(meta);
+
+            ShufflingConfig::<F, 90>::configure(
+                meta,
+                sha256_table,
+                Sha256CircuitConfig::fixed_challenge(),
+            )
         }
 
         fn synthesize(
@@ -553,7 +564,7 @@ mod test {
 
     #[test]
     fn test_shuffling_circuit() {
-        let k = 17;
+        let k = 13;
         let circuit = TestCircuit::<Fr>::default();
         println!("Running prover");
         let prover = MockProver::<Fr>::run(k, &circuit, vec![]).unwrap();
