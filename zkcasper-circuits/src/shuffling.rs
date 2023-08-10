@@ -71,7 +71,7 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
     pub hash: Column<Advice>, // 90 Rows. (hash = sha(seed, round))[0..8] is used to calculate pivot
 
     pub pivot: Column<Advice>,            // 90 Rows
-    pub pivot_quotient: Column<Advice>,            // 90 Rows
+    pub pivot_quotient: Column<Advice>,   // 90 Rows
     pub pivot_hash: [Column<Advice>; 32], // 90 * (N/2) Rows
     pub mirror1: Column<Advice>,          // 90 Rows
     pub mirror2: Column<Advice>,          // 90 Rows
@@ -169,10 +169,11 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let pivot_quotient = m.query_advice(pivot_quotient, Rotation::cur());
             let q_enable = m.query_selector(q_enable);
             // TODO: Restrict Pivot_bytes to be hash[0 ..8]
+            // Is this overflowing???
             cb.require_equal(
                 "pivot == u64_le(pivot_byte) % list_size",
-                pivot_quotient * list_length.clone(),
-                from_u64_bytes::expr(&pivot_hash[0..8]) - pivot.clone(),
+                pivot_quotient * list_length.clone() + pivot.clone(),
+                from_u64_bytes::expr(&pivot_hash[0..8]),
             );
             cb.require_in_set(
                 "mirror m1 = (pivot + 2) / 2",
@@ -317,8 +318,13 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 sha2::Sha256::digest(vec![seed.to_vec(), round_as_byte.to_vec()].concat());
 
             let pivot = u64::from_le_bytes(pivot_hash[0..8].try_into().expect("Expected 8 bytes"));
-            println!("pivot is: {} and pivot hash le: {:#X?}",pivot, &pivot_hash[0..8]);
-            let pivot_quotient = pivot/list_size as u64;
+            println!(
+                "pivot is: {:#X?}, pivotmod is {:#X?}, and pivot hash le: {:#X?}",
+                pivot,
+                pivot % list_size as u64,
+                &pivot_hash[0..8]
+            );
+            let pivot_quotient = pivot / list_size as u64;
             let pivot = pivot % list_size as u64;
 
             let mut hash_bytes = EMPTY_HASH;
@@ -411,8 +417,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     the_byte,
                     the_bit,
                     i,
-                    pivot_quotient
-
+                    pivot_quotient,
                 } in shuffle_row.iter()
                 {
                     let seed_cells = self
@@ -463,11 +468,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         ("the_byte", self.the_byte, *the_byte),
                         ("the_bit", self.the_bit, *the_bit),
                         ("i", self.i, *i),
-                        (
-                            "pivot_quotient",
-                            self.pivot_quotient,
-                            *pivot_quotient,
-                        )
+                        ("pivot_quotient", self.pivot_quotient, *pivot_quotient),
                     ] {
                         region.assign_advice(
                             || name.to_string(),
