@@ -32,7 +32,6 @@ use crate::{
     },
     sha256_circuit::Sha256CircuitConfig,
     table::{sha256_table, Sha256Table},
-    // table::SHA256Table,
     util::{
         from_bytes, from_u64_bytes, to_bytes, BaseConstraintBuilder, ConstrainBuilderCommon,
         SubCircuitConfig,
@@ -253,14 +252,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let left_half = meta.query_selector(left_half);
             let the_byte_as_bits = the_byte_as_bits.map(|c| meta.query_advice(c, Rotation::cur()));
 
-            // let is_zero_bit_index = IsZeroGadget::construct(&mut cb, bit_index.clone());
-            // let is_zero_bit_index_minus_255 =
-            //     IsZeroGadget::construct(&mut cb, bit_index.clone() - 255.expr());
-            // let is_zero_i_minus_mirror1 =
-            //     IsZeroGadget::construct(&mut cb, i.clone() - mirror1.clone());
-            // let is_zero_i_minus_pivot_minus_1 =
-            //     IsZeroGadget::construct(&mut cb, i.clone() - pivot.clone() - 1.expr());
-
             cb.require_boolean("require left half be boolean", left_half.clone());
             cb.require_equal(
                 "(left of pivot) flip = pivot - i",
@@ -284,39 +275,9 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 the_byte,
                 to_bytes::expr(&the_byte_as_bits)[0].clone(),
             );
-            // config.is_zero_bit_index = Some(is_zero_bit_index);
-            // config.is_zero_i_minus_mirror1 = Some(is_zero_i_minus_mirror1);
-            // config.is_zero_i_minus_pivot_minus_1 = Some(is_zero_i_minus_pivot_minus_1);
-            // config.is_zero_bit_index_minus_255 = Some(is_zero_bit_index_minus_255);
 
             cb.gate(q_enable)
         });
-
-        // if is_left AND bit_index == 0 OR i == mirror1 -> Hash
-        // else if NOT is_left AND bit_index == 255 OR i == pivot + 1 -> Hash
-        // else -> No Hash
-
-        // select::expr(
-        //     is_left.clone(),
-        //     select::expr(
-        //         or::expr(
-        //             [is_zero_bit_index.expr(), is_zero_i_minus_mirror1.expr()].into_iter(),
-        //         ),
-        //         1.expr(), // Do lookup table on new hash value
-        //         0.expr(), // Hash stays the same
-        //     ),
-        //     select::expr(
-        //         or::expr(
-        //             [
-        //                 is_zero_bit_index_minus_255.expr(),
-        //                 is_zero_i_minus_pivot_minus_1.expr(),
-        //             ]
-        //             .into_iter(),
-        //         ),
-        //         2.expr(), // Do lookup table on new hash value
-        //         0.expr(), // Hash stays the same
-        //     ),
-        // );
 
         println!("shuffling circuit degree={}", meta.degree());
 
