@@ -1,8 +1,9 @@
 use std::{iter, marker::PhantomData, mem, ops::Mul};
 
 use eth_types::{Field, Mainnet, Spec};
+use ethereum_consensus::crypto::hash;
 use gadgets::{
-    binary_number::{BinaryNumberChip, BinaryNumberConfig},
+    binary_number::{AsBits, BinaryNumberChip, BinaryNumberConfig},
     is_zero,
     util::{not, or, rlc, select, Expr},
 };
@@ -33,7 +34,8 @@ use crate::{
     table::{sha256_table, Sha256Table},
     // table::SHA256Table,
     util::{
-        from_bytes, from_u64_bytes, BaseConstraintBuilder, ConstrainBuilderCommon, SubCircuitConfig,
+        from_bytes, from_u64_bytes, to_bytes, BaseConstraintBuilder, ConstrainBuilderCommon,
+        SubCircuitConfig,
     },
     witness::{self, HashInput, HashInputChunk},
 };
@@ -83,7 +85,8 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
     pub bit_index_quotient: Column<Advice>, // 90 * (N/2) Rows
 
     pub the_byte: Column<Advice>, // 90 * (N/2)
-    pub the_bit: Column<Advice>,  // 90 * (N/2) u8
+    pub the_byte_as_bits: [Column<Advice>; 8],
+    pub the_bit: Column<Advice>, // 90 * (N/2) u8
     // pub the_bit: [Column<Advice>; 8],  // 90 * (N/2) u8
     pub left_half: Selector,
 
@@ -113,10 +116,16 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         let flip = meta.advice_column();
         let bit_index = meta.advice_column();
         let the_byte = meta.advice_column();
+        meta.enable_equality(the_byte);
         let the_bit = meta.advice_column();
+        let the_byte_as_bits = [(); 8].map(|_| meta.advice_column());
         let bit_index_quotient = meta.advice_column();
         let seed_concat_round = meta.advice_column();
-        let hash_bytes = [(); 32].map(|_| meta.advice_column());
+        let hash_bytes = [(); 32].map(|_| {
+            let col = meta.advice_column();
+            meta.enable_equality(col);
+            col
+        });
         let seed_concat_round_concat_i = meta.advice_column();
 
         let left_half = meta.complex_selector();
@@ -138,6 +147,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             mirror2,
             flip,
             bit_index,
+            the_byte_as_bits,
             the_byte,
             the_bit,
             bit_index_quotient,
@@ -206,7 +216,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             )
         });
 
-        // // TODO: Enforce concat(seed, round, i) == seed_concat_round_concat_i
         // meta.lookup_any(
         //     "hash_bytes = sha256(seed, round_as_bytes, uintTo4Bytes(i or flip /256)",
         //     |meta| {
@@ -234,9 +243,10 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             let bit_index = meta.query_advice(bit_index, Rotation::cur());
             let bit_index_quotient = meta.query_advice(bit_index_quotient, Rotation::cur());
             let mirror1 = meta.query_advice(mirror1, Rotation::cur());
-
+            let the_byte = meta.query_advice(the_byte, Rotation::cur());
             let q_enable = meta.query_selector(q_enable);
             let left_half = meta.query_selector(left_half);
+            let the_byte_as_bits = the_byte_as_bits.map(|c| meta.query_advice(c, Rotation::cur()));
 
             // let is_zero_bit_index = IsZeroGadget::construct(&mut cb, bit_index.clone());
             // let is_zero_bit_index_minus_255 =
@@ -264,7 +274,11 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                 bit_index_quotient.clone() * 256.expr(),
                 i_or_flip - bit_index.clone(),
             );
-
+            cb.require_equal(
+                "the_byte = the_byte_as_bit",
+                the_byte,
+                to_bytes::expr(&the_byte_as_bits)[0].clone(),
+            );
             // config.is_zero_bit_index = Some(is_zero_bit_index);
             // config.is_zero_i_minus_mirror1 = Some(is_zero_i_minus_mirror1);
             // config.is_zero_i_minus_pivot_minus_1 = Some(is_zero_i_minus_pivot_minus_1);
@@ -328,6 +342,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     the_bit,
                     i,
                     pivot_quotient,
+                    hash_bytes,
                 } in witness.iter()
                 {
                     let seed_cells = self
@@ -363,6 +378,43 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                         })
                         .collect::<Result<Vec<_>, Error>>()?;
 
+                    let hash_bytes_cells = self
+                        .hash_bytes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            region.assign_advice(
+                                || format!("hash_bytes{}", i),
+                                *e,
+                                *offset,
+                                || Value::known(F::from(hash_bytes[i] as u64)),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+
+                    let the_byte_cell = hash_bytes_cells[(bit_index / 8) as usize].copy_advice(
+                        || "the_byte",
+                        &mut region,
+                        self.the_byte,
+                        *offset,
+                    )?;
+
+                    let mut the_byte_as_bits: [bool; 8] = (*the_byte as u8).as_bits();
+                    the_byte_as_bits.reverse();
+                    let the_byte_as_bits_cells = self
+                        .the_byte_as_bits
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            region.assign_advice(
+                                || format!("the_byte_as_bit{}", i),
+                                *e,
+                                *offset,
+                                || Value::known(F::from(the_byte_as_bits[i] as u64)),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, Error>>()?;
+
                     for (name, column, value) in &[
                         ("list_length", self.list_length, *list_size as u64),
                         ("pivot", self.pivot, *pivot),
@@ -375,7 +427,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                             self.bit_index_quotient,
                             *bit_index_quotient,
                         ),
-                        ("the_byte", self.the_byte, *the_byte),
                         ("the_bit", self.the_bit, *the_bit),
                         ("i", self.i, *i),
                         ("pivot_quotient", self.pivot_quotient, *pivot_quotient),
@@ -464,8 +515,11 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     (flip, bit_index, bit_index_quotient)
                 };
 
-                let the_byte = hash_bytes[bit_index / 8];
-                let the_bit = (the_byte >> (bit_index & 0x07)) & 1;
+                let byte_index = bit_index / 8;
+                let byte_index_rem = bit_index % 8;
+
+                let the_byte = hash_bytes[byte_index];
+                let the_bit = (the_byte >> byte_index_rem) & 1;
                 if the_bit != 0 {
                     input.swap(i as usize, flip as usize);
                 }
@@ -478,6 +532,7 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     i<= pivot, offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
 
                 let row = ShuffleRow {
+                    hash_bytes,
                     seed,
                     round,
                     offset,
@@ -518,6 +573,7 @@ pub struct ShuffleRow {
     pub the_bit: u64,
     pub i: u64,
     pub pivot_quotient: u64,
+    pub hash_bytes: [u8; 32],
 }
 
 impl ShuffleRow {
