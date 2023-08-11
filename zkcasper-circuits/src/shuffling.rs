@@ -61,11 +61,11 @@ pub struct ShuffleChip<'a, S: Spec, F: Field, HC: HashChip<F>> {
 
 #[derive(Clone, Debug)]
 pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
-    pub seed: [Column<Advice>; 32], // Should be instance column, right?
+    pub seed: [Column<Advice>; 32],  // Should be instance column, right?
+    pub list_items: Column<Advice>,  // Should be instance col right?
+    pub list_length: Column<Advice>, // Should be instance col right?
 
-    pub list_length: Column<Advice>,
     pub i: Column<Advice>, // plus one sequential
-    pub list_items: Column<Advice>,
     pub q_enable: Selector,
 
     pub q_round_ops: Selector, // 90 Rows
@@ -89,16 +89,9 @@ pub struct ShufflingConfig<F: Field, const ROUNDS: usize> {
     // pub the_bit: [Column<Advice>; 8],  // 90 * (N/2) u8
     pub left_half: Selector,
 
-    // Hashables
-    pub seed_concat_round: Column<Advice>,          // 90 Rows
-    pub seed_concat_round_concat_i: Column<Advice>, // 90 * (N/2) Rows
-
-    pub is_zero_bit_index: Option<IsZeroGadget<F>>,
-    pub is_zero_i_minus_mirror1: Option<IsZeroGadget<F>>,
-    pub is_zero_i_minus_pivot_minus_1: Option<IsZeroGadget<F>>,
-    pub is_zero_bit_index_minus_255: Option<IsZeroGadget<F>>,
-
     pub sha256_table: Sha256Table,
+
+    _p: PhantomData<F>,
 }
 
 impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
@@ -130,7 +123,6 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             meta.enable_equality(col);
             col
         });
-        let seed_concat_round_concat_i = meta.advice_column();
 
         let left_half = meta.complex_selector();
         let q_enable = meta.complex_selector();
@@ -158,16 +150,11 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             left_half,
             sha256_table,
             hash_bytes,
-            seed_concat_round,
-            seed_concat_round_concat_i,
             q_enable,
             q_round_ops,
-            is_zero_bit_index: None,
-            is_zero_i_minus_mirror1: None,
-            is_zero_i_minus_pivot_minus_1: None,
-            is_zero_bit_index_minus_255: None,
             pivot_hash,
             pivot_quotient,
+            _p: PhantomData,
         };
 
         meta.create_gate("per round variables", |m| {
