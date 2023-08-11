@@ -422,8 +422,9 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
         }
 
         let mut shuffle_row = vec![];
+        let mut offset = 0u64;
 
-        for round in (0..90) {
+        for round in (0..90).rev() {
             let round_as_byte: [u8; 1] = [round as u8];
 
             let pivot_hash =
@@ -492,18 +493,15 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                     input.swap(i as usize, flip as usize);
                 }
 
-                let offset = ((i - mirror1) + 1) as usize
-                    + (round as u64 * (mirror2 - mirror1 + 1)) as usize
-                    - 1;
                 println!(
                     "is_left: {} Offset {} Round {} pivot {} mirror1 {} mirror2 {} flip {} bit_index {} bit_index_quotient {} the_byte {} the_bit {} i {}",
                     i<= pivot, offset, round, pivot, mirror1, mirror2, flip, bit_index, bit_index_quotient, the_byte, the_bit, i);
-
+                offset += 1;
                 let row = ShuffleRow {
                     hash_bytes,
                     seed,
                     round,
-                    offset,
+                    offset: offset.try_into().unwrap(),
                     list_size: list_size as u64,
                     pivot,
                     mirror1,
@@ -600,17 +598,21 @@ mod test {
             config: Self::Config,
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            let mut seed = [0u8; 32];
-            seed[0] = 1;
-            seed[1] = 128;
-            seed[2] = 12;
-            let mut input = [0u8; 10]
+            let seed: [u8; 32] =
+                hex::decode("4ac96f664a6cafd300b161720809b9e17905d4d8fed7a97ff89cf0080a953fe7")
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+            let expected = [
+                19, 6, 0, 1, 24, 16, 9, 23, 27, 20, 18, 8, 22, 21, 4, 3, 13, 14, 5, 15, 25, 11, 12,
+                30, 7, 31, 17, 10, 2, 28, 26, 29, 32,
+            ];
+            // let expected = [0, 6, 8, 2, 7, 9, 3, 4, 5, 1];
+            let mut input = expected
                 .iter()
                 .enumerate()
                 .map(|(i, _)| i as u8)
                 .collect::<Vec<_>>();
-
-            let expected = [0u8, 7, 8, 6, 3, 9, 4, 5, 2, 1];
 
             let witness = ShufflingConfig::<F, 90>::shuffle_list(&mut input, seed)?;
             let hash_inputs = ShuffleRow::sha256_inputs(&witness);
