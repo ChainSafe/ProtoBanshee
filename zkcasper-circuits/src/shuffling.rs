@@ -115,6 +115,73 @@ pub struct FlipTable {
     the_bit: Column<Advice>,               // Remember to constrain when assigning
 }
 
+// Stores the state of the list at every round.
+// List at 0 should be [0..N] and List N-1 should be the final shuffled list.
+pub struct ListRound<const ROUNDS: usize>([Column<Advice>; ROUNDS]);
+
+impl<const ROUNDS: usize> ListRound<ROUNDS> {
+    pub(crate) fn construct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
+        Self([0; ROUNDS].map(|_| meta.advice_column()))
+    }
+}
+
+pub struct HashBytesTable {
+    q_enable: Selector,
+    sha256_table: Sha256Table,
+    hash_bytes: [Column<Advice>; 32],
+    round: Column<Advice>,
+    i: [Column<Advice>; 4],
+    seed: [Column<Advice>; 32],
+}
+
+impl HashBytesTable {
+    pub(crate) fn construct<F: Field>(
+        meta: &mut ConstraintSystem<F>,
+        sha256_table: Sha256Table,
+        rand: F,
+    ) -> Self {
+        let table = Self {
+            q_enable: meta.complex_selector(),
+            hash_bytes: [0; 32].map(|_| meta.advice_column()),
+            i: [0; 4].map(|_| meta.advice_column()),
+            seed: [0; 32].map(|_| meta.advice_column()),
+            round: meta.advice_column(),
+            sha256_table,
+        };
+        table.constrain(meta, rand);
+        table
+    }
+    fn constrain<F: Field>(&self, meta: &mut ConstraintSystem<F>, rand: F) {
+        meta.lookup_any(
+            "hash_bytes = sha256(seed. round_as_bytes, uintto4bytes(i or flip/256)",
+            |meta| {
+                let seed = self.seed.map(|s| meta.query_advice(s, Rotation::cur()));
+                let round = meta.query_advice(self.round, Rotation::cur());
+                let i = self.i.map(|s| meta.query_advice(s, Rotation::cur()));
+                let input = rlc::expr(
+                    &seed
+                        .iter()
+                        .chain(std::iter::once(&round).chain(i.iter()))
+                        .collect::<Vec<_>>(),
+                    &Expression::Constant(rand),
+                );
+                let q_enable = meta.query_selector(self.q_enable);
+                let hash_bytes = self
+                    .hash_bytes
+                    .map(|b| meta.query_advice(b, Rotation::cur()));
+
+                self.sha256_table.build_lookup(
+                    meta,
+                    q_enable,
+                    input,
+                    0.expr(),
+                    rlc::expr(&hash_bytes, Expression::Constant(rand)),
+                )
+            },
+        );
+    }
+}
+
 impl FlipTable {
     pub(crate) fn construct<F: Field>(meta: &mut ConstraintSystem<F>) -> Self {
         let table = Self {
@@ -403,24 +470,25 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
             )
         });
 
-        meta.lookup_any("enforce swap", |meta| {
-            let i = meta.query_advice(i, Rotation::cur());
-            let flip = meta.query_advice(flip, Rotation::cur());
-            let q_enable = meta.query_selector(q_enable);
-            let mut lookups = vec![];
-            for r in round_swap.iter() {
-                let r = meta.query_advice(*r, Rotation::cur());
-                let mut lp = config.flip_table.build_lookup(
-                    meta,
-                    q_enable.clone() * r.clone(),
-                    i.clone(),
-                    flip.clone(),
-                    r.clone(),
-                );
-                lookups.append(&mut lp);
-            }
-            lookups
-        });
+        // meta.lookup_any("enforce swap", |meta| {
+        //     let i = meta.query_advice(i, Rotation::cur());
+        //     let flip = meta.query_advice(flip, Rotation::cur());
+        //     let q_enable = meta.query_selector(q_enable);
+        //     let the_bit = meta.query_advice(the_bit, Rotation::cur());
+        //     let mut lookups = vec![];
+        //     for r in round_swap.iter() {
+        //         let r = meta.query_advice(*r, Rotation::cur());
+        //         let mut lp = config.flip_table.build_lookup(
+        //             meta,
+        //             q_enable.clone() * r.clone(),
+        //             i.clone(),
+        //             flip.clone(),
+        //             r.clone(),
+        //         );
+        //         lookups.append(&mut lp);
+        //     }
+        //     lookups
+        // });
 
         // meta.lookup_any(
         //     "hash_bytes = sha256(seed, round_as_bytes, uintTo4Bytes(i or flip /256)",
@@ -555,6 +623,14 @@ impl<const ROUNDS: usize, F: Field> ShufflingConfig<F, ROUNDS> {
                             let the_bit_cell = the_byte_as_bits_cells
                                 [(the_byte >> (bit_index % 8)) as usize & 1]
                                 .copy_advice(|| "the_bit", &mut region, self.the_bit, *offset)?;
+                            if *the_bit != 0 {
+                                region.assign_advice(
+                                    || "swap it",
+                                    self.round_swap[*round as usize],
+                                    *offset,
+                                    || Value::known(F::one()),
+                                );
+                            }
 
                             for (name, column, value) in &[
                                 ("list_length", self.list_length, *list_size as u64),
