@@ -228,6 +228,23 @@ pub mod to_bytes {
     }
 }
 
+pub(crate) mod from_u64_bytes {
+    use crate::util::Expr;
+    use eth_types::Field;
+    use halo2_proofs::plonk::Expression;
+
+    pub(crate) fn expr<F: Field, E: Expr<F>>(bytes: &[E]) -> Expression<F> {
+        debug_assert!(bytes.len() == 8, "there are 8 bytes in a u64");
+        let mut value = 0.expr();
+        let mut multiplier = F::one();
+        for byte in bytes.iter() {
+            value = value + byte.expr() * multiplier;
+            multiplier *= F::from(256);
+        }
+        value
+    }
+}
+
 /// Decodes a field element from its byte representation
 pub(crate) mod from_bytes {
     use crate::{util::Expr, MAX_N_BYTES_INTEGER};

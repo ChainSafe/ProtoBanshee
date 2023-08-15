@@ -92,14 +92,6 @@ pub struct BaseConstraintBuilder<F> {
 }
 
 impl<F: Field> BaseConstraintBuilder<F> {
-    pub(crate) fn new(max_degree: usize) -> Self {
-        BaseConstraintBuilder {
-            constraints: Vec::new(),
-            max_degree,
-            condition: None,
-        }
-    }
-
     pub(crate) fn require_zero(&mut self, name: &'static str, constraint: Expression<F>) {
         self.add_constraint(name, constraint);
     }
@@ -158,6 +150,16 @@ impl<F: Field> BaseConstraintBuilder<F> {
         };
         self.validate_degree(constraint.degree(), name);
         self.constraints.push((name, constraint));
+    }
+}
+
+impl<F: Field> BaseConstraintBuilder<F> {
+    pub(crate) fn new(max_degree: usize) -> Self {
+        BaseConstraintBuilder {
+            constraints: Vec::new(),
+            max_degree,
+            condition: None,
+        }
     }
 
     pub(crate) fn validate_degree(&self, degree: usize, name: &'static str) {
