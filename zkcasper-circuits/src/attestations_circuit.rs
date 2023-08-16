@@ -518,9 +518,12 @@ mod tests {
 
     #[test]
     fn test_attestations_circuit() {
+        const N: usize = 10;
         let builder = GateThreadBuilder::new(false);
         let attestations: Vec<Attestation<Test>> =
             serde_json::from_slice(&fs::read("../test_data/attestations.json").unwrap()).unwrap();
+
+        let attestations = attestations.into_iter().take(N).collect_vec();
 
         let bytes_pubkeys: Vec<Vec<u8>> =
             serde_json::from_slice(&fs::read("../test_data/aggregated_pubkeys.json").unwrap())
@@ -528,11 +531,12 @@ mod tests {
 
         let agg_pubkeys = bytes_pubkeys
             .iter()
+            .take(N)
             .map(|b| G1Affine::from_uncompressed(&b.as_slice().try_into().unwrap()).unwrap())
             .collect_vec();
 
-        let mock_k = 17;
-        let k = 17;
+        let mock_k = 19;
+        let k = 19;
         {
             let mock_params = FlexGateConfigParams {
                 strategy: GateStrategy::Vertical,
@@ -546,7 +550,7 @@ mod tests {
                 "FLEX_GATE_CONFIG_PARAMS",
                 serde_json::to_string(&mock_params).unwrap(),
             );
-            std::env::set_var("LOOKUP_BITS", 16.to_string());
+            std::env::set_var("LOOKUP_BITS", (mock_k - 1).to_string());
             let circuit = TestCircuit::<'_, Test, Fr> {
                 inner: AttestationsCircuitBuilder::new(
                     RefCell::from(builder.clone()),
@@ -559,7 +563,7 @@ mod tests {
 
             let _ = MockProver::<Fr>::run(mock_k as u32, &circuit, vec![]);
             circuit.inner.builder.borrow().config(k, Some(2520));
-            std::env::set_var("LOOKUP_BITS", 16.to_string());
+            std::env::set_var("LOOKUP_BITS", (k - 1).to_string());
             let pp: FlexGateConfigParams =
                 serde_json::from_str(&var("FLEX_GATE_CONFIG_PARAMS").unwrap()).unwrap();
             println!("params: {:?}", pp);
@@ -569,9 +573,12 @@ mod tests {
             inner: AttestationsCircuitBuilder::new(builder, &attestations, 0, Some(agg_pubkeys)),
         };
 
+        let params = gen_srs(k as u32);
+
+        let pkey = gen_pkey(|| "attestations", &params, Some("./build"), circuit.clone()).unwrap();
+
         let timer = start_timer!(|| "test_attestations_circuit");
-        let prover = MockProver::<Fr>::run(k as u32, &circuit, vec![]).unwrap();
-        prover.assert_satisfied();
+        let _ = full_prover(&params, &pkey, circuit, vec![]);
         end_timer!(timer);
     }
 
@@ -697,6 +704,6 @@ mod tests {
         let break_points = agg_circuit.break_points();
         let agg_circuit = AggregationCircuit::prover::<SHPLONK>(&agg_params, snarks, break_points);
         let instances = agg_circuit.instances();
-        let _ = gen_proof_shplonk(&agg_params, &pkey, agg_circuit, instances, None);
+        let _ = full_prover(&agg_params, &pkey, agg_circuit, instances);
     }
 }

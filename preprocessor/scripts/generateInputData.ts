@@ -102,6 +102,7 @@ const committeePubkeys = chunkArray(pubKeyPoints, N_validators);
 const aggregatedPubKeys = committeePubkeys.map((pubKeys) => bls12_381.aggregatePublicKeys(pubKeys));
 let bytesPubkeys = aggregatedPubKeys.map((aggPubkey) => Array.from(g1PointToBytesLE(aggPubkey, false)));
 
+
 fs.writeFileSync(
     `../test_data/aggregated_pubkeys.json`,
     serialize(bytesPubkeys)
