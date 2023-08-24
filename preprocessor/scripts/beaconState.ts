@@ -22,11 +22,16 @@ import { createNodeFromMultiProofWithTrace } from "./merkleTrace";
 
 
 // Testing Constants
-const N_VALIDATORS_COUNT = 100;
-const VALIDATOR_LIMIT = 1099511627776;
-
 const N_VALIDATORS = parseInt(process.argv[2]) || 5;
 const N_COMMITTEES = parseInt(process.argv[3]) || 1;
+
+// VALIDATOR_LIMIT value is the one that is being used in mainnet/sepolia. This value will set the validator depth of 41n in the merkle tree. 
+const VALIDATOR_LIMIT = 1099511627776;
+
+// local node endpoint
+const NODE_ENDPOINT = "http://3.133.148.86:80";
+// const NODE_ENDPOINT = "https://lodestar-sepolia.chainsafe.io";
+
 
 // convenience functions for operations for beacon state collection and parsing
 // the below function is pulled from lodestar/ 
@@ -51,12 +56,26 @@ export function getPubkeysForIndices(
     return pubkeys;
   }
 
-// sepolia endpoint
-// const api = getClient({baseUrl: "https://lodestar-sepolia.chainsafe.io"}, {config});
-// sepolia beacon node endpoint
-const api = getClient({baseUrl: "http://3.133.148.86:80"}, {config});
+// getBlockAttestationApi calls the API /eth/v1/beacon/blocks/{block_id}/attestations
+// https://ethereum.github.io/beacon-APIs/#/Beacon/getBlockAttestations
+async function getBlockAttestationApi(slot: number) {
+    return await api.beacon
+    .getBlockAttestations(
+            slot
+        )
+    .then((res) => {
+        if (res.ok) {
+            return res.response;
+        } else {
+            // console.error(res.status, res.error.code, res.error.message);
+            return undefined;
+        }
+    });
+}
 
-async function beaconstateApi(slot: string) {
+// getBeaconStateApi calls the API /eth/v2/debug/beacon/states/{state_id}
+// https://ethereum.github.io/beacon-APIs/#/Debug/getStateV2
+async function getBeaconStateApi(slot: string) {
     return await api.debug
     .getStateV2(
             slot,
@@ -72,34 +91,9 @@ async function beaconstateApi(slot: string) {
     });
 }
 
-let beaconstateSsz = await beaconstateApi("head");
-let beaconstate = ssz.capella.BeaconState.deserialize(beaconstateSsz);
-let beaconstateJson = ssz.capella.BeaconState.toJson(beaconstate);
-let beaconstateDeserialized = ssz.capella.BeaconState.deserializeToViewDU(beaconstateSsz);
-
-//----------------- Committees -----------------//
-
-const getBlock = await 
-    api.beacon
-    .getBlock(
-        "head")
-    .then((res) => {
-        if (res.ok) {
-            return res.response;
-        } else {
-            console.error(res.status, res.error.code, res.error.message);
-            return new Uint8Array;
-        }
-    });
-
-let headBlock = getBlock;
-// get current head slot and corresponding epochs
-let headSlot = headBlock.data.message.slot
-let headEpoch = headBlock.data.message.body.attestations[0].data.target.epoch
-let targetEpoch = headEpoch-1;
-
-let pubKeyPoints: ProjPointType<bigint>[] = [];
-
+// getEpochCommitteeApi calls the API /eth/v1/beacon/states/{state_id}/committees
+    // with supplied "epoch" filter.
+// https://ethereum.github.io/beacon-APIs/#/Beacon/getEpochCommittees
 async function getEpochCommitteeApi(stateId: number, epoch?: number) {
     return await api.beacon
     .getEpochCommittees(
@@ -116,16 +110,48 @@ async function getEpochCommitteeApi(stateId: number, epoch?: number) {
     });
 }
 
+// getBlockApi calls the API /eth/v2/beacon/blocks/{block_id}
+// https://ethereum.github.io/beacon-APIs/#/Beacon/getBlockV2
+async function getBlockApi(slot: string) {
+    return await api.beacon
+    .getBlock(
+        slot)
+    .then((res) => {
+        if (res.ok) {
+            return res.response;
+        } else {
+            console.error(res.status, res.error.code, res.error.message);
+            return new Uint8Array;
+        }
+    });
+};
+
+const api = getClient({baseUrl: NODE_ENDPOINT}, {config});
+let beaconStateSsz = await getBeaconStateApi("head");
+let beaconState = ssz.capella.BeaconState.deserialize(beaconStateSsz);
+let beaconStateJson = ssz.capella.BeaconState.toJson(beaconState);
+let beaconStateDeserialized = ssz.capella.BeaconState.deserializeToViewDU(beaconStateSsz);
+
+//----------------- Committees -----------------//
+
+let headBlock = await getBlockApi("head");
+// get current head slot and corresponding epochs
+const headSlot = headBlock.data.message.slot
+
+// The lodestar node only locally caches the three most recent epochs for committee data. Thus the preprocessor will fetch the head epoch and set (head epoch -1) as the target epoch, to ensure that the slots will be complete.
+const headEpoch = headBlock.data.message.body.attestations[0].data.target.epoch
+const targetEpoch = headEpoch-1;
+
+let pubKeyPoints: ProjPointType<bigint>[] = [];
+
 // passing epoch number precedes the slot parameter.
 // getEpochCommittees includes validator shuffling
 let committee = await getEpochCommitteeApi(headSlot, targetEpoch);
 
 for (i=0;i<committee.data.length;i++) {
     // gets all pubkeys of validators in committee.data.validators array as a Point.
-    pubKeyPoints.push(getPubkeysForIndices(beaconstateDeserialized.validators, committee.data[i].validators).map(bytes => bls12_381.G1.ProjectivePoint.fromHex(bytesToHex(bytes))));
+    pubKeyPoints.push(getPubkeysForIndices(beaconStateDeserialized.validators, committee.data[i].validators).map(bytes => bls12_381.G1.ProjectivePoint.fromHex(bytesToHex(bytes))));
 }
-
-// ------------ Pubkeys ------------ //
 
 pubKeyPoints = pubKeyPoints.flat(1);
 const committeePubkeys = chunkArray(pubKeyPoints, pubKeyPoints.length);
@@ -168,21 +194,21 @@ const ValidatorContainer = new ContainerType(
 
 export const ValidatorsSsz = new ListCompositeType(ValidatorContainer, VALIDATOR_LIMIT);
 
-// for loop in which the size is N_VALIDATORS * N_COMMITTEES
+// loop length set to N_VALIDATORS * N_COMMITTEES
 for (let i=0; i<N_VALIDATORS * N_COMMITTEES;i++) {
-    let pubkey = fromHex(beaconstateJson.validators[i].pubkey);
+    let pubkey = fromHex(beaconStateJson.validators[i].pubkey);
     const paddedPubkey = new Uint8Array(48);
     paddedPubkey.set(pubkey, 0);
 
     validators.push({
         pubkey: paddedPubkey,
-        withdrawalCredentials: fromHex(beaconstateJson.validators[i].withdrawal_credentials),
-        effectiveBalance: beaconstateJson.validators[i].effective_balance,
-        slashed: beaconstateJson.validators[i].slashed,
-        activationEligibilityEpoch: beaconstateJson.validators[i].activation_eligibility_epoch,
-        activationEpoch: beaconstateJson.validators[i].activation_epoch,
-        exitEpoch: beaconstateJson.validators[i].exit_epoch,
-        withdrawableEpoch: beaconstateJson.validators[i].withdrawable_epoch
+        withdrawalCredentials: fromHex(beaconStateJson.validators[i].withdrawal_credentials),
+        effectiveBalance: beaconStateJson.validators[i].effective_balance,
+        slashed: beaconStateJson.validators[i].slashed,
+        activationEligibilityEpoch: beaconStateJson.validators[i].activation_eligibility_epoch,
+        activationEpoch: beaconStateJson.validators[i].activation_epoch,
+        exitEpoch: beaconStateJson.validators[i].exit_epoch,
+        withdrawableEpoch: beaconStateJson.validators[i].withdrawable_epoch
     });
 
     validatorBaseGindices.push(ValidatorsSsz.getPathInfo([i]).gindex);
@@ -243,21 +269,6 @@ fs.writeFileSync(
 
 type Attestations = ValueOf<typeof ssz.phase0.BeaconBlockBody.fields.attestations>;
 let attestations: Attestations = [];
-
-async function getBlockAttestationApi(slot: number) {
-    return await api.beacon
-    .getBlockAttestations(
-            slot
-        )
-    .then((res) => {
-        if (res.ok) {
-            return res.response;
-        } else {
-            // console.error(res.status, res.error.code, res.error.message);
-            return undefined;
-        }
-    });
-}
 
 // get all blocks within a target epoch with known slot id's for corresponding epoch.
 for (var i=headSlot; ; i--) {
