@@ -497,6 +497,7 @@ mod tests {
 
     #[test]
     fn test_aggregation_circuit() {
+        // retrieve_beacon_state::<Test>("aggregation");
         let k = TestCircuit::<Fr, S>::K;
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();

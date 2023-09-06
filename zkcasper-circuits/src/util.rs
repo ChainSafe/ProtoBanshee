@@ -22,7 +22,7 @@ use halo2_ecc::{
 };
 
 use itertools::Itertools;
-use num_bigint::BigUint;
+use num_bigint::{BigUint, ToBigInt};
 
 use crate::{
     gadget::crypto::{Fp2Point, FpPoint},
@@ -37,6 +37,17 @@ use halo2_proofs::{
         Challenge, ConstraintSystem, Error, Expression, FirstPhase, SecondPhase, VirtualCells,
     },
 };
+use std::process::Command;
+
+pub fn retrieve_beacon_state<S: Spec>(test: &str) -> () {
+    let output = Command::new("npx")
+        .arg("tsx")
+        .arg("../preprocessor/scripts/beaconState.ts")
+        .arg(S::MAX_COMMITTEES_PER_SLOT.to_string())
+        .arg(test)
+        .output()
+        .expect("failed to execute process");
+}
 
 pub(crate) fn query_expression<F: Field, T>(
     meta: &mut ConstraintSystem<F>,

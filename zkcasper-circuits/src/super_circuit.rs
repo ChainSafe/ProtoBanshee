@@ -269,6 +269,7 @@ mod tests {
 
     #[test]
     fn test_super_circuit() {
+        // retrieve_beacon_state::<Test>("all");
         let validators: Vec<Validator> =
             serde_json::from_slice(&fs::read("../test_data/validators.json").unwrap()).unwrap();
         let merkle_trace: MerkleTrace =
