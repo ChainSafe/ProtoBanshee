@@ -312,6 +312,7 @@ mod tests {
 
     #[test]
     fn test_state_circuit() {
+        // retrieve_beacon_state::<Test>("trace");
         let k = 10;
         let merkle_trace: MerkleTrace =
             serde_json::from_slice(&fs::read("../test_data/merkle_trace.json").unwrap()).unwrap();

@@ -377,7 +377,7 @@ mod bls12_381 {
 mod tests {
     use std::fs;
 
-    use crate::{table::Sha256Table, witness::Validator};
+    use crate::{table::Sha256Table, witness::Validator, util::retrieve_beacon_state};
 
     use super::*;
     use eth_types::Test;
@@ -482,6 +482,7 @@ mod tests {
 
     #[test]
     fn test_attestations_circuit() {
+        // retrieve_beacon_state::<Test>("attestations");
         let k = TestCircuit::<Test, Fr>::K;
 
         let builder = GateThreadBuilder::new(false);
